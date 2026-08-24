@@ -4,11 +4,18 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 — Staff auth
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog)
 
-Only the `auth` module is implemented. `catalog`, `warehouse`, `purchase`,
-`pricing`, `finance`, `comms` are empty placeholders (see each module's
-README.md) reserved for later phases so they drop in without restructuring.
+`auth`, `catalog` and `pricing` are implemented. `warehouse`, `purchase`,
+`finance`, `comms` are still empty placeholders (see each module's README.md)
+reserved for later phases so they drop in without restructuring.
+
+Phase 2 leans on ERPNext's native doctypes wherever one already exists —
+`Item`, `Item Group`, `Item Price`/`Price List`, `Item Alternative` — adding
+custom fields/doctypes only where ERPNext genuinely has no equivalent
+(discontinuation lifecycle + a few tile-specific attributes on Item; the
+Item Price Proposal approval workflow; per-dealer catalog visibility). See
+`dms_erp/catalog/README.md` and `dms_erp/pricing/README.md` for the mapping.
 
 ## Install
 
@@ -18,13 +25,12 @@ to match what `bench new-app` would produce. To install it for real:
 ```bash
 bench get-app dms_erp /path/to/this/repo   # or a git URL
 bench --site <site-name> install-app dms_erp
-bench --site <site-name> migrate           # creates the Auth Session table + Pacific roles
+bench --site <site-name> migrate           # creates doctypes, custom fields, roles, Item Groups, Dealer price list
 ```
 
-`erpnext` should already be installed on the target site before later phases
-(warehouse/purchase) land, since those build on ERPNext's native Warehouse/Bin/
-Stock Ledger doctypes rather than a custom stock model. Phase 0 has no ERPNext
-dependency.
+From Phase 2 onward this app requires `erpnext` to already be installed on the
+target site (`required_apps` in `hooks.py` now includes it) — catalog/pricing
+build directly on ERPNext's native Item/Item Price/Price List doctypes.
 
 ## Required site_config.json keys
 
@@ -120,10 +126,38 @@ one. If a refresh token that was already rotated out gets presented again
 (replay of a stolen token), the session is revoked immediately rather than
 issued new tokens.
 
+## Catalog & pricing API (Phase 2)
+
+All under `/api/method/dms_erp.<module>.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Product-master and pricing writes are
+restricted to `Pacific Purchase` / `Pacific Management` (or `System Manager`);
+everyone can read.
+
+| Method | Notes |
+|---|---|
+| `dms_erp.catalog.api.list_products` | optional `dealer` param filters to that dealer's catalog (BRD §6.4) |
+| `dms_erp.catalog.api.get_product` | `item` (Item Code) |
+| `dms_erp.catalog.api.create_product` | write-restricted; also seeds a Pending `Item Price Proposal` |
+| `dms_erp.catalog.api.update_product` | write-restricted; `patch` is a partial `Product`-shaped dict |
+| `dms_erp.catalog.dealer_catalog_api.catalog_for` | item codes visible to a dealer; full catalog if unassigned |
+| `dms_erp.catalog.dealer_catalog_api.is_visible` | single dealer+item check |
+| `dms_erp.catalog.dealer_catalog_api.set_product_visibility` | write-restricted |
+| `dms_erp.catalog.dealer_catalog_api.set_category_visibility` | write-restricted; bulk by Item Group |
+| `dms_erp.catalog.dealer_catalog_api.category_coverage` | `{total, visible}` for a dealer + Item Group |
+| `dms_erp.pricing.api.list_price_records` / `get_price_record` | landing cost + suggested price computed on the fly, never stored |
+| `dms_erp.pricing.api.save_cost_inputs` | write-restricted |
+| `dms_erp.pricing.api.approve_price` | write-restricted; publishes to the native `Item Price` (Dealer price list) and appends an audit-trail row; `approved_by` is always the authenticated caller, never client-supplied |
+
+Product responses match the frontend's `Product` shape (camelCase) field-for-field,
+with `stockQty`/`bay`/`lastSoldDays` stubbed (`0`/`"—"`/`0`) pending Phase 3/5.
+`dealerPrice` is `null` until a proposal is approved — the item-master form no
+longer sets a price directly, unlike the current frontend mock (see
+`dms_erp/catalog/README.md` for why).
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
-container, the following were assumed and are worth confirming before Phase 2:
+container, the following were assumed and are worth confirming:
 
 - **Frappe/ERPNext version**: targeting a recent v15-line site (uses
   `pyproject.toml`-style app layout, not the older `setup.py` one). If you're
@@ -141,3 +175,27 @@ container, the following were assumed and are worth confirming before Phase 2:
   System Manager) — an ERPNext accounting/sales user with no Pacific role
   cannot log into the staff app even with valid Frappe credentials. Flag if
   you wanted this open to any enabled User instead.
+
+**Phase 2 additions:**
+
+- **Stock UOM**: new items default to `Box` as `stock_uom` (matches how the
+  warehouse module already talks about stock in boxes). `piecesPerBox` /
+  `sqftPerBox` / `weightPerBoxKg` are plain custom fields, not modeled as
+  ERPNext UOM conversions yet — revisit if Phase 3 needs real UOM math (e.g.
+  transacting in sqft) rather than just displaying these numbers.
+- **Dealer = Customer**: dealer-catalog visibility links to ERPNext's native
+  `Customer` doctype by name. Pacific-specific dealer attributes from the
+  frontend's `Dealer` type (GST, credit limit, salesperson, Retail/Project/
+  Sub-dealer type) mostly have native ERPNext equivalents already (tax ID,
+  credit limit, Sales Team) or weren't needed for this phase — full dealer
+  master fields weren't built now since nothing in Phase 2 reads them; flag
+  if you want that pulled forward instead of left for Phase 5.
+- **Pricing approval is gated** to Purchase/Management — the item-master
+  create/update endpoints and dealer-catalog writes are gated the same way,
+  per the BRD's actor assignments in `pacific-tileflow/docs/business-flow.md`.
+  Sales/Warehouse get read-only access to all of it.
+- **`dealerPrice` is `null` until approved** — a deliberate difference from
+  the current frontend mock, which sets a price immediately on item creation.
+  A real approval gate means "priced but not yet approved" has to be a
+  representable state; the frontend will need a small update once wired to
+  this API to render that (e.g. "Pending price" instead of a number).
