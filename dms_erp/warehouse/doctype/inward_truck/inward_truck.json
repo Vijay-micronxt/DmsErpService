@@ -1,0 +1,172 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "lr_number",
+  "supplier",
+  "vehicle_number",
+  "eta",
+  "column_break_1",
+  "status",
+  "item",
+  "boxes",
+  "batch_no",
+  "po_section",
+  "purchase_order",
+  "purchase_order_item",
+  "po_reference",
+  "column_break_2",
+  "allocation_slip"
+ ],
+ "fields": [
+  {
+   "fieldname": "lr_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "LR Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Supplier",
+   "options": "Supplier",
+   "reqd": 1
+  },
+  {
+   "fieldname": "vehicle_number",
+   "fieldtype": "Data",
+   "label": "Vehicle Number"
+  },
+  {
+   "fieldname": "eta",
+   "fieldtype": "Datetime",
+   "label": "ETA"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Scheduled",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Scheduled\nAt Gate\nUnloading\nPut-away",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "boxes",
+   "fieldtype": "Int",
+   "label": "Boxes",
+   "reqd": 1
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "label": "Batch No",
+   "options": "Batch"
+  },
+  {
+   "fieldname": "po_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Order Link"
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order"
+  },
+  {
+   "fieldname": "purchase_order_item",
+   "fieldtype": "Data",
+   "label": "Purchase Order Item (row name)"
+  },
+  {
+   "fieldname": "po_reference",
+   "fieldtype": "Data",
+   "label": "PO Reference (display)"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "allocation_slip",
+   "fieldtype": "Link",
+   "label": "Allocation Slip",
+   "options": "Bay Allocation"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Warehouse",
+ "name": "Inward Truck",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Warehouse",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Purchase",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Pacific Management"
+  },
+  {
+   "read": 1,
+   "role": "Pacific Sales"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

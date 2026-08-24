@@ -2,6 +2,7 @@ import frappe
 
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.warehouse.setup import setup_warehouse
 
 # Frappe Roles that back the staff app's four roles (Sales / Warehouse / Purchase /
 # Management). Prefixed with "Pacific" to avoid colliding with ERPNext's own stock
@@ -19,12 +20,14 @@ def after_install():
 	create_app_roles()
 	setup_catalog()
 	setup_pricing()
+	setup_warehouse()
 
 
 def after_migrate():
 	create_app_roles()
 	setup_catalog()
 	setup_pricing()
+	setup_warehouse()
 
 
 def create_app_roles():

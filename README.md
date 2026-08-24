@@ -4,11 +4,17 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse)
 
-`auth`, `catalog` and `pricing` are implemented. `warehouse`, `purchase`,
+`auth`, `catalog`, `pricing` and `warehouse` are implemented. `purchase`,
 `finance`, `comms` are still empty placeholders (see each module's README.md)
 reserved for later phases so they drop in without restructuring.
+
+Phase 3 builds bays, allocation, inward and transfers entirely on ERPNext's
+native stock doctypes (`Warehouse`, `Stock Ledger Entry`/`Bin`, `Purchase
+Receipt`, `Stock Entry`, `Batch`) per the architecture decision — there is no
+custom stock ledger anywhere in this app. See `dms_erp/warehouse/README.md`
+for the mapping.
 
 Phase 2 leans on ERPNext's native doctypes wherever one already exists —
 `Item`, `Item Group`, `Item Price`/`Price List`, `Item Alternative` — adding
@@ -31,6 +37,12 @@ bench --site <site-name> migrate           # creates doctypes, custom fields, ro
 From Phase 2 onward this app requires `erpnext` to already be installed on the
 target site (`required_apps` in `hooks.py` now includes it) — catalog/pricing
 build directly on ERPNext's native Item/Item Price/Price List doctypes.
+
+Phase 3's warehouse setup (physical warehouses, bay custom fields) needs a
+default Company configured on the site — if none exists yet at install/migrate
+time it logs a warning and skips warehouse creation rather than failing the
+whole migration; re-run `bench --site <site-name> migrate` once a Company
+exists.
 
 ## Required site_config.json keys
 
@@ -154,6 +166,27 @@ with `stockQty`/`bay`/`lastSoldDays` stubbed (`0`/`"—"`/`0`) pending Phase 3/5
 longer sets a price directly, unlike the current frontend mock (see
 `dms_erp/catalog/README.md` for why).
 
+## Warehouse API (Phase 3)
+
+All under `/api/method/dms_erp.warehouse.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Bay/allocation/transfer writes are
+restricted to `Pacific Warehouse` / `Pacific Management` (or `System
+Manager`); inward-truck writes also allow `Pacific Purchase`. Everyone can
+read.
+
+| Method | Notes |
+|---|---|
+| `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`) |
+| `bay_api.create_bay` / `create_bay_grid` / `update_bay` / `delete_bay` | write-restricted; delete relies on ERPNext's own refusal to delete a Warehouse with stock |
+| `stock_api.list_stock` | optional `bay`/`item` filters; live aggregate over Stock Ledger Entry, not a stored table |
+| `stock_api.suggest_bays` | category/free-capacity scoring, ported from the frontend's `suggestBays` |
+| `stock_api.validate_allocation` | error/warning issues for a proposed bay+qty+category, ported from `validateAllocation` |
+| `inward_api.list_trucks` / `add_truck` / `advance_truck` | truck gate queue; write-restricted |
+| `allocation_api.create_allocation` | write-restricted; posts and submits a native Purchase Receipt — the actual stock-effecting event |
+| `allocation_api.mark_allocation_printed` / `confirm_putaway` | write-restricted; `confirm_putaway` does not move stock again |
+| `allocation_api.resolve_scan` | read-only; same `PI-BAY|`/`PI-ITEM|` code format as the frontend, plus bare-code lookup |
+| `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -199,3 +232,29 @@ container, the following were assumed and are worth confirming:
   A real approval gate means "priced but not yet approved" has to be a
   representable state; the frontend will need a small update once wired to
   this API to render that (e.g. "Pending price" instead of a number).
+
+**Phase 3 additions:**
+
+- **Items are now batch-tracked** (`has_batch_no=1`) — a correction to Phase
+  2's `create_product`, discovered once it was clear every BayLot carries a
+  batch number. `warehouse/setup.py` also flips this on for any pre-existing
+  Pacific items that predate this change.
+- **Purchase Receipt rate** on allocation-confirm comes from the item's
+  `Item Price Proposal.purchaseCost` (Phase 2), defaulting to 0 with no hard
+  failure if none exists yet. Phase 4's real PO will have its own negotiated
+  rate per line — this is a reasonable stand-in until then, not the final
+  source of truth.
+- **PR-to-PO linking deferred to Phase 4** — `create_allocation` posts a
+  standalone Purchase Receipt (supplier + items only); it does not yet set
+  `purchase_order`/`purchase_order_item` on the PR items, so PO received-qty
+  won't track automatically yet even though `Inward Truck` already carries
+  those links informationally.
+- **Bay codes vs. Warehouse doc names**: ERPNext auto-suffixes Warehouse's
+  `name` with the company abbreviation (e.g. "Main Bay A-01 - PTC"). Every
+  API in this module takes/returns the clean human `code` (`custom_bay_code`,
+  e.g. "A-01") and resolves internally — never assume `Bay.id` looks like the
+  code.
+- **Transfer/receipt reference numbers** are ERPNext's own native IDs (e.g.
+  "MAT-STE-2026-00001", "MAT-PRE-2026-00001"), not the frontend mock's
+  cosmetic "BTR-2408-001" format — Stock Entry/Purchase Receipt naming isn't
+  something this app overrides.
