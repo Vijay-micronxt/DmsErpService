@@ -3,5 +3,7 @@ Catalog
 Warehouse
 Purchase
 Pricing
+Sales
 Finance
 Comms
+Dashboard

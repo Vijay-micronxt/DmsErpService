@@ -1,0 +1,134 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "BAS-.YYYY.-.####",
+ "creation": "2026-08-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "inward_truck",
+  "item",
+  "batch_no",
+  "column_break_1",
+  "total_qty",
+  "status",
+  "purchase_order",
+  "section_break_1",
+  "lines",
+  "purchase_receipt"
+ ],
+ "fields": [
+  {
+   "fieldname": "inward_truck",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Inward Truck",
+   "options": "Inward Truck"
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Batch No",
+   "options": "Batch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_qty",
+   "fieldtype": "Float",
+   "label": "Total Qty (Boxes)",
+   "reqd": 1
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nConfirmed\nPrinted\nPlaced",
+   "reqd": 1
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break",
+   "label": "Bay Split"
+  },
+  {
+   "fieldname": "lines",
+   "fieldtype": "Table",
+   "label": "Allocations",
+   "options": "Bay Allocation Line"
+  },
+  {
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "label": "Purchase Receipt",
+   "options": "Purchase Receipt",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Warehouse",
+ "name": "Bay Allocation",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Warehouse",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Pacific Purchase"
+  },
+  {
+   "read": 1,
+   "role": "Pacific Management"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

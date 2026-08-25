@@ -1,0 +1,93 @@
+"""Unloading labour payment (BRD §16) — one voucher per Inward Truck (Phase 3).
+
+Genuinely Pacific-specific (a cash/UPI/cheque payment voucher to a labour
+contractor, not a ledger-based vendor bill), so Unloading Charge is a custom
+doctype rather than ERPNext's Payment Entry — the latter needs a proper Party
+(Supplier/Customer) and Chart of Accounts wiring this app can't assume exists,
+same reasoning as claims_api.py not posting a Journal Entry.
+
+`boxes` is read from the linked Inward Truck rather than duplicated, and the
+charge amount (boxes x rate) is computed on read, never stored — same pattern as
+pricing's landingCost/suggestedPrice.
+"""
+
+import frappe
+from frappe import _
+from frappe.utils import today
+
+CHARGE_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
+
+
+def _assert_can_manage_charges():
+	if not set(frappe.get_roles(frappe.session.user)) & CHARGE_WRITE_ROLES:
+		frappe.throw(_("Only Warehouse or Management can manage unloading charges."), frappe.PermissionError)
+
+
+def _serialize(doc) -> dict:
+	truck = frappe.get_doc("Inward Truck", doc.inward_truck)
+	return {
+		"id": doc.name,
+		"voucherNumber": doc.name,
+		"truckId": doc.inward_truck,
+		"lr": truck.lr_number,
+		"contractor": doc.contractor,
+		"boxes": truck.boxes,
+		"ratePerBox": doc.rate_per_box,
+		"chargeAmount": truck.boxes * doc.rate_per_box,
+		"paymentMode": doc.payment_mode,
+		"status": doc.status,
+		"recordedAt": doc.recorded_at,
+		"recordedBy": doc.recorded_by,
+		"paidBy": doc.paid_by,
+		"paidAt": doc.paid_at,
+		"remarks": doc.remarks,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_charges(status: str | None = None):
+	filters = {"status": status} if status else {}
+	names = frappe.get_all("Unloading Charge", filters=filters, pluck="name", order_by="creation desc")
+	return [_serialize(frappe.get_doc("Unloading Charge", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def get_charge_for_truck(inward_truck: str):
+	name = frappe.db.get_value("Unloading Charge", {"inward_truck": inward_truck}, "name")
+	return _serialize(frappe.get_doc("Unloading Charge", name)) if name else None
+
+
+@frappe.whitelist(methods=["POST"])
+def record_charge(inward_truck: str, contractor: str, rate_per_box: float, payment_mode: str, remarks: str | None = None):
+	_assert_can_manage_charges()
+
+	if frappe.db.exists("Unloading Charge", {"inward_truck": inward_truck}):
+		frappe.throw(_("A charge has already been recorded for this truck."), frappe.DuplicateEntryError)
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "Unloading Charge",
+			"inward_truck": inward_truck,
+			"contractor": contractor,
+			"rate_per_box": rate_per_box,
+			"payment_mode": payment_mode,
+			"status": "Pending",
+			"recorded_at": today(),
+			"recorded_by": frappe.session.user,
+			"remarks": remarks,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def mark_paid(charge: str):
+	_assert_can_manage_charges()
+
+	doc = frappe.get_doc("Unloading Charge", charge)
+	doc.status = "Paid"
+	doc.paid_by = frappe.session.user
+	doc.paid_at = today()
+	doc.save(ignore_permissions=True)
+	return _serialize(doc)
