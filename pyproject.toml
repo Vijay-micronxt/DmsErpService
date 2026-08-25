@@ -1,0 +1,16 @@
+[project]
+name = "dms_erp"
+authors = [
+    { name = "MicroNXT", email = "vijay@micronxt.com" }
+]
+description = "Pacific Inc internal operations backend (staff auth, catalog, warehouse, purchase, pricing, finance, comms) for ERPNext"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    "PyJWT~=2.8.0",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
