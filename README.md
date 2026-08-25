@@ -4,12 +4,16 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment)
 
-`auth`, `catalog`, `pricing`, `warehouse`, `purchase` and `sales` are
-implemented. `finance`, `comms` are still empty placeholders (see each
-module's README.md) reserved for later phases so they drop in without
-restructuring.
+`auth`, `catalog`, `pricing`, `warehouse`, `purchase`, `sales` and `finance`
+are implemented. `comms` is still an empty placeholder (see its README.md)
+reserved for Phase 7 so it drops in without restructuring.
+
+Phase 6 adds Insurance Claims and Unloading Charges (`dms_erp/finance/`) as
+custom doctypes linked back into Phase 3's Stock Entry/Inward Truck — neither
+posts to the General Ledger, since that needs Chart-of-Accounts accounts this
+app can't assume exist on the target site. See `dms_erp/finance/README.md`.
 
 Phase 5 adds a `sales` module — not part of the module list Phase 0
 bootstrapped, since that plan didn't allocate one for this phase. It supplies
@@ -241,6 +245,23 @@ Manager`). Everyone reads.
 | `picking_api.auto_allocate` | write-restricted; allocates `min(qty, available)` from live stock across non-blocked bays |
 | `picking_api.patch_task` | write-restricted; assign picker / adjust status / batch / bay |
 
+## Finance API (Phase 6)
+
+All under `/api/method/dms_erp.finance.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Writes restricted to `Pacific
+Warehouse` / `Pacific Management` (or `System Manager`); everyone reads.
+
+| Method | Notes |
+|---|---|
+| `claims_api.list_claims` / `get_claim` | optional `status` filter |
+| `claims_api.file_claim` | write-restricted; `stock_entry` must be a Damage→Insurance Claim transfer, one claim per transfer; writes back to that Stock Entry's `custom_claim_ref` |
+| `claims_api.update_claim_status` | write-restricted; `Settled` stamps `settledAmount`/`settledAt` |
+| `claims_api.claim_summary` | receivable (Filed+Approved) / settled / rejected-count totals |
+| `unloading_api.list_charges` | optional `status` filter |
+| `unloading_api.get_charge_for_truck` | `null` if none recorded yet |
+| `unloading_api.record_charge` | write-restricted; one per Inward Truck; `boxes` read from the truck, `chargeAmount` computed on read |
+| `unloading_api.mark_paid` | write-restricted; stamps `paidBy`/`paidAt` from the authenticated caller |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -354,3 +375,22 @@ container, the following were assumed and are worth confirming:
 - **Quotation freight is a plain field**, not wired into ERPNext's native
   Sales Taxes and Charges — that needs a GL account this app can't assume
   exists on every site's chart of accounts.
+
+**Phase 6 additions:**
+
+- **No General Ledger postings** — Insurance Claim and Unloading Charge track
+  receivable/settled/paid amounts as their own fields, not via Journal Entry
+  or Payment Entry, since both need Chart-of-Accounts accounts this app can't
+  assume exist on the target site (same reasoning as Quotation freight
+  above). Flag if you'd rather this app assume/create specific GL accounts
+  so real postings can happen instead.
+- **Insurance claim write access is Warehouse/Management**, not Purchase —
+  a judgment call, since the BRD doesn't explicitly assign an actor for
+  filing/settling claims the way it does for pricing approval or catalog
+  assignment. Warehouse identifies the damage and escalates it physically
+  (Phase 3's transfer), so gating the financial follow-up the same way
+  seemed the more consistent default. Flag if this should sit with Purchase
+  or a future Finance role instead.
+- **`insurer` is a plain text field**, not a link to any ERPNext party
+  doctype — Supplier/Customer don't fit "insurance company" without misusing
+  those entities for something they don't mean.
