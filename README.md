@@ -4,12 +4,20 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment) + Phase 7 (WhatsApp / comms)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment) + Phase 7 (WhatsApp / comms) + Phase 8 (dashboard / analytics)
 
-All eight planned modules now exist: `auth`, `catalog`, `pricing`,
-`warehouse`, `purchase`, `sales`, `finance` and `comms` are implemented.
-Only Phase 8 (Dashboard/Analytics) remains, and it's mostly computed views
-over what already exists rather than a module of its own.
+All eight phases are now implemented: `auth`, `catalog`, `pricing`,
+`warehouse`, `purchase`, `sales`, `finance`, `comms`, and a new `dashboard`
+module for Phase 8 (like `sales` in Phase 5, Dashboard/Analytics didn't map
+onto any module Phase 0 bootstrapped, so it gets its own).
+
+Phase 8 has no doctype at all — it's pure read/aggregation over everything
+the other seven phases built. Most of the frontend's own `dashboard.tsx` is
+hardcoded demo numbers rather than real KPIs; this phase computes the real
+thing everywhere the data now exists to support it (which, after seven
+phases, is nearly everywhere), and stubs — clearly — only what would need
+an accounts-receivable ledger this app was never scoped to post. See
+`dms_erp/dashboard/README.md`.
 
 Phase 7 adds a WhatsApp message log (`dms_erp/comms/`) as the system of
 record only — the real WhatsApp Business API send/receive integration is
@@ -295,6 +303,20 @@ All under `/api/method/dms_erp.comms.api.<method>`. Most require
 | `webhook_inbound_message` | shared secret | middleware calls this when a dealer sends a message; creates Inbound, status `Delivered` |
 | `webhook_status_update` | shared secret | middleware calls this with a real delivery receipt for an Outbound message |
 
+## Dashboard API (Phase 8)
+
+All under `/api/method/dms_erp.dashboard.api.<method>`, requiring
+`Authorization: Bearer <access_token>`. Each is gated to its own role (or
+Management, who can see all four) — there is no write access, this module
+only reads.
+
+| Method | Role | Notes |
+|---|---|---|
+| `sales_dashboard` | Sales, Management | today's inquiries, pending quotations, orders this month, missed-demand value, 30-day inquiry trend, actionable inquiries |
+| `warehouse_dashboard` | Warehouse, Management | ported `warehouseKpis`/`warehouseAlerts` from the frontend, now over live data, plus today's incoming trucks |
+| `purchase_dashboard` | Purchase, Management | pending/delayed POs, this week's pickups, reorder-suggestion count, monthly purchase trend, materials ready for pickup |
+| `management_dashboard` | Management only | sales MTD, claimable insurance value, top moving item, sales by dealer, credit-exposure alerts |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -449,3 +471,24 @@ container, the following were assumed and are worth confirming:
   (thread-handling state, not delivery receipt) and "WhatsApp" isn't a stock
   `communication_medium` — reusing it would mean customizing a doctype other
   unrelated core features also share. See `dms_erp/comms/README.md`.
+
+**Phase 8 additions:**
+
+- **`outstandingReceivables` is a hard `0`**, and the management dashboard's
+  credit alert compares order value (not true receivables) against
+  `Customer.credit_limit` — this app has never posted a Sales Invoice, so
+  real AR-aging data doesn't exist. Flag if that should become its own
+  phase rather than staying stubbed.
+- **"Pending Quotations" uses Quotation's native `status = "Open"`** as the
+  closest proxy for "awaiting dealer reply" — ERPNext's own Quotation status
+  vocabulary doesn't have a single field that means exactly that.
+- **"Top Moving Item"** is a genuine judgment call: the frontend hardcodes
+  `"PVT-6060"` with no algorithm behind it. This app ranks by total qty sold
+  across submitted Sales Orders (all-time) and reports current stock
+  alongside it — a reasonable, real interpretation of "moving," but not
+  something the frontend specified.
+- **Trend windows differ slightly from the frontend's mock arrays**: the
+  inquiry trend is a real 30-day daily count, the purchase trend a real
+  6-month-by-calendar-month sum — chosen to be genuinely useful now that
+  they're real queries, not because the frontend's mock windows meant
+  anything precise (they were fixed-length arrays of made-up numbers).

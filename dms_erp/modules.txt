@@ -6,3 +6,4 @@ Pricing
 Sales
 Finance
 Comms
+Dashboard
