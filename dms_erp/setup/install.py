@@ -2,6 +2,7 @@ import frappe
 
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.purchase.setup import setup_purchase
 from dms_erp.warehouse.setup import setup_warehouse
 
 # Frappe Roles that back the staff app's four roles (Sales / Warehouse / Purchase /
@@ -21,6 +22,7 @@ def after_install():
 	setup_catalog()
 	setup_pricing()
 	setup_warehouse()
+	setup_purchase()
 
 
 def after_migrate():
@@ -28,6 +30,7 @@ def after_migrate():
 	setup_catalog()
 	setup_pricing()
 	setup_warehouse()
+	setup_purchase()
 
 
 def create_app_roles():

@@ -4,11 +4,20 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine)
 
-`auth`, `catalog`, `pricing` and `warehouse` are implemented. `purchase`,
-`finance`, `comms` are still empty placeholders (see each module's README.md)
-reserved for later phases so they drop in without restructuring.
+`auth`, `catalog`, `pricing`, `warehouse` and `purchase` are implemented.
+`finance`, `comms` are still empty placeholders (see each module's
+README.md) reserved for later phases so they drop in without restructuring.
+
+Phase 4 builds Purchase Orders on ERPNext's native `Purchase Order` doctype
+and closes the loop Phase 3 deliberately left open: Purchase Receipts posted
+by Bay Allocation now link back to the PO line they fulfill (so ERPNext's own
+`received_qty` tracks correctly) and prefer the PO's negotiated rate over the
+Phase 2 price-proposal stand-in. The reorder-suggestion engine is real for
+the signals available today (current stock, safety stock, non-reorderable
+status) and honestly stubs the rest (missed demand, pending inquiries, sales
+velocity) until Phase 5 supplies that data. See `dms_erp/purchase/README.md`.
 
 Phase 3 builds bays, allocation, inward and transfers entirely on ERPNext's
 native stock doctypes (`Warehouse`, `Stock Ledger Entry`/`Bin`, `Purchase
@@ -187,6 +196,21 @@ read.
 | `allocation_api.resolve_scan` | read-only; same `PI-BAY|`/`PI-ITEM|` code format as the frontend, plus bare-code lookup |
 | `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted |
 
+## Purchase API (Phase 4)
+
+All under `/api/method/dms_erp.purchase.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Purchase Order writes are restricted
+to `Pacific Purchase` / `Pacific Management` (or `System Manager`); everyone
+can read.
+
+| Method | Notes |
+|---|---|
+| `po_api.list_purchase_orders` / `get_purchase_order` | native Purchase Order, submitted on creation |
+| `po_api.create_purchase_order` | write-restricted; single item line, matching the frontend's "Raise PO" flow |
+| `po_api.set_line_ready` | write-restricted; clamps to `[0, orderedQty]` |
+| `po_api.line_progress` | `plannedQty` from linked Inward Trucks, `receivedQty` from ERPNext's native `received_qty` |
+| `reorder_api.reorder_suggestions` | read-only; real stock/safety-stock signal today, zeroed demand signals pending Phase 5 |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -258,3 +282,17 @@ container, the following were assumed and are worth confirming:
   "MAT-STE-2026-00001", "MAT-PRE-2026-00001"), not the frontend mock's
   cosmetic "BTR-2408-001" format — Stock Entry/Purchase Receipt naming isn't
   something this app overrides.
+
+**Phase 4 additions:**
+
+- **POs submit immediately** on creation — there's no draft/approval step,
+  matching the frontend's one-action "Raise PO". If a real approval workflow
+  is wanted later, that's a bigger change (Frappe's Workflow doctype, or a
+  held-as-draft PO with a separate submit endpoint).
+- **Reorder suggestions include every Item**, not just Pacific's four seeded
+  categories — reasonable today since this is the only Item Master phase has
+  built, but worth revisiting if the target site has non-Pacific items too.
+- **`missedDemandQty`/`pendingInquiryQty`/`recentRetailSalesQty` are `0`**
+  until Phase 5 exists — real zeros in the sense of "not computed", not a
+  claim that retail demand is actually zero. `reorder_api.py`'s docstring
+  spells out exactly what to wire up once Inquiry/Order doctypes land.

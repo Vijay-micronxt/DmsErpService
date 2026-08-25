@@ -6,11 +6,11 @@ Alternative doctype (two_way=1). Only size/finish/color/series/swatch/pieces-per
 sqft-per-box/weight-per-box/discontinuation-status have no ERPNext equivalent, so
 those (and only those) are Custom Fields (see catalog/setup.py).
 
-stockQty, bay and lastSoldDays are NOT computed here — those come from ERPNext's
-Stock Ledger/Bin (Phase 3: Warehouse) and Sales history (Phase 5) respectively. They're
-still included in the response, stubbed, so the shape matches the frontend's Product
-type from day one; a caller integrating before those phases land should treat them as
-"not yet available" rather than real data.
+stockQty is read from ERPNext's Bin (Phase 3: Warehouse, added once that phase
+landed). `bay` and `lastSoldDays` are still stubbed placeholders — `bay` because a
+real item can be split across several bays (a flat singular field can't represent
+that; see warehouse/stock_api.py for the real per-bay breakdown), `lastSoldDays`
+because it needs Sales history (Phase 5).
 
 Creating/editing item masters and publishing a launch price are Purchase/Management
 actions per the BRD flow; Sales/Warehouse only read the catalog.
@@ -21,6 +21,7 @@ from frappe import _
 
 from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable
 from dms_erp.pricing import api as pricing_api
+from dms_erp.warehouse.utils import total_stock_for_item
 
 CATALOG_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
 DEFAULT_STOCK_UOM = "Box"
@@ -72,9 +73,13 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"series": item_doc.custom_series,
 		"category": item_doc.item_group,
 		"swatch": item_doc.custom_swatch_color,
-		# Stock/bay/last-sold come from Phase 3 (Warehouse) / Phase 5 (Sales) — stubbed for now.
-		"stockQty": 0,
+		# Total on-hand qty across every bay, now that Phase 3 (Warehouse) exists. `bay`
+		# stays a placeholder — a real item can be split across several bays (see
+		# stock_api.list_stock for the per-bay breakdown), which this flat singular
+		# field from the frontend's Product type can't represent on its own.
+		"stockQty": total_stock_for_item(item_doc.name),
 		"bay": "—",
+		# Last-sold comes from Phase 5 (Sales) — stubbed for now.
 		"lastSoldDays": 0,
 		"dealerPrice": pricing_api.get_dealer_price(item_doc.name),
 		"status": status,
