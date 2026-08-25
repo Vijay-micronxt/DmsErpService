@@ -6,9 +6,12 @@ custom table — become the source of truth for what's on hand where. Scan-confi
 put-away happens *after* that (the floor check that material actually landed where
 the slip said) and does not move stock again; it just closes out the truck/slip.
 
-Linking the received Purchase Receipt back to a Purchase Order is deliberately not
-attempted yet — that needs Phase 4's real PO/reorder flow to exist first. Inward
-Truck still carries `purchase_order`/`purchase_order_item` as informational links.
+When the Inward Truck carries a real `purchase_order`/`purchase_order_item` (Phase
+4), the posted Purchase Receipt links back to that PO line too — so ERPNext's own
+`received_qty` tracking on the PO Item updates automatically, and the receipt rate
+prefers the PO line's negotiated rate over the Phase 2 price proposal's purchaseCost.
+A truck with no PO (poId is optional in the frontend too) still posts a standalone
+receipt against just the supplier.
 """
 
 import frappe
@@ -93,8 +96,14 @@ def create_allocation(
 	)
 	alloc.insert(ignore_permissions=True)
 
-	price_record = get_price_record(item)
-	rate = (price_record or {}).get("purchaseCost") or 0
+	# Prefer the PO line's own negotiated rate (now that Phase 4 has real POs) over
+	# the Phase 2 price proposal's purchaseCost, which was only ever a stand-in.
+	po_item_row = frappe.db.get_value("Purchase Order Item", truck.purchase_order_item, "rate") if truck and truck.purchase_order_item else None
+	if po_item_row is not None:
+		rate = po_item_row
+	else:
+		price_record = get_price_record(item)
+		rate = (price_record or {}).get("purchaseCost") or 0
 
 	pr = frappe.get_doc(
 		{
@@ -103,7 +112,18 @@ def create_allocation(
 			"company": default_company(),
 			"posting_date": today(),
 			"items": [
-				{"item_code": item, "qty": l["qty"], "warehouse": l["bay_name"], "batch_no": batch_no, "rate": rate}
+				{
+					"item_code": item,
+					"qty": l["qty"],
+					"warehouse": l["bay_name"],
+					"batch_no": batch_no,
+					"rate": rate,
+					**(
+						{"purchase_order": truck.purchase_order, "purchase_order_item": truck.purchase_order_item}
+						if truck and truck.purchase_order and truck.purchase_order_item
+						else {}
+					),
+				}
 				for l in resolved_lines
 			],
 		}

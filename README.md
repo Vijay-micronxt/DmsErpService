@@ -4,11 +4,31 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment)
 
-`auth`, `catalog`, `pricing` and `warehouse` are implemented. `purchase`,
-`finance`, `comms` are still empty placeholders (see each module's README.md)
-reserved for later phases so they drop in without restructuring.
+`auth`, `catalog`, `pricing`, `warehouse`, `purchase`, `sales` and `finance`
+are implemented. `comms` is still an empty placeholder (see its README.md)
+reserved for Phase 7 so it drops in without restructuring.
+
+Phase 6 adds Insurance Claims and Unloading Charges (`dms_erp/finance/`) as
+custom doctypes linked back into Phase 3's Stock Entry/Inward Truck — neither
+posts to the General Ledger, since that needs Chart-of-Accounts accounts this
+app can't assume exist on the target site. See `dms_erp/finance/README.md`.
+
+Phase 5 adds a `sales` module — not part of the module list Phase 0
+bootstrapped, since that plan didn't allocate one for this phase. It supplies
+the demand data Phase 4's reorder engine was stubbing (missed demand, pending
+inquiries) — a natural follow-up worth wiring in once this settles, though not
+done automatically as part of this phase. See `dms_erp/sales/README.md`.
+
+Phase 4 builds Purchase Orders on ERPNext's native `Purchase Order` doctype
+and closes the loop Phase 3 deliberately left open: Purchase Receipts posted
+by Bay Allocation now link back to the PO line they fulfill (so ERPNext's own
+`received_qty` tracks correctly) and prefer the PO's negotiated rate over the
+Phase 2 price-proposal stand-in. The reorder-suggestion engine is real for
+the signals available today (current stock, safety stock, non-reorderable
+status) and honestly stubs the rest (missed demand, pending inquiries, sales
+velocity) until Phase 5 supplies that data. See `dms_erp/purchase/README.md`.
 
 Phase 3 builds bays, allocation, inward and transfers entirely on ERPNext's
 native stock doctypes (`Warehouse`, `Stock Ledger Entry`/`Bin`, `Purchase
@@ -187,6 +207,61 @@ read.
 | `allocation_api.resolve_scan` | read-only; same `PI-BAY|`/`PI-ITEM|` code format as the frontend, plus bare-code lookup |
 | `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted |
 
+## Purchase API (Phase 4)
+
+All under `/api/method/dms_erp.purchase.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Purchase Order writes are restricted
+to `Pacific Purchase` / `Pacific Management` (or `System Manager`); everyone
+can read.
+
+| Method | Notes |
+|---|---|
+| `po_api.list_purchase_orders` / `get_purchase_order` | native Purchase Order, submitted on creation |
+| `po_api.create_purchase_order` | write-restricted; single item line, matching the frontend's "Raise PO" flow |
+| `po_api.set_line_ready` | write-restricted; clamps to `[0, orderedQty]` |
+| `po_api.line_progress` | `plannedQty` from linked Inward Trucks, `receivedQty` from ERPNext's native `received_qty` |
+| `reorder_api.reorder_suggestions` | read-only; real stock/safety-stock signal today, zeroed demand signals pending Phase 5 |
+
+## Sales API (Phase 5)
+
+All under `/api/method/dms_erp.sales.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Inquiry/Quotation/Order writes are
+restricted to `Pacific Sales` / `Pacific Management` (or `System Manager`);
+Pick Task writes to `Pacific Warehouse` / `Pacific Management` (or `System
+Manager`). Everyone reads.
+
+| Method | Notes |
+|---|---|
+| `inquiry_api.list_inquiries` / `get_inquiry` | optional `dealer`/`status` filters |
+| `inquiry_api.create_inquiry` | write-restricted; always starts `Open` |
+| `inquiry_api.update_inquiry` | write-restricted; `patch` is a partial `Inquiry`-shaped dict |
+| `quotation_api.list_quotations` / `get_quotation` | native Quotation |
+| `quotation_api.create_quotation` | write-restricted; rejects items outside the dealer's catalog or with no approved price; rate = approved dealer price × (1 + markup%) |
+| `quotation_api.convert_to_order` | write-restricted; wraps ERPNext's native Quotation→Sales Order mapper |
+| `order_api.list_orders` / `get_order` | native Sales Order; optional `dealer`/`stage` filters |
+| `order_api.create_order` | write-restricted; direct Inquiry→Order (no markup) — the only other path is `convert_to_order` |
+| `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks |
+| `picking_api.list_pick_tasks` | optional `order` filter |
+| `picking_api.auto_allocate` | write-restricted; allocates `min(qty, available)` from live stock across non-blocked bays |
+| `picking_api.patch_task` | write-restricted; assign picker / adjust status / batch / bay |
+
+## Finance API (Phase 6)
+
+All under `/api/method/dms_erp.finance.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Writes restricted to `Pacific
+Warehouse` / `Pacific Management` (or `System Manager`); everyone reads.
+
+| Method | Notes |
+|---|---|
+| `claims_api.list_claims` / `get_claim` | optional `status` filter |
+| `claims_api.file_claim` | write-restricted; `stock_entry` must be a Damage→Insurance Claim transfer, one claim per transfer; writes back to that Stock Entry's `custom_claim_ref` |
+| `claims_api.update_claim_status` | write-restricted; `Settled` stamps `settledAmount`/`settledAt` |
+| `claims_api.claim_summary` | receivable (Filed+Approved) / settled / rejected-count totals |
+| `unloading_api.list_charges` | optional `status` filter |
+| `unloading_api.get_charge_for_truck` | `null` if none recorded yet |
+| `unloading_api.record_charge` | write-restricted; one per Inward Truck; `boxes` read from the truck, `chargeAmount` computed on read |
+| `unloading_api.mark_paid` | write-restricted; stamps `paidBy`/`paidAt` from the authenticated caller |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -258,3 +333,64 @@ container, the following were assumed and are worth confirming:
   "MAT-STE-2026-00001", "MAT-PRE-2026-00001"), not the frontend mock's
   cosmetic "BTR-2408-001" format — Stock Entry/Purchase Receipt naming isn't
   something this app overrides.
+
+**Phase 4 additions:**
+
+- **POs submit immediately** on creation — there's no draft/approval step,
+  matching the frontend's one-action "Raise PO". If a real approval workflow
+  is wanted later, that's a bigger change (Frappe's Workflow doctype, or a
+  held-as-draft PO with a separate submit endpoint).
+- **Reorder suggestions include every Item**, not just Pacific's four seeded
+  categories — reasonable today since this is the only Item Master phase has
+  built, but worth revisiting if the target site has non-Pacific items too.
+- **`missedDemandQty`/`pendingInquiryQty`/`recentRetailSalesQty` are `0`**
+  until Phase 5 exists — real zeros in the sense of "not computed", not a
+  claim that retail demand is actually zero. `reorder_api.py`'s docstring
+  spells out exactly what to wire up once Inquiry/Order doctypes land.
+
+**Phase 5 additions:**
+
+- **A new `sales` module** was added, not part of Phase 0's original module
+  list — that plan didn't allocate one for Inquiries/Quotations/Orders/
+  Picking. `dms_erp/modules.txt` now includes `Sales`.
+- **The frontend's Inquiry data is currently read-only** (no create/update
+  wired up in `pacific-tileflow` yet, unlike every other domain this app has
+  backed so far) — this phase still builds the real, mutable backend the BRD
+  describes, matching how Phase 0 built real auth against a frontend that
+  only had a trivial mock sign-in. The frontend needs its own follow-up work
+  to actually call `inquiry_api`.
+- **`create_order` requires an Inquiry** — there is no third, source-less way
+  to create an Order; the only two paths are direct Inquiry→Order (no markup,
+  this endpoint) and Quotation→Order (`quotation_api.convert_to_order`),
+  matching the frontend's `sourceType: "Inquiry" | "Quotation"` exactly.
+- **Reorder engine not yet wired to real Inquiry/Order data** — Phase 4's
+  `reorder_api.py` still returns `0` for `missedDemandQty`/`pendingInquiryQty`/
+  `recentRetailSalesQty` even though Phase 5 now has that data available.
+  Wiring it up is a natural next step but wasn't done as a side effect of
+  this phase — flag if you'd like that pulled in now instead of later.
+- **Picking does not move stock** — `auto_allocate`/`patch_task` are
+  reservation bookkeeping only; no Delivery Note is created and Bin/Stock
+  Ledger Entry are untouched. Matches the frontend, which shows no evidence
+  of a real dispatch/stock-out step either.
+- **Quotation freight is a plain field**, not wired into ERPNext's native
+  Sales Taxes and Charges — that needs a GL account this app can't assume
+  exists on every site's chart of accounts.
+
+**Phase 6 additions:**
+
+- **No General Ledger postings** — Insurance Claim and Unloading Charge track
+  receivable/settled/paid amounts as their own fields, not via Journal Entry
+  or Payment Entry, since both need Chart-of-Accounts accounts this app can't
+  assume exist on the target site (same reasoning as Quotation freight
+  above). Flag if you'd rather this app assume/create specific GL accounts
+  so real postings can happen instead.
+- **Insurance claim write access is Warehouse/Management**, not Purchase —
+  a judgment call, since the BRD doesn't explicitly assign an actor for
+  filing/settling claims the way it does for pricing approval or catalog
+  assignment. Warehouse identifies the damage and escalates it physically
+  (Phase 3's transfer), so gating the financial follow-up the same way
+  seemed the more consistent default. Flag if this should sit with Purchase
+  or a future Finance role instead.
+- **`insurer` is a plain text field**, not a link to any ERPNext party
+  doctype — Supplier/Customer don't fit "insurance company" without misusing
+  those entities for something they don't mean.

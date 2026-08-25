@@ -1,0 +1,150 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "CLM-.YYYY.-.####",
+ "creation": "2026-08-25 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "stock_entry",
+  "insurer",
+  "claim_amount",
+  "column_break_1",
+  "status",
+  "filed_at",
+  "filed_by",
+  "section_break_1",
+  "settled_amount",
+  "settled_at",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "stock_entry",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Stock Entry",
+   "options": "Stock Entry",
+   "reqd": 1,
+   "unique": 1,
+   "description": "The Damage → Insurance Claim bay transfer this claim is the financial companion record for."
+  },
+  {
+   "fieldname": "insurer",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Insurer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "claim_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Claim Amount",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Filed",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Filed\nApproved\nSettled\nRejected",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "filed_at",
+   "fieldtype": "Date",
+   "label": "Filed At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "filed_by",
+   "fieldtype": "Link",
+   "label": "Filed By",
+   "options": "User"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break",
+   "label": "Settlement"
+  },
+  {
+   "fieldname": "settled_amount",
+   "fieldtype": "Currency",
+   "label": "Settled Amount"
+  },
+  {
+   "fieldname": "settled_at",
+   "fieldtype": "Date",
+   "label": "Settled At"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Finance",
+ "name": "Insurance Claim",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Warehouse",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Pacific Purchase"
+  },
+  {
+   "read": 1,
+   "role": "Pacific Sales"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

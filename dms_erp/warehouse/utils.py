@@ -28,6 +28,28 @@ def suitable_categories(bay) -> list[str]:
 	return [c.strip() for c in raw.split(",") if c.strip()]
 
 
+def available_for_item(item_code: str) -> float:
+	"""Free-to-pick qty for an item across every non-blocked bay — used by the Phase 5
+	picking auto-allocate (mirrors the frontend's availableForProduct)."""
+	blocked = set(
+		frappe.get_all(
+			"Warehouse",
+			or_filters={"custom_bay_type": "blocked", "custom_bay_status": "blocked"},
+			pluck="name",
+		)
+	)
+	return sum(l["boxes"] for l in list_stock_lots(item=item_code) if l["bayId"] not in blocked)
+
+
+def total_stock_for_item(item_code: str) -> float:
+	"""Total on-hand qty for an item across every bay — used by the Phase 4 reorder
+	engine as the real `currentStock` signal (Phase 2 could only stub this at 0)."""
+	total = frappe.db.sql(
+		"select sum(actual_qty) from `tabBin` where item_code=%s", (item_code,)
+	)[0][0]
+	return float(total or 0)
+
+
 def bay_used_boxes(bay_name: str) -> float:
 	total = frappe.db.sql(
 		"select sum(actual_qty) from `tabBin` where warehouse=%s", (bay_name,)
