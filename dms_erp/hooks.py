@@ -5,11 +5,11 @@ app_description = "Pacific Inc internal operations backend: staff auth, catalog/
 app_email = "vijay@micronxt.com"
 app_license = "Proprietary"
 
-# required_apps intentionally left as just frappe for Phase 0 (auth). This app is meant
-# to be installed on a site that already has erpnext installed (later phases use ERPNext's
-# native Warehouse/Bin/Stock Ledger doctypes rather than a custom stock model), but we don't
-# force that ordering here since Phase 0 doesn't touch any ERPNext doctype yet.
-required_apps = ["frappe"]
+# erpnext is required from Phase 2 onward: catalog/pricing build on ERPNext's native
+# Item, Item Group, Item Price, Price List and Item Alternative doctypes rather than
+# reinventing a product/pricing model, and later phases lean on Warehouse/Bin/Stock
+# Ledger the same way.
+required_apps = ["frappe", "erpnext"]
 
 # The internal staff app (React/TanStack SPA) talks to this app purely over whitelisted
 # JSON API methods using JWT bearer tokens. We deliberately do not touch app_include_js,

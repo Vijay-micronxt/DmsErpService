@@ -1,0 +1,195 @@
+"""Product / Item Master (BRD §6).
+
+Item is the native ERPNext equivalent of the frontend's Product — category maps to
+Item Group, leadTimeDays to Item's own lead_time_days, altItemId to the native Item
+Alternative doctype (two_way=1). Only size/finish/color/series/swatch/pieces-per-box/
+sqft-per-box/weight-per-box/discontinuation-status have no ERPNext equivalent, so
+those (and only those) are Custom Fields (see catalog/setup.py).
+
+stockQty, bay and lastSoldDays are NOT computed here — those come from ERPNext's
+Stock Ledger/Bin (Phase 3: Warehouse) and Sales history (Phase 5) respectively. They're
+still included in the response, stubbed, so the shape matches the frontend's Product
+type from day one; a caller integrating before those phases land should treat them as
+"not yet available" rather than real data.
+
+Creating/editing item masters and publishing a launch price are Purchase/Management
+actions per the BRD flow; Sales/Warehouse only read the catalog.
+"""
+
+import frappe
+from frappe import _
+
+from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable
+from dms_erp.pricing import api as pricing_api
+
+CATALOG_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+DEFAULT_STOCK_UOM = "Box"
+
+
+def _assert_can_manage_products():
+	if not set(frappe.get_roles(frappe.session.user)) & CATALOG_WRITE_ROLES:
+		frappe.throw(_("Only Purchase or Management can manage the item master."), frappe.PermissionError)
+
+
+def _get_alt_item(item_code: str) -> str | None:
+	row = frappe.db.get_value("Item Alternative", {"item_code": item_code}, "alternative_item_code")
+	if row:
+		return row
+	return frappe.db.get_value(
+		"Item Alternative", {"alternative_item_code": item_code, "two_way": 1}, "item_code"
+	)
+
+
+def _set_alt_item(item_code: str, alt_item_code: str | None):
+	existing = frappe.get_all(
+		"Item Alternative",
+		or_filters={"item_code": item_code, "alternative_item_code": item_code},
+		pluck="name",
+	)
+	for name in existing:
+		frappe.delete_doc("Item Alternative", name, ignore_permissions=True)
+
+	if alt_item_code:
+		frappe.get_doc(
+			{
+				"doctype": "Item Alternative",
+				"item_code": item_code,
+				"alternative_item_code": alt_item_code,
+				"two_way": 1,
+			}
+		).insert(ignore_permissions=True)
+
+
+def _serialize(item_doc: "frappe.model.document.Document") -> dict:
+	status = item_doc.custom_discontinuation_status or "Active"
+	return {
+		"id": item_doc.name,
+		"code": item_doc.item_code,
+		"name": item_doc.item_name,
+		"size": item_doc.custom_size,
+		"finish": item_doc.custom_finish,
+		"color": item_doc.custom_color,
+		"series": item_doc.custom_series,
+		"category": item_doc.item_group,
+		"swatch": item_doc.custom_swatch_color,
+		# Stock/bay/last-sold come from Phase 3 (Warehouse) / Phase 5 (Sales) — stubbed for now.
+		"stockQty": 0,
+		"bay": "—",
+		"lastSoldDays": 0,
+		"dealerPrice": pricing_api.get_dealer_price(item_doc.name),
+		"status": status,
+		"isReorderable": is_reorderable(status),
+		"isSellable": is_sellable(status),
+		"piecesPerBox": item_doc.custom_pieces_per_box,
+		"sqftPerBox": item_doc.custom_sqft_per_box,
+		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
+		"leadTimeDays": item_doc.lead_time_days,
+		"altItemId": _get_alt_item(item_doc.name),
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_products(dealer: str | None = None):
+	from dms_erp.catalog.dealer_catalog_api import catalog_for
+
+	item_codes = catalog_for(dealer) if dealer else frappe.get_all("Item", pluck="name")
+	return [_serialize(frappe.get_doc("Item", code)) for code in item_codes]
+
+
+@frappe.whitelist(methods=["GET"])
+def get_product(item: str):
+	return _serialize(frappe.get_doc("Item", item))
+
+
+@frappe.whitelist(methods=["POST"])
+def create_product(
+	code: str,
+	name: str,
+	category: str,
+	supplier: str,
+	purchase_cost: float,
+	margin_pct: float,
+	effective_date,
+	size: str | None = None,
+	finish: str | None = None,
+	color: str | None = None,
+	series: str | None = None,
+	swatch: str | None = None,
+	status: str = "Active",
+	pieces_per_box: float = 0,
+	sqft_per_box: float = 0,
+	weight_per_box_kg: float = 0,
+	lead_time_days: int = 0,
+	alt_item: str | None = None,
+):
+	_assert_can_manage_products()
+
+	if status not in DISCONTINUATION_STATUSES:
+		frappe.throw(_("Invalid status: {0}").format(status), frappe.ValidationError)
+
+	item = frappe.get_doc(
+		{
+			"doctype": "Item",
+			"item_code": code,
+			"item_name": name,
+			"item_group": category,
+			"stock_uom": DEFAULT_STOCK_UOM,
+			"is_stock_item": 1,
+			"custom_size": size,
+			"custom_finish": finish,
+			"custom_color": color,
+			"custom_series": series,
+			"custom_swatch_color": swatch,
+			"custom_discontinuation_status": status,
+			"custom_pieces_per_box": pieces_per_box,
+			"custom_sqft_per_box": sqft_per_box,
+			"custom_weight_per_box_kg": weight_per_box_kg,
+			"lead_time_days": lead_time_days,
+		}
+	)
+	item.insert(ignore_permissions=True)
+
+	if alt_item:
+		_set_alt_item(item.name, alt_item)
+
+	# Seeds a Pending price proposal for the launch team to approve — the dealer price
+	# only goes live once Purchase/Management calls pricing.approve_price (BRD §7.4),
+	# it is never set directly from the item-master form.
+	pricing_api.ensure_price_record(item.name, supplier, purchase_cost, margin_pct, effective_date)
+
+	return _serialize(item)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_product(item: str, patch: dict):
+	_assert_can_manage_products()
+
+	if "status" in patch and patch["status"] not in DISCONTINUATION_STATUSES:
+		frappe.throw(_("Invalid status: {0}").format(patch["status"]), frappe.ValidationError)
+
+	field_map = {
+		"name": "item_name",
+		"category": "item_group",
+		"size": "custom_size",
+		"finish": "custom_finish",
+		"color": "custom_color",
+		"series": "custom_series",
+		"swatch": "custom_swatch_color",
+		"status": "custom_discontinuation_status",
+		"piecesPerBox": "custom_pieces_per_box",
+		"sqftPerBox": "custom_sqft_per_box",
+		"weightPerBoxKg": "custom_weight_per_box_kg",
+		"leadTimeDays": "lead_time_days",
+	}
+
+	doc = frappe.get_doc("Item", item)
+	for key, value in patch.items():
+		if key == "altItemId":
+			_set_alt_item(doc.name, value)
+			continue
+		fieldname = field_map.get(key)
+		if fieldname:
+			doc.set(fieldname, value)
+	doc.save(ignore_permissions=True)
+
+	return _serialize(doc)
