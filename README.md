@@ -4,11 +4,18 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking) + Phase 6 (damage/insurance claims, unloading payment) + Phase 7 (WhatsApp / comms)
 
-`auth`, `catalog`, `pricing`, `warehouse`, `purchase`, `sales` and `finance`
-are implemented. `comms` is still an empty placeholder (see its README.md)
-reserved for Phase 7 so it drops in without restructuring.
+All eight planned modules now exist: `auth`, `catalog`, `pricing`,
+`warehouse`, `purchase`, `sales`, `finance` and `comms` are implemented.
+Only Phase 8 (Dashboard/Analytics) remains, and it's mostly computed views
+over what already exists rather than a module of its own.
+
+Phase 7 adds a WhatsApp message log (`dms_erp/comms/`) as the system of
+record only — the real WhatsApp Business API send/receive integration is
+middleware-side per the BRD, so this phase exposes a webhook contract for
+that (not-yet-built) middleware rather than calling WhatsApp itself. See
+`dms_erp/comms/README.md`.
 
 Phase 6 adds Insurance Claims and Unloading Charges (`dms_erp/finance/`) as
 custom doctypes linked back into Phase 3's Stock Entry/Inward Truck — neither
@@ -87,6 +94,13 @@ Optional (defaults shown):
 `dms_erp_jwt_active_kid` at it. Keep the old kid's secret in the map until every
 access token signed with it has expired (`dms_erp_access_token_ttl` seconds
 after the rotation), then remove it.
+
+Phase 7's webhook endpoints need their own shared secret (a placeholder until
+the real WhatsApp middleware integration exists — see `dms_erp/comms/README.md`):
+
+```bash
+bench --site <site-name> set-config dms_erp_whatsapp_webhook_secret "<a long random secret>"
+```
 
 ## Roles
 
@@ -262,6 +276,25 @@ Warehouse` / `Pacific Management` (or `System Manager`); everyone reads.
 | `unloading_api.record_charge` | write-restricted; one per Inward Truck; `boxes` read from the truck, `chargeAmount` computed on read |
 | `unloading_api.mark_paid` | write-restricted; stamps `paidBy`/`paidAt` from the authenticated caller |
 
+## Comms API (Phase 7)
+
+All under `/api/method/dms_erp.comms.api.<method>`. Most require
+`Authorization: Bearer <access_token>` (writes restricted to `Pacific Sales` /
+`Pacific Management` / `System Manager`, reads open to everyone); the two
+`webhook_*` methods are `allow_guest` instead, gated by
+`dms_erp_whatsapp_webhook_secret`.
+
+| Method | Auth | Notes |
+|---|---|---|
+| `list_messages` | staff | full thread for a dealer, ascending by `sentAt` |
+| `last_message` | staff | most recent message, or `null` |
+| `unreplied_inbound_count` | staff | `0` or `1` — has staff replied since the dealer's last inbound message |
+| `list_templates` | staff | static canned quick-replies with `{placeholder}` slots |
+| `send_message` | staff, write-restricted | creates an Outbound message, status `Sent` |
+| `mark_read` | staff, write-restricted | Inbound message → `Read` |
+| `webhook_inbound_message` | shared secret | middleware calls this when a dealer sends a message; creates Inbound, status `Delivered` |
+| `webhook_status_update` | shared secret | middleware calls this with a real delivery receipt for an Outbound message |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -394,3 +427,25 @@ container, the following were assumed and are worth confirming:
 - **`insurer` is a plain text field**, not a link to any ERPNext party
   doctype — Supplier/Customer don't fit "insurance company" without misusing
   those entities for something they don't mean.
+
+**Phase 7 additions:**
+
+- **No real WhatsApp Business API integration** — sending/receiving actual
+  WhatsApp messages is explicitly middleware-side per the BRD, and that
+  middleware doesn't exist yet. This phase is the system of record and a
+  webhook contract for it, not a Meta/Twilio integration. Flag if you'd
+  rather this app called a WhatsApp provider directly instead of waiting on
+  external middleware.
+- **Webhook auth is a placeholder shared secret**, not a real verification
+  scheme — there's no spec yet for what the actual middleware will use
+  (Meta's verify-token handshake, HMAC signatures, an IP allowlist). Treat
+  `dms_erp_whatsapp_webhook_secret` as something to replace, not the final
+  design.
+- **Message templates are static**, matching the frontend — not a doctype,
+  since nothing here needs them editable without a deploy yet. Flag if
+  Sales should be able to edit them without engineering involvement.
+- **Considered and rejected**: extending Frappe's native `Communication`
+  doctype instead of a new one. Its `status` field means something different
+  (thread-handling state, not delivery receipt) and "WhatsApp" isn't a stock
+  `communication_medium` — reusing it would mean customizing a doctype other
+  unrelated core features also share. See `dms_erp/comms/README.md`.
