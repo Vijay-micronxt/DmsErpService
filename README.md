@@ -4,11 +4,18 @@ Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
 pure JSON API — no Frappe Desk, no cookies, no redirects.
 
-## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine)
+## Status: Phase 0 (staff auth) + Phase 2 (product / pricing / dealer catalog) + Phase 3 (warehouse) + Phase 4 (purchase orders / reorder engine) + Phase 5 (inquiries / quotations / orders / picking)
 
-`auth`, `catalog`, `pricing`, `warehouse` and `purchase` are implemented.
-`finance`, `comms` are still empty placeholders (see each module's
-README.md) reserved for later phases so they drop in without restructuring.
+`auth`, `catalog`, `pricing`, `warehouse`, `purchase` and `sales` are
+implemented. `finance`, `comms` are still empty placeholders (see each
+module's README.md) reserved for later phases so they drop in without
+restructuring.
+
+Phase 5 adds a `sales` module — not part of the module list Phase 0
+bootstrapped, since that plan didn't allocate one for this phase. It supplies
+the demand data Phase 4's reorder engine was stubbing (missed demand, pending
+inquiries) — a natural follow-up worth wiring in once this settles, though not
+done automatically as part of this phase. See `dms_erp/sales/README.md`.
 
 Phase 4 builds Purchase Orders on ERPNext's native `Purchase Order` doctype
 and closes the loop Phase 3 deliberately left open: Purchase Receipts posted
@@ -211,6 +218,29 @@ can read.
 | `po_api.line_progress` | `plannedQty` from linked Inward Trucks, `receivedQty` from ERPNext's native `received_qty` |
 | `reorder_api.reorder_suggestions` | read-only; real stock/safety-stock signal today, zeroed demand signals pending Phase 5 |
 
+## Sales API (Phase 5)
+
+All under `/api/method/dms_erp.sales.<file>.<method>`, all requiring
+`Authorization: Bearer <access_token>`. Inquiry/Quotation/Order writes are
+restricted to `Pacific Sales` / `Pacific Management` (or `System Manager`);
+Pick Task writes to `Pacific Warehouse` / `Pacific Management` (or `System
+Manager`). Everyone reads.
+
+| Method | Notes |
+|---|---|
+| `inquiry_api.list_inquiries` / `get_inquiry` | optional `dealer`/`status` filters |
+| `inquiry_api.create_inquiry` | write-restricted; always starts `Open` |
+| `inquiry_api.update_inquiry` | write-restricted; `patch` is a partial `Inquiry`-shaped dict |
+| `quotation_api.list_quotations` / `get_quotation` | native Quotation |
+| `quotation_api.create_quotation` | write-restricted; rejects items outside the dealer's catalog or with no approved price; rate = approved dealer price × (1 + markup%) |
+| `quotation_api.convert_to_order` | write-restricted; wraps ERPNext's native Quotation→Sales Order mapper |
+| `order_api.list_orders` / `get_order` | native Sales Order; optional `dealer`/`stage` filters |
+| `order_api.create_order` | write-restricted; direct Inquiry→Order (no markup) — the only other path is `convert_to_order` |
+| `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks |
+| `picking_api.list_pick_tasks` | optional `order` filter |
+| `picking_api.auto_allocate` | write-restricted; allocates `min(qty, available)` from live stock across non-blocked bays |
+| `picking_api.patch_task` | write-restricted; assign picker / adjust status / batch / bay |
+
 ## Assumptions made (please confirm/correct)
 
 Since this repo started blank with no bench/mariadb/frappe available in this
@@ -296,3 +326,31 @@ container, the following were assumed and are worth confirming:
   until Phase 5 exists — real zeros in the sense of "not computed", not a
   claim that retail demand is actually zero. `reorder_api.py`'s docstring
   spells out exactly what to wire up once Inquiry/Order doctypes land.
+
+**Phase 5 additions:**
+
+- **A new `sales` module** was added, not part of Phase 0's original module
+  list — that plan didn't allocate one for Inquiries/Quotations/Orders/
+  Picking. `dms_erp/modules.txt` now includes `Sales`.
+- **The frontend's Inquiry data is currently read-only** (no create/update
+  wired up in `pacific-tileflow` yet, unlike every other domain this app has
+  backed so far) — this phase still builds the real, mutable backend the BRD
+  describes, matching how Phase 0 built real auth against a frontend that
+  only had a trivial mock sign-in. The frontend needs its own follow-up work
+  to actually call `inquiry_api`.
+- **`create_order` requires an Inquiry** — there is no third, source-less way
+  to create an Order; the only two paths are direct Inquiry→Order (no markup,
+  this endpoint) and Quotation→Order (`quotation_api.convert_to_order`),
+  matching the frontend's `sourceType: "Inquiry" | "Quotation"` exactly.
+- **Reorder engine not yet wired to real Inquiry/Order data** — Phase 4's
+  `reorder_api.py` still returns `0` for `missedDemandQty`/`pendingInquiryQty`/
+  `recentRetailSalesQty` even though Phase 5 now has that data available.
+  Wiring it up is a natural next step but wasn't done as a side effect of
+  this phase — flag if you'd like that pulled in now instead of later.
+- **Picking does not move stock** — `auto_allocate`/`patch_task` are
+  reservation bookkeeping only; no Delivery Note is created and Bin/Stock
+  Ledger Entry are untouched. Matches the frontend, which shows no evidence
+  of a real dispatch/stock-out step either.
+- **Quotation freight is a plain field**, not wired into ERPNext's native
+  Sales Taxes and Charges — that needs a GL account this app can't assume
+  exists on every site's chart of accounts.

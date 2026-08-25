@@ -46,6 +46,15 @@ def make_supplier(supplier_name: str) -> str:
 	return supplier_name
 
 
+def make_dealer(customer_name: str) -> str:
+	if frappe.db.exists("Customer", customer_name):
+		return customer_name
+	frappe.get_doc(
+		{"doctype": "Customer", "customer_name": customer_name, "customer_group": "All Customer Groups", "territory": "All Territories"}
+	).insert(ignore_permissions=True)
+	return customer_name
+
+
 def make_bay(code: str, bay_type: str = "main", dimensions: str = "36x8", zone: str = "Z", row: str = "R1", categories=None, parent_warehouse: str | None = None):
 	ensure_company()
 	setup_warehouse()
