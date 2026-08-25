@@ -324,7 +324,7 @@ sequenceDiagram
     Warehouse->>System: finance.claims_api.update_claim_status("Settled")
 
     Warehouse->>System: finance.unloading_api.record_charge(inward_truck)
-    Note over System: boxes read from the truck;<br/>chargeAmount computed on read
+    Note over System: boxes read from the truck,<br/>chargeAmount computed on read
     Warehouse->>System: finance.unloading_api.mark_paid()
 ```
 
