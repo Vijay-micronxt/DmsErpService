@@ -12,7 +12,12 @@ catalog visibility. Implemented.
 - **Dealer Catalog** (`dealer_catalog_api.py` + `doctype/dealer_catalog`) — a custom
   doctype (no ERPNext equivalent) mapping a dealer (`Customer`) to the set of items
   they're allowed to see. No assignment yet = full catalog visible, matching the
-  frontend's fallback behavior.
+  frontend's fallback behavior. `is_visible` is a pure assignment check; `catalog_for`
+  — "what a dealer can actually inquire/quote for" — additionally filters to
+  currently-sellable items (Phase 11), since a Pulled Back item can't be quoted for
+  any dealer regardless of assignment. `sales/quotation_api.create_quotation` also
+  enforces sellability directly at the line level, because assignment isn't
+  retroactively cleaned up when an item's lifecycle status changes later.
 
 `stockQty`, `bay` and `lastSoldDays` are stubbed in API responses — they come from
 Phase 3 (Warehouse/Stock) and Phase 5 (Sales) respectively.
