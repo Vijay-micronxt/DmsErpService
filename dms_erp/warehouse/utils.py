@@ -7,6 +7,7 @@ batch), not a doctype of its own.
 import frappe
 
 CAPACITY_FOR = {"36x8": 900, "36x6": 700, "32x8": 800, "32x6": 600}
+DAMAGE_BAY_TYPES = {"damage", "insurance_claim"}
 
 
 def default_company() -> str:
@@ -87,6 +88,29 @@ def serialize_bay(bay) -> dict:
 	}
 
 
+def claim_ref_for_lot(bay_name: str, item_code: str, batch_no: str) -> str | None:
+	"""Trace a lot back through Stock Ledger Entry to the Stock Entry that moved it
+	into this bay, and return its `custom_claim_ref` (Phase 6) if one was filed.
+	Shared by `list_stock_lots` (per-lot `claimRef`) and the Phase 8 dashboard's
+	"damage awaiting claim" count, so both use the same trace."""
+	voucher_nos = frappe.get_all(
+		"Stock Ledger Entry",
+		filters={
+			"warehouse": bay_name,
+			"item_code": item_code,
+			"batch_no": batch_no,
+			"voucher_type": "Stock Entry",
+			"actual_qty": [">", 0],
+		},
+		pluck="voucher_no",
+	)
+	for voucher_no in voucher_nos:
+		claim_ref = frappe.db.get_value("Stock Entry", voucher_no, "custom_claim_ref")
+		if claim_ref:
+			return claim_ref
+	return None
+
+
 def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dict]:
 	"""Live aggregate of on-hand qty by item+warehouse+batch, sourced from Stock
 	Ledger Entry (Bin has no batch dimension). Zero/negative-cleared batches are
@@ -121,15 +145,23 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	out = []
 	for row in rows:
 		item_doc = frappe.get_cached_doc("Item", row.item_code)
+		bay_type = frappe.get_cached_value("Warehouse", row.bay, "custom_bay_type")
+		is_damage_bay = bay_type in DAMAGE_BAY_TYPES
 		out.append(
 			{
+				# No dedicated "lot" doctype exists (see module docstring) — this is a
+				# stable synthetic id over the group-by key, for frontend list-item keys only.
+				"id": f"{row.bay}::{row.item_code}::{row.batch_no}",
 				"bayId": row.bay,
 				"itemCode": row.item_code,
+				"productId": row.item_code,
 				"itemName": item_doc.item_name,
 				"category": item_doc.item_group,
 				"batchNumber": row.batch_no,
 				"boxes": row.boxes,
 				"storedAt": str(row.stored_at),
+				"damageType": bay_type if is_damage_bay else None,
+				"claimRef": claim_ref_for_lot(row.bay, row.item_code, row.batch_no) if is_damage_bay else None,
 			}
 		)
 	return out

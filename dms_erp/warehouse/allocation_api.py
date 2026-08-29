@@ -47,6 +47,24 @@ def _serialize(doc) -> dict:
 	}
 
 
+@frappe.whitelist(methods=["GET"])
+def list_allocations(inward_truck: str | None = None, status: str | None = None, item: str | None = None):
+	filters = {}
+	if inward_truck:
+		filters["inward_truck"] = inward_truck
+	if status:
+		filters["status"] = status
+	if item:
+		filters["item"] = item
+	names = frappe.get_all("Bay Allocation", filters=filters, pluck="name", order_by="creation desc")
+	return [_serialize(frappe.get_doc("Bay Allocation", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def get_allocation(allocation: str):
+	return _serialize(frappe.get_doc("Bay Allocation", allocation))
+
+
 @frappe.whitelist(methods=["POST"])
 def create_allocation(
 	item: str,

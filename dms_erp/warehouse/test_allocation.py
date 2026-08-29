@@ -99,3 +99,21 @@ class TestAllocation(FrappeTestCase):
 		result = allocation_api.resolve_scan("ALLOC-A-01")
 		self.assertTrue(result["ok"])
 		self.assertEqual(result["kind"], "bay")
+
+	def test_list_allocations_and_get_allocation(self):
+		created = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-5",
+			total_qty=15,
+			lines=[{"bay": "ALLOC-A-01", "qty": 15}],
+			supplier=self.supplier,
+		)
+
+		fetched = allocation_api.get_allocation(created["id"])
+		self.assertEqual(fetched, created)
+
+		listed = allocation_api.list_allocations(item=self.item)
+		self.assertIn(created["id"], [a["id"] for a in listed])
+
+		by_status = allocation_api.list_allocations(status="Confirmed")
+		self.assertIn(created["id"], [a["id"] for a in by_status])

@@ -38,3 +38,11 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
 
 Sales/Management manage Inquiries/Quotations/Orders; Warehouse/Management manage
 Pick Tasks; everyone reads.
+
+- **Dealer directory** (`dealer_api.py`, Phase 9) — every module above already
+  treats "dealer" as a bare native `Customer` (`Inquiry.dealer`, `Quotation.
+  party_name`, `Sales Order.customer`, `Dealer Catalog.dealer` — none add a custom
+  field to `Customer`), but no module ever exposed a list/get read endpoint for it.
+  `list_dealers`/`get_dealer` add that: no new doctype or field, just the read
+  surface over `Customer` that every other endpoint already assumed existed
+  upstream.

@@ -5,7 +5,7 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.finance import claims_api
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.warehouse import allocation_api, transfer_api
+from dms_erp.warehouse import allocation_api, stock_api, transfer_api
 from dms_erp.warehouse.setup import setup_warehouse
 from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_item, make_supplier
 
@@ -96,3 +96,20 @@ class TestClaimsApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=100)
+
+	def test_list_stock_lots_exposes_damage_type_and_claim_ref(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-8")
+
+		before = [l for l in stock_api.list_stock(bay="CLAIM-DMG-01") if l["batchNumber"] == "CLAIM-BATCH-8"][0]
+		self.assertEqual(before["damageType"], "damage")
+		self.assertIsNone(before["claimRef"])
+
+		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=2000)
+
+		after = [l for l in stock_api.list_stock(bay="CLAIM-DMG-01") if l["batchNumber"] == "CLAIM-BATCH-8"][0]
+		self.assertEqual(after["claimRef"], claim["id"])
+
+		main_lot = [l for l in stock_api.list_stock(bay="CLAIM-MAIN-01") if l["batchNumber"] != "CLAIM-BATCH-8"]
+		if main_lot:
+			self.assertIsNone(main_lot[0]["damageType"])
+			self.assertIsNone(main_lot[0]["claimRef"])
