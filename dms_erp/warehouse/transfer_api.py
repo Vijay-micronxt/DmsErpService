@@ -28,6 +28,8 @@ def _serialize(doc) -> dict:
 		"qty": row.qty,
 		"transferType": doc.custom_transfer_type,
 		"reason": doc.custom_transfer_reason,
+		"damageType": doc.custom_damage_type,
+		"claimRef": doc.custom_claim_ref,
 		"remarks": doc.custom_remarks,
 		"transferredAt": doc.posting_date,
 		"transferredBy": doc.owner,

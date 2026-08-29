@@ -64,6 +64,21 @@ class TestTransfer(FrappeTestCase):
 				reason="Consolidation",
 			)
 
+	def test_transfer_returns_damage_type_and_claim_ref(self):
+		damage_bay = make_bay("XFER-DMG-01", bay_type="damage", categories=["Vitrified"])
+		result = transfer_api.transfer_stock(
+			from_bay="XFER-MAIN-01",
+			to_bay="XFER-DMG-01",
+			item=self.item,
+			batch_no="XFER-BATCH-1",
+			qty=10,
+			transfer_type="Damage→Insurance Claim",
+			reason="Insurance Claim",
+			damage_type="Broken",
+		)
+		self.assertEqual(result["damageType"], "Broken")
+		self.assertIsNone(result["claimRef"])
+
 	def test_transfer_requires_warehouse_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

@@ -194,6 +194,27 @@ def update_quotation_line_qty(quotation: str, item: str, qty: float):
 	return _amend_with_lines(doc, lines)
 
 
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_quotation_status(quotation: str, status: str, lost_reasons: list[str] | None = None, detailed_reason: str | None = None):
+	"""Lost is the only status this sets directly — every other status (Ordered,
+	the amend-driven states, etc.) is a side effect of some other action, not
+	something a caller sets by hand. Reuses ERPNext's own `declare_enquiry_lost`
+	rather than writing `status` on a submitted document ourselves; that's the
+	native, safe way this doctype supports a manual post-submit status change."""
+	_assert_can_manage_quotations()
+
+	if status != "Lost":
+		frappe.throw(
+			_("Only 'Lost' can be set directly — other statuses follow from create/amend/convert_to_order."),
+			frappe.ValidationError,
+		)
+
+	from erpnext.selling.doctype.quotation.quotation import declare_enquiry_lost
+
+	declare_enquiry_lost(quotation, lost_reasons or [], detailed_reason)
+	return get_quotation(quotation)
+
+
 @frappe.whitelist(methods=["POST"])
 def convert_to_order(quotation: str, expected_dispatch=None):
 	from erpnext.selling.doctype.quotation.quotation import make_sales_order

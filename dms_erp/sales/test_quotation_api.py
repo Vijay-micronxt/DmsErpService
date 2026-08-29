@@ -115,6 +115,18 @@ class TestQuotationApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 5)
 
+	def test_update_quotation_status_marks_lost(self):
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+
+		updated = quotation_api.update_quotation_status(quotation["id"], "Lost", detailed_reason="Dealer chose a competitor")
+		self.assertEqual(updated["status"], "Lost")
+
+	def test_update_quotation_status_rejects_other_statuses(self):
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.update_quotation_status(quotation["id"], "Open")
+
 	def test_convert_to_order_creates_sales_order_and_closes_inquiry(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=30, source="Phone")
 		quotation = quotation_api.create_quotation(

@@ -1,6 +1,7 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from dms_erp.catalog import dealer_catalog_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api
@@ -54,3 +55,20 @@ class TestInquiryApi(FrappeTestCase):
 
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
+
+	def test_create_inquiry_rejects_item_outside_dealer_catalog(self):
+		restricted_item = make_item("INQ-RESTRICTED-ITEM", "Vitrified")
+		other_dealer = make_dealer("Inquiry Test Dealer 2")
+		# Assigning anything at all to other_dealer creates its Dealer Catalog record,
+		# which switches it off the unassigned-dealer full-catalog fallback.
+		dealer_catalog_api.set_product_visibility(other_dealer, self.item, True)
+
+		with self.assertRaises(frappe.PermissionError):
+			inquiry_api.create_inquiry(dealer=other_dealer, item=restricted_item, qty=5, source="Phone")
+
+	def test_create_inquiry_rejects_pulled_back_item(self):
+		item = make_item("INQ-PULLED-ITEM", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_discontinuation_status", "Pulled Back")
+
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=5, source="Phone")

@@ -2,18 +2,24 @@
 
 Genuinely Pacific-specific (a cash/UPI/cheque payment voucher to a labour
 contractor, not a ledger-based vendor bill), so Unloading Charge is a custom
-doctype rather than ERPNext's Payment Entry — the latter needs a proper Party
-(Supplier/Customer) and Chart of Accounts wiring this app can't assume exists,
-same reasoning as claims_api.py not posting a Journal Entry.
+doctype — no Party (Supplier/Customer) is modeled for the contractor.
 
 `boxes` is read from the linked Inward Truck rather than duplicated, and the
 charge amount (boxes x rate) is computed on read, never stored — same pattern as
 pricing's landingCost/suggestedPrice.
+
+GL posting on `mark_paid` is optional and config-gated (Phase 14), same pattern
+as claims_api.py: status/paid-by/paid-at always update regardless. Only when
+`Pacific Accounting Settings.post_accounting_entries` is checked does it
+additionally post a Payment Entry (see finance/accounting.py), and only once the
+required accounts are configured there — never to a guessed account.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import today
+
+from dms_erp.finance import accounting
 
 CHARGE_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
 
@@ -40,6 +46,7 @@ def _serialize(doc) -> dict:
 		"recordedBy": doc.recorded_by,
 		"paidBy": doc.paid_by,
 		"paidAt": doc.paid_at,
+		"paymentEntry": doc.payment_entry,
 		"remarks": doc.remarks,
 	}
 
@@ -86,8 +93,11 @@ def mark_paid(charge: str):
 	_assert_can_manage_charges()
 
 	doc = frappe.get_doc("Unloading Charge", charge)
+	truck = frappe.get_doc("Inward Truck", doc.inward_truck)
+
 	doc.status = "Paid"
 	doc.paid_by = frappe.session.user
 	doc.paid_at = today()
+	doc.payment_entry = accounting.post_unloading_payment(truck.boxes * doc.rate_per_box, doc.name)
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)

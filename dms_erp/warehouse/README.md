@@ -35,7 +35,9 @@ in this module.
   something this app adds.
 - **Transfers** (`transfer_api.py`) — a native `Stock Entry` (Material Transfer),
   not a custom doctype. Custom Fields only for transfer type/reason/damage-type/
-  claim-ref, which Stock Entry has no equivalent for.
+  claim-ref, which Stock Entry has no equivalent for — `damageType`/`claimRef`
+  (Phase 14) are now returned in the serialized response too; they were accepted
+  as inputs and stored from the start, just never echoed back.
 
 Linking a Purchase Receipt back to a Purchase Order (so PO received-qty tracks
 correctly) is deliberately deferred to Phase 4, once real POs exist in this app —
