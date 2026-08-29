@@ -40,6 +40,7 @@ def _serialize(doc) -> dict:
 		"supplier": doc.supplier,
 		"expectedReadyDate": doc.schedule_date,
 		"remarks": doc.custom_remarks,
+		"sourceInquiry": doc.custom_source_inquiry,
 		"lines": [_serialize_line(row) for row in doc.items],
 	}
 
@@ -56,7 +57,14 @@ def get_purchase_order(po: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def create_purchase_order(item: str, ordered_qty: float, supplier: str, expected_ready_date, remarks: str | None = None):
+def create_purchase_order(
+	item: str,
+	ordered_qty: float,
+	supplier: str,
+	expected_ready_date,
+	remarks: str | None = None,
+	source_inquiry: str | None = None,
+):
 	_assert_can_manage_purchase()
 
 	po = frappe.get_doc(
@@ -67,6 +75,7 @@ def create_purchase_order(item: str, ordered_qty: float, supplier: str, expected
 			"transaction_date": today(),
 			"schedule_date": expected_ready_date,
 			"custom_remarks": remarks,
+			"custom_source_inquiry": source_inquiry,
 			"items": [{"item_code": item, "qty": ordered_qty, "schedule_date": expected_ready_date}],
 		}
 	)

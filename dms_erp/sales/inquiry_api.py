@@ -7,12 +7,28 @@ Note: unlike most other frontend api/*.ts modules, pacific-tileflow's `inquiries
 still static read-only seed data — there's no create/update wired up client-side yet.
 This module builds the real, mutable backend the BRD describes; the frontend will
 need its own follow-up work to call it.
+
+`convert_to_purchase_requirement` (Phase 12) is the missing piece of that 10-state
+lifecycle: nothing ever set an Inquiry to "Mapped to PO" because nothing ever raised
+a Purchase Order *from* one. It's a thin wrapper over `purchase.po_api.
+create_purchase_order` (which still does the actual work, and still enforces its own
+Purchase/Management role gate) — not a parallel "purchase requirement" doctype,
+since a requirement here is just a PO with a `custom_source_inquiry` link back.
+
+`create_inquiry` (Phase 14) now enforces the same catalog gate `quotation_api.
+create_quotation` always has — dealer-assigned visibility and current sellability —
+so a hidden or Pulled Back item is rejected here too, not just at the Quotation
+step further down the funnel.
 """
 
 import frappe
 from frappe import _
 
+from dms_erp.catalog.dealer_catalog_api import is_visible
+from dms_erp.catalog.utils import is_sellable
+
 INQUIRY_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
 
 
 def _assert_can_manage_inquiries():
@@ -67,6 +83,12 @@ def create_inquiry(
 ):
 	_assert_can_manage_inquiries()
 
+	if not is_visible(dealer, item):
+		frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
+	status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
+	if not is_sellable(status):
+		frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
+
 	doc = frappe.get_doc(
 		{
 			"doctype": "Inquiry",
@@ -107,3 +129,35 @@ def update_inquiry(inquiry: str, patch: dict):
 			doc.set(fieldname, value)
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def convert_to_purchase_requirement(
+	inquiry: str,
+	supplier: str,
+	expected_ready_date,
+	ordered_qty: float | None = None,
+	remarks: str | None = None,
+):
+	from dms_erp.purchase.po_api import create_purchase_order
+
+	doc = frappe.get_doc("Inquiry", inquiry)
+	if doc.status not in PURCHASE_REQUIREMENT_STATUSES:
+		frappe.throw(
+			_("Inquiry {0} is {1} — only Open, Out of Stock or Pre-order Required inquiries can become a purchase requirement.").format(
+				inquiry, doc.status
+			),
+			frappe.ValidationError,
+		)
+
+	po = create_purchase_order(
+		item=doc.item,
+		ordered_qty=ordered_qty or doc.qty,
+		supplier=supplier,
+		expected_ready_date=expected_ready_date,
+		remarks=remarks,
+		source_inquiry=inquiry,
+	)
+
+	frappe.db.set_value("Inquiry", inquiry, "status", "Mapped to PO")
+	return po

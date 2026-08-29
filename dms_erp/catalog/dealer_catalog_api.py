@@ -8,12 +8,31 @@ unassigned dealer isn't silently blocked from everything.
 
 Per the BRD flow, Purchase (and Management) confirm/maintain catalog assignments;
 Sales only needs read access (the /inquiries item picker filters against it).
+
+`is_visible` stays a pure per-dealer assignment check — whether Purchase has opted an
+item into this dealer's catalog, independent of the item's own lifecycle (the Dealer
+Catalog editor still needs to show/toggle a Pulled Back item that's currently
+assigned, so an admin can remove it). `catalog_for` is different: per its own
+docstring it's "what a dealer is allowed to inquire/quote for", and a Pulled Back
+item can't be quoted for *any* dealer regardless of assignment — so it's filtered by
+`catalog.utils.is_sellable` on top of the assignment/fallback logic (Phase 11; this
+was previously visibility-only, letting a discontinued item stay in an "effective
+catalog" it should never have appeared in).
 """
 
 import frappe
 from frappe import _
 
+from dms_erp.catalog.utils import is_sellable
+
 CATALOG_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+
+
+def _sellable_item_codes(item_codes: list[str]) -> list[str]:
+	if not item_codes:
+		return []
+	rows = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_discontinuation_status"])
+	return [r.name for r in rows if is_sellable(r.custom_discontinuation_status or "Active")]
 
 
 def _assert_can_manage_catalog():
@@ -38,10 +57,12 @@ def is_visible(dealer: str, item: str) -> bool:
 
 @frappe.whitelist(methods=["GET"])
 def catalog_for(dealer: str):
-	"""Item codes a dealer is allowed to inquire/quote for."""
+	"""Item codes a dealer is allowed to inquire/quote for — assignment (or the
+	unassigned-dealer fallback to everything) narrowed to currently-sellable items."""
 	if not frappe.db.exists("Dealer Catalog", dealer):
-		return frappe.get_all("Item", pluck="name")
-	return frappe.get_all("Dealer Catalog Item", filters={"parent": dealer}, pluck="item")
+		return _sellable_item_codes(frappe.get_all("Item", pluck="name"))
+	assigned = frappe.get_all("Dealer Catalog Item", filters={"parent": dealer}, pluck="item")
+	return _sellable_item_codes(assigned)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

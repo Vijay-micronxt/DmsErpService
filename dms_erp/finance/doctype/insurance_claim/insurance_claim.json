@@ -16,6 +16,7 @@
   "section_break_1",
   "settled_amount",
   "settled_at",
+  "settlement_journal_entry",
   "remarks"
  ],
  "fields": [
@@ -84,6 +85,14 @@
    "fieldname": "settled_at",
    "fieldtype": "Date",
    "label": "Settled At"
+  },
+  {
+   "description": "Set only when Pacific Accounting Settings has Post Accounting Entries checked — otherwise settlement is a pure status/amount update, same as before this field existed.",
+   "fieldname": "settlement_journal_entry",
+   "fieldtype": "Link",
+   "label": "Settlement Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
   },
   {
    "fieldname": "remarks",

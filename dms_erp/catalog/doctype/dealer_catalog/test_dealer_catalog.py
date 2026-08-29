@@ -70,3 +70,23 @@ class TestDealerCatalog(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			api.set_product_visibility(self.dealer, self.item_a, True)
+
+	def test_catalog_for_excludes_pulled_back_items_even_when_visible(self):
+		api.set_product_visibility(self.dealer, self.item_a, True)
+		api.set_product_visibility(self.dealer, self.item_b, True)
+		frappe.db.set_value("Item", self.item_b, "custom_discontinuation_status", "Pulled Back")
+		try:
+			catalog = api.catalog_for(self.dealer)
+			self.assertIn(self.item_a, catalog)
+			self.assertNotIn(self.item_b, catalog)
+			# is_visible is a pure assignment check — unaffected by sellability.
+			self.assertTrue(api.is_visible(self.dealer, self.item_b))
+		finally:
+			frappe.db.set_value("Item", self.item_b, "custom_discontinuation_status", "Active")
+
+	def test_catalog_for_excludes_pulled_back_items_for_unassigned_dealer(self):
+		frappe.db.set_value("Item", self.item_a, "custom_discontinuation_status", "Pulled Back")
+		try:
+			self.assertNotIn(self.item_a, api.catalog_for(self.dealer))
+		finally:
+			frappe.db.set_value("Item", self.item_a, "custom_discontinuation_status", "Active")

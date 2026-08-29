@@ -25,8 +25,13 @@ class TestQuotationApi(FrappeTestCase):
 
 		cls.unpriced_item = make_item("QTN-UNPRICED", "Vitrified")
 
+		cls.second_item = make_item("QTN-SECOND", "Vitrified")
+		pricing_api.ensure_price_record(cls.second_item, cls.supplier, 200, 25, "2026-08-01")
+		pricing_api.approve_price(item=cls.second_item, final_price=250, reason="Launch")
+
 		dealer_catalog_api.set_product_visibility(cls.dealer, cls.priced_item, True)
 		dealer_catalog_api.set_product_visibility(cls.dealer, cls.unpriced_item, True)
+		dealer_catalog_api.set_product_visibility(cls.dealer, cls.second_item, True)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -46,12 +51,81 @@ class TestQuotationApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.unpriced_item, "qty": 10}], markup_pct=10)
 
+	def test_create_quotation_rejects_pulled_back_item_even_when_still_visible(self):
+		frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Pulled Back")
+		try:
+			# Still assigned/visible — set_product_visibility isn't retroactively cleaned up.
+			self.assertTrue(dealer_catalog_api.is_visible(self.dealer, self.priced_item))
+			with self.assertRaises(frappe.ValidationError):
+				quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		finally:
+			frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Active")
+
 	def test_create_quotation_from_inquiry_marks_it_quoted(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=50, source="Phone")
 		quotation_api.create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiry=inquiry["id"]
 		)
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Quoted")
+
+	def test_add_quotation_line_amends_and_reprices_every_line(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12
+		)
+
+		amended = quotation_api.add_quotation_line(quotation["id"], self.second_item, 20)
+
+		self.assertNotEqual(amended["id"], quotation["id"])
+		self.assertEqual(len(amended["lines"]), 2)
+		by_item = {l["itemCode"]: l for l in amended["lines"]}
+		self.assertEqual(by_item[self.priced_item]["rate"], 560)  # round(500 * 1.12), rebuilt not stale
+		self.assertEqual(by_item[self.second_item]["rate"], 280)  # round(250 * 1.12)
+		self.assertEqual(frappe.db.get_value("Quotation", quotation["id"], "docstatus"), 2)
+
+	def test_remove_quotation_line_drops_it_and_rejects_last_line(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100}, {"item": self.second_item, "qty": 20}],
+			markup_pct=10,
+		)
+
+		amended = quotation_api.remove_quotation_line(quotation["id"], self.second_item)
+		self.assertEqual(len(amended["lines"]), 1)
+		self.assertEqual(amended["lines"][0]["itemCode"], self.priced_item)
+
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.remove_quotation_line(amended["id"], self.priced_item)
+
+	def test_update_quotation_line_qty_changes_only_that_line(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100}, {"item": self.second_item, "qty": 20}],
+			markup_pct=10,
+		)
+
+		amended = quotation_api.update_quotation_line_qty(quotation["id"], self.second_item, 50)
+		by_item = {l["itemCode"]: l for l in amended["lines"]}
+		self.assertEqual(by_item[self.second_item]["qty"], 50)
+		self.assertEqual(by_item[self.priced_item]["qty"], 100)
+
+	def test_edit_rejects_already_ordered_quotation(self):
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 5)
+
+	def test_update_quotation_status_marks_lost(self):
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+
+		updated = quotation_api.update_quotation_status(quotation["id"], "Lost", detailed_reason="Dealer chose a competitor")
+		self.assertEqual(updated["status"], "Lost")
+
+	def test_update_quotation_status_rejects_other_statuses(self):
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.update_quotation_status(quotation["id"], "Open")
 
 	def test_convert_to_order_creates_sales_order_and_closes_inquiry(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=30, source="Phone")

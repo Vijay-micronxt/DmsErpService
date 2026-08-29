@@ -99,3 +99,46 @@ class TestAllocation(FrappeTestCase):
 		result = allocation_api.resolve_scan("ALLOC-A-01")
 		self.assertTrue(result["ok"])
 		self.assertEqual(result["kind"], "bay")
+
+	def test_list_allocations_and_get_allocation(self):
+		created = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-5",
+			total_qty=15,
+			lines=[{"bay": "ALLOC-A-01", "qty": 15}],
+			supplier=self.supplier,
+		)
+
+		fetched = allocation_api.get_allocation(created["id"])
+		self.assertEqual(fetched, created)
+
+		listed = allocation_api.list_allocations(item=self.item)
+		self.assertIn(created["id"], [a["id"] for a in listed])
+
+		by_status = allocation_api.list_allocations(status="Confirmed")
+		self.assertIn(created["id"], [a["id"] for a in by_status])
+
+	def test_get_allocation_qr_codes_one_per_bay_split_and_resolves_via_scan(self):
+		alloc = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-6",
+			total_qty=100,
+			lines=[{"bay": "ALLOC-A-01", "qty": 60}, {"bay": "ALLOC-A-02", "qty": 40}],
+			supplier=self.supplier,
+		)
+
+		codes = allocation_api.get_allocation_qr_codes(alloc["id"])
+		self.assertEqual(len(codes), 2)
+		by_bay_code = {c["bayCode"]: c for c in codes}
+		self.assertIn("ALLOC-A-01", by_bay_code)
+		self.assertIn("ALLOC-A-02", by_bay_code)
+
+		for entry in codes:
+			self.assertTrue(entry["qrCode"].startswith("data:image/png;base64,"))
+			self.assertEqual(entry["payload"], f"PI-ITEM|{self.item}|ALLOC-BATCH-6|{entry['bayCode']}")
+
+			scanned = allocation_api.resolve_scan(entry["payload"])
+			self.assertTrue(scanned["ok"])
+			self.assertEqual(scanned["kind"], "item")
+			self.assertEqual(scanned["lot"]["itemCode"], self.item)
+			self.assertEqual(scanned["lot"]["batchNumber"], "ALLOC-BATCH-6")

@@ -110,19 +110,8 @@ def _damage_lots_awaiting_claim() -> int:
 	for lot in list_stock_lots():
 		if lot["bayId"] not in damage_bays:
 			continue
-		voucher_nos = frappe.get_all(
-			"Stock Ledger Entry",
-			filters={
-				"warehouse": lot["bayId"],
-				"item_code": lot["itemCode"],
-				"batch_no": lot["batchNumber"],
-				"voucher_type": "Stock Entry",
-				"actual_qty": [">", 0],
-			},
-			pluck="voucher_no",
-		)
-		has_claim = any(frappe.db.get_value("Stock Entry", v, "custom_claim_ref") for v in voucher_nos)
-		if not has_claim:
+		# `claimRef` is already traced by list_stock_lots for damage/insurance-claim bays.
+		if not lot["claimRef"]:
 			awaiting += 1
 	return awaiting
 

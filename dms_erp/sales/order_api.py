@@ -36,6 +36,9 @@ def _serialize(doc) -> dict:
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,
 		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
+		# Server-computed only — every line's rate came from get_dealer_price at
+		# creation time, never a client-supplied value, so this total is trustworthy.
+		"total": doc.grand_total,
 		"stage": doc.custom_fulfillment_stage,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,

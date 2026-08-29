@@ -61,3 +61,7 @@ class TestPoApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+
+	def test_source_inquiry_is_optional_and_defaults_to_none(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+		self.assertIsNone(po["sourceInquiry"])

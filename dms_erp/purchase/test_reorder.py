@@ -3,11 +3,15 @@ from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.catalog import api as catalog_api
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, reorder_suggestions
+from dms_erp.purchase import po_api
+from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, SALES_VELOCITY_WINDOW_DAYS, reorder_suggestions
+from dms_erp.purchase.setup import setup_purchase
+from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
 
 
 class TestReorder(FrappeTestCase):
@@ -18,7 +22,9 @@ class TestReorder(FrappeTestCase):
 		setup_catalog()
 		setup_pricing()
 		setup_warehouse()
+		setup_purchase()
 		cls.supplier = make_supplier("Reorder Test Supplier")
+		cls.dealer = make_dealer("Reorder Test Dealer")
 		cls.bay = make_bay("REORDER-A-01", categories=["Vitrified"])
 
 	def tearDown(self):
@@ -58,3 +64,53 @@ class TestReorder(FrappeTestCase):
 		self.assertTrue(suggestion["nonReorderable"])
 		self.assertEqual(suggestion["suggestedQty"], 0)
 		self.assertEqual(suggestion["urgency"], "Healthy")
+
+	def test_pending_and_missed_inquiry_qty_are_real(self):
+		item = make_item("REORDER-INQUIRY", "Vitrified")
+
+		open_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=30, source="Phone")
+		out_of_stock_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=15, source="WhatsApp")
+		inquiry_api.update_inquiry(out_of_stock_inquiry["id"], {"status": "Out of Stock"})
+		closed_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=999, source="Phone")
+		inquiry_api.update_inquiry(closed_inquiry["id"], {"status": "Closed"})
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["pendingInquiryQty"], 30)
+		self.assertEqual(suggestion["missedDemandQty"], 15)
+		self.assertEqual(suggestion["urgency"], "Critical")  # zero stock + missed demand
+		self.assertIn("15 boxes of missed/constrained retail demand", suggestion["reasons"])
+		self.assertIn("30 boxes in open retail inquiries", suggestion["reasons"])
+		self.assertEqual(open_inquiry["status"], "Open")
+
+	def test_recent_retail_sales_qty_feeds_lead_time_demand(self):
+		item = make_item("REORDER-VELOCITY", "Vitrified")
+		frappe.db.set_value("Item", item, "lead_time_days", 30)
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		allocation_api.create_allocation(
+			item=item, batch_no="REORDER-VELOCITY-B1", total_qty=200, lines=[{"bay": "REORDER-A-01", "qty": 200}], supplier=self.supplier
+		)
+
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=60, source="Phone")
+		order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 60}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["recentRetailSalesQty"], 60)
+		expected_lead_time_demand = round((60 / SALES_VELOCITY_WINDOW_DAYS) * 30)
+		self.assertGreater(expected_lead_time_demand, 0)
+		self.assertTrue(any(f"{expected_lead_time_demand} boxes of expected demand" in r for r in suggestion["reasons"]))
+
+	def test_open_purchase_order_qty_nets_out_of_suggested_qty(self):
+		item = make_item("REORDER-OPEN-PO", "Vitrified")
+
+		before = self._suggestion_for(item)
+		self.assertEqual(before["openPurchaseOrderQty"], 0)
+		self.assertGreater(before["suggestedQty"], 0)
+
+		po = po_api.create_purchase_order(item=item, ordered_qty=before["suggestedQty"], supplier=self.supplier, expected_ready_date="2026-09-01")
+
+		after = self._suggestion_for(item)
+		self.assertEqual(after["openPurchaseOrderQty"], before["suggestedQty"])
+		self.assertEqual(after["openPurchaseOrders"], [{"po": po["id"], "pendingQty": before["suggestedQty"]}])
+		self.assertEqual(after["suggestedQty"], 0)
+		self.assertTrue(any("already on order" in r for r in after["reasons"]))

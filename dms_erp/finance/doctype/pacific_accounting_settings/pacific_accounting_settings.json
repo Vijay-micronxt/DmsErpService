@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "creation": "2026-08-29 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "post_accounting_entries",
+  "default_company",
+  "default_bank_account",
+  "section_break_claims",
+  "insurance_claim_receivable_account",
+  "insurance_settlement_variance_account",
+  "section_break_unloading",
+  "unloading_expense_account"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "description": "When unchecked, claim settlement and unloading payment only update status/amount fields, exactly as before this setting existed — the app stays fully usable without a Chart of Accounts decision. When checked, the accounts below must all be configured or the relevant action is rejected with a clear error rather than guessing one.",
+   "fieldname": "post_accounting_entries",
+   "fieldtype": "Check",
+   "label": "Post Accounting Entries"
+  },
+  {
+   "fieldname": "default_company",
+   "fieldtype": "Link",
+   "label": "Default Company",
+   "options": "Company"
+  },
+  {
+   "description": "Credited when an insurance claim is settled or an unloading charge is marked paid.",
+   "fieldname": "default_bank_account",
+   "fieldtype": "Link",
+   "label": "Default Bank Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "section_break_claims",
+   "fieldtype": "Section Break",
+   "label": "Insurance Claims"
+  },
+  {
+   "description": "Debited (received against) when a claim is settled.",
+   "fieldname": "insurance_claim_receivable_account",
+   "fieldtype": "Link",
+   "label": "Insurance Claim Receivable Account",
+   "options": "Account"
+  },
+  {
+   "description": "Optional. Only used when the settled amount differs from the claimed amount, to post the delta rather than silently absorbing it into the receivable account.",
+   "fieldname": "insurance_settlement_variance_account",
+   "fieldtype": "Link",
+   "label": "Insurance Settlement Variance Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "section_break_unloading",
+   "fieldtype": "Section Break",
+   "label": "Unloading Payment"
+  },
+  {
+   "description": "Debited when an unloading charge is marked paid.",
+   "fieldname": "unloading_expense_account",
+   "fieldtype": "Link",
+   "label": "Unloading Expense Account",
+   "options": "Account"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Finance",
+ "name": "Pacific Accounting Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Pacific Management",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

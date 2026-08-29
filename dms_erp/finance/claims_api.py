@@ -8,17 +8,21 @@ this, so Insurance Claim is a genuine custom doctype — one per Damage->Insuran
 Claim Stock Entry (never duplicated), linking back so that transfer's own
 `custom_claim_ref` becomes a real, queryable reference instead of free text.
 
-Claims are tracked as receivable/settled amounts here, but deliberately do NOT post
-a Journal Entry to the General Ledger — that would require assuming specific Chart
-of Accounts accounts (an insurance-claim-receivable account, a stock-loss account)
-exist on the target site, which this app can't know. Real GL posting is a natural
-future refinement once those accounts are known (same reasoning as Quotation
-freight not being wired into Sales Taxes and Charges in Phase 5).
+GL posting on settlement is optional and config-gated (Phase 14) rather than
+guessing a Chart of Accounts: `update_claim_status` always updates the status/
+settled-amount fields, exactly as before this existed. Only when `Pacific
+Accounting Settings.post_accounting_entries` is checked does it additionally post
+a Journal Entry (see finance/accounting.py) — and if the required accounts aren't
+configured, that raises a clear ValidationError rather than posting to a guessed
+account. This keeps the app fully usable before an accountant has picked a CoA;
+turning on GL posting later is a config change, not a redeploy.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import today
+
+from dms_erp.finance import accounting
 
 CLAIM_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
 DAMAGE_TO_CLAIM_TRANSFER_TYPE = "Damage→Insurance Claim"
@@ -47,6 +51,7 @@ def _serialize(doc) -> dict:
 		"filedBy": doc.filed_by,
 		"settledAmount": doc.settled_amount,
 		"settledAt": doc.settled_at,
+		"settlementJournalEntry": doc.settlement_journal_entry,
 		"remarks": doc.remarks,
 	}
 
@@ -101,6 +106,7 @@ def update_claim_status(claim: str, status: str, settled_amount: float | None = 
 	if status == "Settled":
 		doc.settled_amount = settled_amount if settled_amount is not None else doc.claim_amount
 		doc.settled_at = today()
+		doc.settlement_journal_entry = accounting.post_claim_settlement(doc.claim_amount, doc.settled_amount, doc.name)
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
 
