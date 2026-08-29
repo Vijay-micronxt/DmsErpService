@@ -26,7 +26,13 @@ in this module.
   confirmed put-away (`confirm_putaway`, `resolve_scan`) happens after that and is a
   floor-confirmation gate only; it does not move stock again. `list_allocations`/
   `get_allocation` (Phase 9) are plain reads over the doctype — they were missing
-  even though every write action already existed.
+  even though every write action already existed. `get_allocation_qr_codes`
+  (Phase 13) generates one QR image per bay split on demand — nothing is stored,
+  since each code is just `"PI-ITEM|<item>|<batch>|<bayCode>"` encoded as a PNG,
+  the exact string `resolve_scan` already parses, so a scan straight off the
+  printed slip resolves the lot with no new scan format to support. Uses `qrcode`,
+  already a real ERPNext dependency (its own UPI/e-invoice QR features), not
+  something this app adds.
 - **Transfers** (`transfer_api.py`) — a native `Stock Entry` (Material Transfer),
   not a custom doctype. Custom Fields only for transfer type/reason/damage-type/
   claim-ref, which Stock Entry has no equivalent for.

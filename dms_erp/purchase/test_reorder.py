@@ -5,7 +5,9 @@ from dms_erp.catalog import api as catalog_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.purchase import po_api
 from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, SALES_VELOCITY_WINDOW_DAYS, reorder_suggestions
+from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
@@ -20,6 +22,7 @@ class TestReorder(FrappeTestCase):
 		setup_catalog()
 		setup_pricing()
 		setup_warehouse()
+		setup_purchase()
 		cls.supplier = make_supplier("Reorder Test Supplier")
 		cls.dealer = make_dealer("Reorder Test Dealer")
 		cls.bay = make_bay("REORDER-A-01", categories=["Vitrified"])
@@ -96,3 +99,18 @@ class TestReorder(FrappeTestCase):
 		expected_lead_time_demand = round((60 / SALES_VELOCITY_WINDOW_DAYS) * 30)
 		self.assertGreater(expected_lead_time_demand, 0)
 		self.assertTrue(any(f"{expected_lead_time_demand} boxes of expected demand" in r for r in suggestion["reasons"]))
+
+	def test_open_purchase_order_qty_nets_out_of_suggested_qty(self):
+		item = make_item("REORDER-OPEN-PO", "Vitrified")
+
+		before = self._suggestion_for(item)
+		self.assertEqual(before["openPurchaseOrderQty"], 0)
+		self.assertGreater(before["suggestedQty"], 0)
+
+		po = po_api.create_purchase_order(item=item, ordered_qty=before["suggestedQty"], supplier=self.supplier, expected_ready_date="2026-09-01")
+
+		after = self._suggestion_for(item)
+		self.assertEqual(after["openPurchaseOrderQty"], before["suggestedQty"])
+		self.assertEqual(after["openPurchaseOrders"], [{"po": po["id"], "pendingQty": before["suggestedQty"]}])
+		self.assertEqual(after["suggestedQty"], 0)
+		self.assertTrue(any("already on order" in r for r in after["reasons"]))

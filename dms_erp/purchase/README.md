@@ -20,7 +20,11 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
   lifecycle, and `recentRetailSalesQty` is a trailing-180-day submitted Sales
   Order Item sum, converted to a daily rate and projected across the item's own
   `lead_time_days` to add a real "expected demand during lead time" term on top
-  of the flat safety-stock floor.
+  of the flat safety-stock floor. Phase 13 adds `openPurchaseOrderQty`/
+  `openPurchaseOrders` — a suggestion has no id of its own to tag a PO against
+  (it's a live per-item computation, not a stored row), so "already ordered"
+  means "sum of open PO lines for this item, still pending receipt", netted
+  straight out of `raw_need` so `suggestedQty` drops once a PO already covers it.
 
 `Product.stockQty` (Phase 2) now reads real data from Phase 3's Bin aggregate
 instead of a `0` stub, now that Warehouse exists.

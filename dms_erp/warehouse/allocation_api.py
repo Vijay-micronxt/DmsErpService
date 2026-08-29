@@ -12,7 +12,18 @@ When the Inward Truck carries a real `purchase_order`/`purchase_order_item` (Pha
 prefers the PO line's negotiated rate over the Phase 2 price proposal's purchaseCost.
 A truck with no PO (poId is optional in the frontend too) still posts a standalone
 receipt against just the supplier.
+
+`get_allocation_qr_codes` (Phase 13) generates one QR image per bay split, encoding
+the exact "PI-ITEM|<item>|<batch>|<bayCode>" string `resolve_scan` below already
+parses — so a scan straight off the printed slip resolves the lot with no new scan
+format to support. Codes are generated on demand from `qrcode` (a real ERPNext
+dependency already, used for its own UPI/e-invoice QR features — not something
+this app needs to add) rather than stored: the payload is fully determined by the
+allocation's own fields, so there's nothing here worth persisting.
 """
+
+import base64
+from io import BytesIO
 
 import frappe
 from frappe import _
@@ -167,6 +178,36 @@ def mark_allocation_printed(allocation: str):
 	doc.status = "Printed"
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
+
+
+def _qr_data_uri(payload: str) -> str:
+	import qrcode
+
+	img = qrcode.make(payload)
+	buf = BytesIO()
+	img.save(buf, format="PNG")
+	return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+@frappe.whitelist(methods=["GET"])
+def get_allocation_qr_codes(allocation: str):
+	"""One QR per bay split on this allocation slip — each encodes the same
+	"PI-ITEM|<item>|<batch>|<bayCode>" format resolve_scan already parses."""
+	doc = frappe.get_doc("Bay Allocation", allocation)
+	out = []
+	for row in doc.lines:
+		bay_code = frappe.get_cached_value("Warehouse", row.bay, "custom_bay_code")
+		payload = f"PI-ITEM|{doc.item}|{doc.batch_no}|{bay_code}"
+		out.append(
+			{
+				"bayId": row.bay,
+				"bayCode": bay_code,
+				"qty": row.qty,
+				"payload": payload,
+				"qrCode": _qr_data_uri(payload),
+			}
+		)
+	return out
 
 
 @frappe.whitelist(methods=["GET"])
