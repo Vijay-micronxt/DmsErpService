@@ -19,7 +19,13 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   Charges, since that needs a GL account this app can't assume exists on every
   site. Every line's rate is computed server-side from the approved dealer price
   (never client-supplied), and every item must be in the dealer's assigned catalog
-  — both enforced as real gates, not just report-time checks.
+  and currently sellable — real gates, not just report-time checks (Phase 11 closed
+  the sellability half: `is_visible` alone doesn't catch an item pulled back after
+  being assigned visible). Line editing (`add_quotation_line`/`remove_quotation_line`/
+  `update_quotation_line_qty`, Phase 12) goes through ERPNext's standard cancel +
+  amend cycle rather than mutating a submitted document in place — every line's rate
+  is rebuilt from the current approved price on every edit, and the quotation's `id`
+  changes each time, same as amending any other submitted ERPNext document.
 - **Order** (`order_api.py`) — ERPNext's native `Sales Order`. Pacific's warehouse-
   fulfillment stages (Confirmed → Picking → Ready to Dispatch → Dispatched →
   Delivered/Cancelled) are a distinct operational flow layered on top via a custom
@@ -46,3 +52,9 @@ Pick Tasks; everyone reads.
   `list_dealers`/`get_dealer` add that: no new doctype or field, just the read
   surface over `Customer` that every other endpoint already assumed existed
   upstream.
+- **Inquiry → Purchase Requirement** (`inquiry_api.convert_to_purchase_requirement`,
+  Phase 12) — closes the one Inquiry status nothing ever set: "Mapped to PO". It's a
+  thin wrapper over `purchase.po_api.create_purchase_order` (which still enforces its
+  own Purchase/Management role gate), not a parallel "purchase requirement" doctype —
+  a requirement here is just a PO with a `custom_source_inquiry` link back, only
+  allowed from an Open/Out of Stock/Pre-order Required inquiry.

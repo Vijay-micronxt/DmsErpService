@@ -7,12 +7,20 @@ Note: unlike most other frontend api/*.ts modules, pacific-tileflow's `inquiries
 still static read-only seed data — there's no create/update wired up client-side yet.
 This module builds the real, mutable backend the BRD describes; the frontend will
 need its own follow-up work to call it.
+
+`convert_to_purchase_requirement` (Phase 12) is the missing piece of that 10-state
+lifecycle: nothing ever set an Inquiry to "Mapped to PO" because nothing ever raised
+a Purchase Order *from* one. It's a thin wrapper over `purchase.po_api.
+create_purchase_order` (which still does the actual work, and still enforces its own
+Purchase/Management role gate) — not a parallel "purchase requirement" doctype,
+since a requirement here is just a PO with a `custom_source_inquiry` link back.
 """
 
 import frappe
 from frappe import _
 
 INQUIRY_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
 
 
 def _assert_can_manage_inquiries():
@@ -107,3 +115,35 @@ def update_inquiry(inquiry: str, patch: dict):
 			doc.set(fieldname, value)
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def convert_to_purchase_requirement(
+	inquiry: str,
+	supplier: str,
+	expected_ready_date,
+	ordered_qty: float | None = None,
+	remarks: str | None = None,
+):
+	from dms_erp.purchase.po_api import create_purchase_order
+
+	doc = frappe.get_doc("Inquiry", inquiry)
+	if doc.status not in PURCHASE_REQUIREMENT_STATUSES:
+		frappe.throw(
+			_("Inquiry {0} is {1} — only Open, Out of Stock or Pre-order Required inquiries can become a purchase requirement.").format(
+				inquiry, doc.status
+			),
+			frappe.ValidationError,
+		)
+
+	po = create_purchase_order(
+		item=doc.item,
+		ordered_qty=ordered_qty or doc.qty,
+		supplier=supplier,
+		expected_ready_date=expected_ready_date,
+		remarks=remarks,
+		source_inquiry=inquiry,
+	)
+
+	frappe.db.set_value("Inquiry", inquiry, "status", "Mapped to PO")
+	return po

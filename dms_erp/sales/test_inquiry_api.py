@@ -2,8 +2,9 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item
+from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
 class TestInquiryApi(FrappeTestCase):
@@ -12,8 +13,10 @@ class TestInquiryApi(FrappeTestCase):
 		super().setUpClass()
 		ensure_company()
 		setup_catalog()
+		setup_purchase()
 		cls.item = make_item("INQ-TEST-ITEM", "Vitrified")
 		cls.dealer = make_dealer("Inquiry Test Dealer")
+		cls.supplier = make_supplier("Inquiry Test Supplier")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -34,3 +37,20 @@ class TestInquiryApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+
+	def test_convert_to_purchase_requirement_creates_po_and_maps_inquiry(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
+
+		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
+
+		self.assertEqual(po["lines"][0]["orderedQty"], 40)
+		self.assertEqual(po["sourceInquiry"], inquiry["id"])
+		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Mapped to PO")
+
+	def test_convert_to_purchase_requirement_rejects_ineligible_status(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Converted to Order"})
+
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")

@@ -2,8 +2,23 @@
 submitted immediately on creation (same one-action pattern as Phase 4's Purchase
 Order — the frontend's builder has no separate draft step either). Rates are always
 computed server-side from the approved dealer price (never client-supplied), and
-every line must be in the dealer's assigned catalog — both are BRD-mandated gates,
-not just report-time checks.
+every line must be in the dealer's assigned catalog and currently sellable — all
+BRD-mandated gates, not just report-time checks. Sellability is checked here
+directly (not just via Phase 11's `catalog_for` filter) because `is_visible` is a
+pure per-dealer assignment flag — an item pulled back after being assigned visible
+stays "visible" until Purchase removes it, so a line-level check is the real gate.
+
+Line editing (Phase 12) can't just mutate `doc.items` in place — a submitted native
+Quotation is immutable outside `allow_on_submit` fields, and `items` isn't one.
+`add_quotation_line`/`remove_quotation_line`/`update_quotation_line_qty` all go
+through ERPNext's standard amend cycle instead: cancel the current submission,
+`frappe.copy_doc` it forward with `amended_from` set (giving the new document
+Frappe's normal "-1" amended name), rebuild every line's rate from the *current*
+approved dealer price and the quotation's own stored markup — never just editing the
+one line asked for and leaving the rest stale — then insert and resubmit. The
+quotation's `id` changes on every edit, same as amending any other submitted
+ERPNext document; callers should always use the `id` a write endpoint returns, not
+the one they started with.
 """
 
 import frappe
@@ -11,10 +26,12 @@ from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
+from dms_erp.catalog.utils import is_sellable
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.warehouse.utils import default_company
 
 QUOTATION_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+NON_EDITABLE_STATUSES = {"Ordered", "Lost", "Cancelled", "Expired"}
 
 
 def _assert_can_manage_quotations():
@@ -34,12 +51,58 @@ def _serialize(doc) -> dict:
 		"inquiryId": doc.custom_inquiry,
 		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
 		"total": doc.grand_total,
+		"status": doc.status,
 	}
+
+
+def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dict]:
+	items = []
+	for line in lines:
+		item = line["item"]
+		if not is_visible(dealer, item):
+			frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
+		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
+		if not is_sellable(status):
+			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
+		dealer_price = get_dealer_price(item)
+		if dealer_price is None:
+			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
+		rate = round(dealer_price * (1 + float(markup_pct) / 100))
+		items.append({"item_code": item, "qty": line["qty"], "rate": rate})
+	return items
+
+
+def _guard_editable(doc):
+	if doc.docstatus != 1:
+		frappe.throw(_("Only a submitted, open quotation can be edited."), frappe.ValidationError)
+	if doc.status in NON_EDITABLE_STATUSES:
+		frappe.throw(_("Quotation {0} is {1} and can no longer be edited.").format(doc.name, doc.status), frappe.ValidationError)
+
+
+def _amend_with_lines(doc, lines: list[dict]) -> dict:
+	"""Cancel `doc` and resubmit an amended copy with `lines` — every rate is
+	recomputed from the current approved price, not just the one line that changed."""
+	items = _priced_items(doc.party_name, doc.custom_markup_pct, lines)
+
+	original_name = doc.name
+	doc.cancel()
+
+	amended = frappe.copy_doc(doc)
+	amended.amended_from = original_name
+	amended.items = []
+	for item in items:
+		amended.append("items", item)
+	amended.insert(ignore_permissions=True)
+	amended.submit()
+
+	return _serialize(amended)
 
 
 @frappe.whitelist(methods=["GET"])
 def list_quotations(dealer: str | None = None):
-	filters = {"quotation_to": "Customer"}
+	# Excludes cancelled quotations — an edited (Phase 12 amended) quotation leaves
+	# its pre-edit version behind as docstatus=2, which is history, not a live document.
+	filters = {"quotation_to": "Customer", "docstatus": ["!=", 2]}
 	if dealer:
 		filters["party_name"] = dealer
 	names = frappe.get_all("Quotation", filters=filters, pluck="name", order_by="creation desc")
@@ -65,16 +128,7 @@ def create_quotation(
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
 
-	items = []
-	for line in lines:
-		item = line["item"]
-		if not is_visible(dealer, item):
-			frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
-		dealer_price = get_dealer_price(item)
-		if dealer_price is None:
-			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
-		rate = round(dealer_price * (1 + float(markup_pct) / 100))
-		items.append({"item_code": item, "qty": line["qty"], "rate": rate})
+	items = _priced_items(dealer, markup_pct, lines)
 
 	doc = frappe.get_doc(
 		{
@@ -97,6 +151,47 @@ def create_quotation(
 		frappe.db.set_value("Inquiry", inquiry, "status", "Quoted")
 
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def add_quotation_line(quotation: str, item: str, qty: float):
+	_assert_can_manage_quotations()
+	doc = frappe.get_doc("Quotation", quotation)
+	_guard_editable(doc)
+
+	if any(row.item_code == item for row in doc.items):
+		frappe.throw(_("{0} is already a line on this quotation — use update_quotation_line_qty.").format(item), frappe.ValidationError)
+
+	lines = [{"item": row.item_code, "qty": row.qty} for row in doc.items] + [{"item": item, "qty": qty}]
+	return _amend_with_lines(doc, lines)
+
+
+@frappe.whitelist(methods=["POST"])
+def remove_quotation_line(quotation: str, item: str):
+	_assert_can_manage_quotations()
+	doc = frappe.get_doc("Quotation", quotation)
+	_guard_editable(doc)
+
+	lines = [{"item": row.item_code, "qty": row.qty} for row in doc.items if row.item_code != item]
+	if not lines:
+		frappe.throw(_("A quotation must have at least one line — cancel it instead of removing the last one."), frappe.ValidationError)
+	if len(lines) == len(doc.items):
+		frappe.throw(_("{0} is not a line on this quotation.").format(item), frappe.ValidationError)
+
+	return _amend_with_lines(doc, lines)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_quotation_line_qty(quotation: str, item: str, qty: float):
+	_assert_can_manage_quotations()
+	doc = frappe.get_doc("Quotation", quotation)
+	_guard_editable(doc)
+
+	if not any(row.item_code == item for row in doc.items):
+		frappe.throw(_("{0} is not a line on this quotation.").format(item), frappe.ValidationError)
+
+	lines = [{"item": row.item_code, "qty": qty if row.item_code == item else row.qty} for row in doc.items]
+	return _amend_with_lines(doc, lines)
 
 
 @frappe.whitelist(methods=["POST"])
