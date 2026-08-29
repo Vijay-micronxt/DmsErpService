@@ -264,6 +264,81 @@ is ever posted by this app (§8).
 
 ## 6. Business process flows
 
+### The shape of the whole system
+
+Every stage below is annotated with the real module/method that implements
+it — not an aspirational diagram, a map of what actually runs. Color groups
+stages by owning module.
+
+```mermaid
+flowchart TD
+    A["Demand signal (Inquiry)<br/>sales.inquiry_api.create_inquiry"]
+    B["Reorder suggestion<br/>purchase.reorder_api.reorder_suggestions"]
+    C["Purchase Order<br/>purchase.po_api.create_purchase_order"]
+    D["Supplier readiness<br/>purchase.po_api.set_line_ready"]
+    E["Plan inward<br/>warehouse.inward_api.add_truck"]
+    F["Gate to Unloading<br/>warehouse.inward_api.advance_truck"]
+    G["Bay allocation<br/>warehouse.allocation_api.create_allocation"]
+    H["Purchase Receipt posted<br/>native — stock now live"]
+    I["Scan-confirmed put-away<br/>warehouse.allocation_api.confirm_putaway"]
+    J["Stock visible<br/>warehouse.stock_api.list_stock"]
+    K["Approved dealer price<br/>pricing.api.approve_price"]
+    L["Dealer catalog assignment<br/>catalog.dealer_catalog_api"]
+    O["Quotation, +markup<br/>sales.quotation_api.create_quotation"]
+    P["Sales Order<br/>sales.order_api"]
+    Q["Picking<br/>sales.picking_api"]
+    R["Dispatched / Delivered<br/>sales.order_api.advance_order_stage"]
+
+    SBuf["Buffer bay<br/>suggest_bays fallback"]
+    STrf["Bay transfer<br/>warehouse.transfer_api.transfer_stock"]
+    SDmg["Damage to Insurance Claim<br/>finance.claims_api.file_claim"]
+    SUnl["Unloading pay<br/>finance.unloading_api.record_charge"]
+    SWa["WhatsApp thread<br/>comms.api"]
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+    J --> K
+    J --> L
+    K -- "price required" --> O
+    K -- "price required" --> P
+    L -- "catalog gate, Quotation only" --> O
+    A --> O
+    A --> P
+    O --> P --> Q --> R
+    R -. "still unavailable" .-> A
+
+    G -. "main bay full" .-> SBuf
+    SBuf -. "space frees up" .-> G
+    G -. "consolidation" .-> STrf
+    STrf -. "damage found" .-> SDmg
+    F -. "unloading complete" .-> SUnl
+    A -.-> SWa
+    R -.-> SWa
+
+    classDef purchase fill:#F3E2D4,stroke:#AE501B,color:#1E2422;
+    classDef warehouse fill:#DCE7E6,stroke:#2B5D6B,color:#1E2422;
+    classDef sales fill:#E1EEE0,stroke:#3F7D4F,color:#1E2422;
+    classDef finance fill:#F3E8CE,stroke:#9A6B12,color:#1E2422;
+    classDef comms fill:#E4E7DD,stroke:#55625C,color:#1E2422;
+    classDef commercial fill:#E3DCE9,stroke:#6B4C7A,color:#1E2422;
+
+    class B,C,D purchase;
+    class E,F,G,H,I,J,SBuf,STrf warehouse;
+    class A,O,P,Q,R sales;
+    class K,L commercial;
+    class SDmg,SUnl finance;
+    class SWa comms;
+```
+
+Two asymmetries worth reading carefully rather than assuming from the
+diagram's shape: **the catalog gate only applies to the Quotation path** —
+`sales.order_api.create_order` (the direct Inquiry→Order path, no markup)
+checks the item has an approved price but does *not* check dealer catalog
+visibility, while `sales.quotation_api.create_quotation` checks both. And
+**Dashboards aren't drawn here** deliberately — every `dashboard.api`
+endpoint reads across most of this diagram at once (§7), so drawing it in
+would mean an arrow from nearly every node, which would describe nothing a
+reader couldn't already assume.
+
 ### Procure → receive → stock (Phases 2–4)
 
 ```mermaid
@@ -282,6 +357,65 @@ sequenceDiagram
     Note over System: posts + submits Purchase Receipt<br/>PO Item.received_qty updates<br/>rate preferred from the PO line
     Warehouse->>System: warehouse.allocation_api.confirm_putaway()
     Note over System: floor confirmation only — stock<br/>already posted at allocation-confirm
+```
+
+### Bay Allocation, in detail
+
+The step glossed as "`create_allocation()`" above is the most cross-cutting
+single call in the codebase — it validates against live occupancy, chooses a
+rate from one of two sources depending on whether a PO is linked, and posts
+a native document that itself triggers a native side-effect (`received_qty`).
+Worth its own diagram:
+
+```mermaid
+sequenceDiagram
+    actor Warehouse
+    participant API as warehouse.allocation_api
+    participant Utils as warehouse.utils
+    participant Pricing as pricing.api
+    participant PR as Purchase Receipt (native)
+    participant SLE as Stock Ledger Entry / Bin (native)
+
+    Warehouse->>API: warehouse.stock_api.suggest_bays(category, qty)
+    API->>Utils: score bays: category match + free capacity
+    Utils-->>Warehouse: ranked suggestions (main + buffer)
+
+    Warehouse->>API: create_allocation(item, batch_no, total_qty, lines[])
+    loop each line
+        API->>Utils: validate_allocation(bay, qty, category)
+        Utils-->>API: issues found: blocked / over-capacity / category mismatch
+        API->>API: abort the whole call if any issue is "error"-level
+    end
+    API->>Utils: ensure_batch(item, batch_no)
+    API->>API: insert Bay Allocation, status = Confirmed
+
+    alt Inward Truck carries a linked Purchase Order line
+        API->>API: rate = that PO line's own negotiated rate
+    else no linked PO
+        API->>Pricing: get_price_record(item)
+        Pricing-->>API: purchaseCost, the Phase 2 stand-in rate
+    end
+
+    API->>PR: insert + submit, one item row per bay split
+    PR->>SLE: post Stock Ledger Entries
+    Note over SLE: stock is now live in each bay's own Bin
+    Note over PR: when linked to a PO line,<br/>received_qty updates automatically
+
+    API->>API: Bay Allocation.purchase_receipt = the posted PR
+    opt Inward Truck given
+        API->>API: truck.batch_no, truck.allocation_slip set
+    end
+    API-->>Warehouse: allocation returned, status Confirmed
+
+    Note over Warehouse: — later, on the warehouse floor —
+    Warehouse->>API: resolve_scan(bay code, or item+batch code)
+    API-->>Warehouse: match confirmed
+    Warehouse->>API: confirm_putaway(allocation)
+    API->>API: Bay Allocation -> Placed
+    opt Inward Truck given
+        API->>API: Inward Truck -> Put-away
+    end
+    Note over API: floor confirmation only —<br/>stock was already posted above
 ```
 
 ### Demand → dispatch (Phase 5)
