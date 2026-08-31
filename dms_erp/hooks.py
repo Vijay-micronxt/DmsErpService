@@ -1,7 +1,7 @@
 app_name = "dms_erp"
-app_title = "Pacific DMS"
+app_title = "DMS"
 app_publisher = "MicroNXT"
-app_description = "Pacific Inc internal operations backend: staff auth, catalog/pricing, warehouse, purchase, finance and comms — built on top of ERPNext."
+app_description = "Distributor internal operations backend: staff auth, catalog/pricing, warehouse, purchase, finance and comms — built on top of ERPNext."
 app_email = "vijay@micronxt.com"
 app_license = "Proprietary"
 

@@ -27,7 +27,7 @@ from frappe import _
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable
 
-INQUIRY_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
 
 

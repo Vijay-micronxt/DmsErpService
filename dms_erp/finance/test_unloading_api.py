@@ -18,11 +18,11 @@ class TestUnloadingApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		# Pacific Accounting Settings is a Single (global state) — never leave it
+		# DMS Accounting Settings is a Single (global state) — never leave it
 		# configured for the next test.
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 0)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 0)
 		for field in ("default_company", "default_bank_account", "unloading_expense_account"):
-			frappe.db.set_single_value("Pacific Accounting Settings", field, None)
+			frappe.db.set_single_value("DMS Accounting Settings", field, None)
 
 	def test_get_charge_for_truck_returns_none_when_unrecorded(self):
 		truck = add_truck(supplier=self.supplier, item=self.item, boxes=640, lr_number="LR-UNL-1")
@@ -61,7 +61,7 @@ class TestUnloadingApi(FrappeTestCase):
 		self.assertIsNone(paid["paymentEntry"])
 
 	def test_mark_paid_rejects_when_posting_on_but_accounts_missing(self):
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 1)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 1)
 
 		truck = add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number="LR-UNL-7")
 		charge = unloading_api.record_charge(inward_truck=truck["id"], contractor="Contractor E", rate_per_box=5, payment_mode="Cash")
@@ -78,10 +78,10 @@ class TestUnloadingApi(FrappeTestCase):
 			self.skipTest("Test company has no Chart of Accounts to pick two leaf accounts from.")
 		bank_account, expense_account = accounts[0], accounts[1]
 
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 1)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_company", company)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_bank_account", bank_account)
-		frappe.db.set_single_value("Pacific Accounting Settings", "unloading_expense_account", expense_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 1)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_company", company)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_bank_account", bank_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "unloading_expense_account", expense_account)
 
 		truck = add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number="LR-UNL-8")
 		charge = unloading_api.record_charge(inward_truck=truck["id"], contractor="Contractor F", rate_per_box=5, payment_mode="Cash")

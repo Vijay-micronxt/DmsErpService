@@ -143,7 +143,7 @@ class TestDashboardApi(FrappeTestCase):
 		if frappe.db.exists("User", other_user):
 			frappe.delete_doc("User", other_user, force=True, ignore_permissions=True)
 		frappe.get_doc(
-			{"doctype": "User", "email": other_user, "first_name": "Sales", "send_welcome_email": 0, "roles": [{"role": "Pacific Sales"}]}
+			{"doctype": "User", "email": other_user, "first_name": "Sales", "send_welcome_email": 0, "roles": [{"role": "DMS Sales"}]}
 		).insert(ignore_permissions=True)
 
 		frappe.set_user(other_user)

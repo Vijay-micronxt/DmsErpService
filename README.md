@@ -1,4 +1,4 @@
-# dms_erp — Pacific DMS
+# dms_erp — DMS
 
 Custom Frappe app backing Pacific Inc's internal ops system (installed into an
 existing ERPNext site). Serves the `pacific-tileflow` React/TanStack SPA over a
@@ -117,10 +117,10 @@ Four Frappe Roles are created automatically on install/migrate, all with
 
 | Frontend role | Frappe Role         |
 |---------------|----------------------|
-| sales         | `Pacific Sales`      |
-| warehouse     | `Pacific Warehouse`  |
-| purchase      | `Pacific Purchase`   |
-| management    | `Pacific Management` |
+| sales         | `DMS Sales`      |
+| warehouse     | `DMS Warehouse`  |
+| purchase      | `DMS Purchase`   |
+| management    | `DMS Management` |
 
 `System Manager` is also accepted as a login-time escape hatch for admin
 accounts, but every real staff user should be assigned one of the four roles
@@ -152,7 +152,7 @@ everything else requires `Authorization: Bearer <access_token>`.
     "name": "jane@pacific.example",
     "email": "jane@pacific.example",
     "full_name": "Jane Doe",
-    "roles": ["Pacific Warehouse"],
+    "roles": ["DMS Warehouse"],
     "app_roles": ["warehouse"],
     "primary_role": "warehouse"
   }
@@ -184,7 +184,7 @@ issued new tokens.
 
 All under `/api/method/dms_erp.<module>.<file>.<method>`, all requiring
 `Authorization: Bearer <access_token>`. Product-master and pricing writes are
-restricted to `Pacific Purchase` / `Pacific Management` (or `System Manager`);
+restricted to `DMS Purchase` / `DMS Management` (or `System Manager`);
 everyone can read.
 
 | Method | Notes |
@@ -212,8 +212,8 @@ longer sets a price directly, unlike the current frontend mock (see
 
 All under `/api/method/dms_erp.warehouse.<file>.<method>`, all requiring
 `Authorization: Bearer <access_token>`. Bay/allocation/transfer writes are
-restricted to `Pacific Warehouse` / `Pacific Management` (or `System
-Manager`); inward-truck writes also allow `Pacific Purchase`. Everyone can
+restricted to `DMS Warehouse` / `DMS Management` (or `System
+Manager`); inward-truck writes also allow `DMS Purchase`. Everyone can
 read.
 
 | Method | Notes |
@@ -233,7 +233,7 @@ read.
 
 All under `/api/method/dms_erp.purchase.<file>.<method>`, all requiring
 `Authorization: Bearer <access_token>`. Purchase Order writes are restricted
-to `Pacific Purchase` / `Pacific Management` (or `System Manager`); everyone
+to `DMS Purchase` / `DMS Management` (or `System Manager`); everyone
 can read.
 
 | Method | Notes |
@@ -248,8 +248,8 @@ can read.
 
 All under `/api/method/dms_erp.sales.<file>.<method>`, all requiring
 `Authorization: Bearer <access_token>`. Inquiry/Quotation/Order writes are
-restricted to `Pacific Sales` / `Pacific Management` (or `System Manager`);
-Pick Task writes to `Pacific Warehouse` / `Pacific Management` (or `System
+restricted to `DMS Sales` / `DMS Management` (or `System Manager`);
+Pick Task writes to `DMS Warehouse` / `DMS Management` (or `System
 Manager`). Everyone reads.
 
 | Method | Notes |
@@ -271,7 +271,7 @@ Manager`). Everyone reads.
 
 All under `/api/method/dms_erp.finance.<file>.<method>`, all requiring
 `Authorization: Bearer <access_token>`. Writes restricted to `Pacific
-Warehouse` / `Pacific Management` (or `System Manager`); everyone reads.
+Warehouse` / `DMS Management` (or `System Manager`); everyone reads.
 
 | Method | Notes |
 |---|---|
@@ -287,8 +287,8 @@ Warehouse` / `Pacific Management` (or `System Manager`); everyone reads.
 ## Comms API (Phase 7)
 
 All under `/api/method/dms_erp.comms.api.<method>`. Most require
-`Authorization: Bearer <access_token>` (writes restricted to `Pacific Sales` /
-`Pacific Management` / `System Manager`, reads open to everyone); the two
+`Authorization: Bearer <access_token>` (writes restricted to `DMS Sales` /
+`DMS Management` / `System Manager`, reads open to everyone); the two
 `webhook_*` methods are `allow_guest` instead, gated by
 `dms_erp_whatsapp_webhook_secret`.
 
@@ -330,12 +330,13 @@ container, the following were assumed and are worth confirming:
 - **Target site name**: not pinned down anywhere in the app; you supply it at
   `bench --site <site> install-app` time.
 - **App name**: `dms_erp` (derived from the repo name `DmsErpService`), title
-  "Pacific DMS". Renaming later is a bigger diff (module paths, doctype
-  `module` field) than fixing it now if it's wrong.
+  "DMS" — deliberately generic (not tied to any one distributor's name) so the
+  app stays white-labelable; renamed from the original client-specific
+  "Pacific DMS" title and "Pacific"-prefixed field labels/doctype/roles.
 - **License**: `hooks.py` sets `Proprietary`; change if you want something
   else on record.
-- **Login is restricted** to users holding one of the four Pacific roles (or
-  System Manager) — an ERPNext accounting/sales user with no Pacific role
+- **Login is restricted** to users holding one of the four DMS roles (or
+  System Manager) — an ERPNext accounting/sales user with no DMS role
   cannot log into the staff app even with valid Frappe credentials. Flag if
   you wanted this open to any enabled User instead.
 

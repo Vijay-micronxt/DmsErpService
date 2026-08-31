@@ -10,7 +10,7 @@ pricing's landingCost/suggestedPrice.
 
 GL posting on `mark_paid` is optional and config-gated (Phase 14), same pattern
 as claims_api.py: status/paid-by/paid-at always update regardless. Only when
-`Pacific Accounting Settings.post_accounting_entries` is checked does it
+`DMS Accounting Settings.post_accounting_entries` is checked does it
 additionally post a Payment Entry (see finance/accounting.py), and only once the
 required accounts are configured there — never to a guessed account.
 """
@@ -21,7 +21,7 @@ from frappe.utils import today
 
 from dms_erp.finance import accounting
 
-CHARGE_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
+CHARGE_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_charges():

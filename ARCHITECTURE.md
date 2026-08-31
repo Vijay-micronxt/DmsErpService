@@ -1,4 +1,4 @@
-# Pacific DMS — Architecture Blueprint
+# DMS — Architecture Blueprint
 
 This is the companion document to `README.md`. `README.md` is the operational
 reference — install steps, `site_config.json` keys, and the full endpoint-by-
@@ -20,7 +20,7 @@ sequence, rather than repeating that detail here.
 
 ## 1. Overview & purpose
 
-`dms_erp` ("Pacific DMS") is a custom Frappe app installed into an existing
+`dms_erp` ("DMS") is a custom Frappe app installed into an existing
 ERPNext site, built for Pacific Inc, a B2B ceramic tile distributor. It backs
 an internal staff operations system — warehouse, purchasing, sales, and
 finance staff — not the dealers themselves. It's built against a BRD (*Pacific
@@ -161,7 +161,7 @@ left implicit.
   session outright.
 - **Signing keys**: rotatable via a `{kid: secret}` map in `site_config.json`,
   never auto-generated.
-- **Roles**: four Frappe Roles (`Pacific Sales` / `Warehouse` / `Purchase` /
+- **Roles**: four Frappe Roles (`DMS Sales` / `Warehouse` / `Purchase` /
   `Management`), all `desk_access = 0`, created on install/migrate. `System
   Manager` is always an accepted escape hatch. Every write-capable endpoint
   across every module does its own role check in Python (`_assert_can_*`
@@ -538,7 +538,7 @@ phase); the load-bearing ones:
   app layout). Not verified against any other version — this container never
   had `bench` available to test against a real site.
 - **Environment**: plain `bench` (local or `frappe_docker`), not Frappe Cloud.
-- **App identity**: `dms_erp` / "Pacific DMS", derived from the repo name
+- **App identity**: `dms_erp` / "DMS", derived from the repo name
   `DmsErpService`.
 - **Required `site_config.json` keys**: `dms_erp_jwt_keys` +
   `dms_erp_jwt_active_kid` (Phase 0, no default — install fails safe rather

@@ -12,7 +12,7 @@ from frappe.utils import getdate, today
 
 from dms_erp.warehouse.utils import default_company
 
-PURCHASE_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+PURCHASE_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_purchase():

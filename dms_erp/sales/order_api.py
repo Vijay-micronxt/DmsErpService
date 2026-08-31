@@ -18,7 +18,7 @@ from dms_erp.pricing.api import get_dealer_price
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
 
-ORDER_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 FORWARD_FLOW = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered"]
 
 

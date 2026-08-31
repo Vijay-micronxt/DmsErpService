@@ -18,12 +18,12 @@ ITEM_GROUPS = ["Vitrified", "Floor Tiles", "Wall Tiles", "Outdoor / Parking"]
 CUSTOM_FIELDS = {
 	"Item": [
 		{
-			"fieldname": "pacific_attributes_section",
+			"fieldname": "dms_attributes_section",
 			"fieldtype": "Section Break",
-			"label": "Pacific Tile Attributes",
+			"label": "DMS Tile Attributes",
 			"insert_after": "item_group",
 		},
-		{"fieldname": "custom_size", "fieldtype": "Data", "label": "Size", "insert_after": "pacific_attributes_section"},
+		{"fieldname": "custom_size", "fieldtype": "Data", "label": "Size", "insert_after": "dms_attributes_section"},
 		{"fieldname": "custom_finish", "fieldtype": "Data", "label": "Finish", "insert_after": "custom_size"},
 		{"fieldname": "custom_color", "fieldtype": "Data", "label": "Color", "insert_after": "custom_finish"},
 		{"fieldname": "custom_series", "fieldtype": "Data", "label": "Series", "insert_after": "custom_color"},
@@ -34,8 +34,8 @@ CUSTOM_FIELDS = {
 			"description": "e.g. oklch(0.93 0.01 250) — used for the color swatch in the staff app UI.",
 			"insert_after": "custom_series",
 		},
-		{"fieldname": "pacific_attributes_column_break", "fieldtype": "Column Break", "insert_after": "custom_swatch_color"},
-		{"fieldname": "custom_pieces_per_box", "fieldtype": "Float", "label": "Pieces per Box", "insert_after": "pacific_attributes_column_break"},
+		{"fieldname": "dms_attributes_column_break", "fieldtype": "Column Break", "insert_after": "custom_swatch_color"},
+		{"fieldname": "custom_pieces_per_box", "fieldtype": "Float", "label": "Pieces per Box", "insert_after": "dms_attributes_column_break"},
 		{"fieldname": "custom_sqft_per_box", "fieldtype": "Float", "label": "Sqft per Box", "insert_after": "custom_pieces_per_box"},
 		{"fieldname": "custom_weight_per_box_kg", "fieldtype": "Float", "label": "Weight per Box (Kg)", "insert_after": "custom_sqft_per_box"},
 		{

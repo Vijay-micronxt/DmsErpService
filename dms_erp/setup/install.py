@@ -7,14 +7,14 @@ from dms_erp.sales.setup import setup_sales
 from dms_erp.warehouse.setup import setup_warehouse
 
 # Frappe Roles that back the staff app's four roles (Sales / Warehouse / Purchase /
-# Management). Prefixed with "Pacific" to avoid colliding with ERPNext's own stock
+# Management). Prefixed with "DMS" to avoid colliding with ERPNext's own stock
 # roles ("Sales User", "Purchase User", etc). desk_access=0 because these users only
 # ever talk to us through the JWT API — they have no business logging into /app.
 APP_ROLES = [
-	"Pacific Sales",
-	"Pacific Warehouse",
-	"Pacific Purchase",
-	"Pacific Management",
+	"DMS Sales",
+	"DMS Warehouse",
+	"DMS Purchase",
+	"DMS Management",
 ]
 
 

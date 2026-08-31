@@ -25,7 +25,7 @@ from frappe import _
 
 from dms_erp.catalog.utils import is_sellable
 
-CATALOG_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
 
 def _sellable_item_codes(item_codes: list[str]) -> list[str]:

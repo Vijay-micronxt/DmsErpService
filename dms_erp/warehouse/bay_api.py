@@ -7,7 +7,7 @@ from frappe import _
 
 from dms_erp.warehouse.utils import CAPACITY_FOR, default_company, get_bay, serialize_bay
 
-BAY_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
+BAY_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_bays():

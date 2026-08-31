@@ -113,17 +113,17 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Pacific Warehouse",
+   "role": "DMS Warehouse",
    "share": 1,
    "write": 1
   },
   {
    "read": 1,
-   "role": "Pacific Sales"
+   "role": "DMS Sales"
   },
   {
    "read": 1,
-   "role": "Pacific Management"
+   "role": "DMS Management"
   }
  ],
  "sort_field": "modified",

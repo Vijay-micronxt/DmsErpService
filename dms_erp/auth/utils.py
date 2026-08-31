@@ -5,10 +5,10 @@ import frappe
 
 # Order matters: this is priority for `primary_role`, highest-privilege first.
 APP_ROLE_SLUGS = {
-	"Pacific Management": "management",
-	"Pacific Purchase": "purchase",
-	"Pacific Warehouse": "warehouse",
-	"Pacific Sales": "sales",
+	"DMS Management": "management",
+	"DMS Purchase": "purchase",
+	"DMS Warehouse": "warehouse",
+	"DMS Sales": "sales",
 }
 APP_ROLE_PRIORITY = list(APP_ROLE_SLUGS.keys())
 

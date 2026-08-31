@@ -10,7 +10,7 @@ Claim Stock Entry (never duplicated), linking back so that transfer's own
 
 GL posting on settlement is optional and config-gated (Phase 14) rather than
 guessing a Chart of Accounts: `update_claim_status` always updates the status/
-settled-amount fields, exactly as before this existed. Only when `Pacific
+settled-amount fields, exactly as before this existed. Only when `DMS
 Accounting Settings.post_accounting_entries` is checked does it additionally post
 a Journal Entry (see finance/accounting.py) — and if the required accounts aren't
 configured, that raises a clear ValidationError rather than posting to a guessed
@@ -24,7 +24,7 @@ from frappe.utils import today
 
 from dms_erp.finance import accounting
 
-CLAIM_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
+CLAIM_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 DAMAGE_TO_CLAIM_TRANSFER_TYPE = "Damage→Insurance Claim"
 
 
