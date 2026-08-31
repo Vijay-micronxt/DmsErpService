@@ -10,6 +10,13 @@ equivalent for become Custom Fields:
   operational flow layered on top of — not derived from — ERPNext's own
   delivery/billing status, plus a structured stage-history log (no equivalent to a
   queryable, typed timeline in core Frappe) and a vehicle/source-document reference.
+- Both: `custom_order_channel` (Phase 15, BRD "Retail vs bulk report"). Before this,
+  every Quotation/Order in the app was *implicitly* retail — the reorder engine's own
+  docstring already claimed "retail/sub-dealer channel only (bulk/project orders
+  excluded per BRD §12.1)", but nothing actually tagged an order as bulk, so nothing
+  was really being excluded. This field is what makes that claim true, and is what a
+  Retail vs Bulk report groups by. Defaults to Retail, matching every order created
+  before this field existed.
 """
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
@@ -17,6 +24,7 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
 ORDER_SOURCE_TYPES = ["Inquiry", "Quotation"]
+ORDER_CHANNELS = ["Retail", "Bulk", "Project"]
 
 CUSTOM_FIELDS = {
 	"Quotation": [
@@ -29,6 +37,16 @@ CUSTOM_FIELDS = {
 		{"fieldname": "custom_markup_pct", "fieldtype": "Percent", "label": "Retail Markup %", "insert_after": "pacific_quotation_section"},
 		{"fieldname": "custom_freight", "fieldtype": "Currency", "label": "Freight", "insert_after": "custom_markup_pct"},
 		{"fieldname": "custom_inquiry", "fieldtype": "Link", "label": "Source Inquiry", "options": "Inquiry", "insert_after": "custom_freight"},
+		{
+			"fieldname": "custom_order_channel",
+			"fieldtype": "Select",
+			"label": "Channel",
+			"options": "\n".join(ORDER_CHANNELS),
+			"default": "Retail",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"insert_after": "custom_inquiry",
+		},
 	],
 	"Sales Order": [
 		{
@@ -52,6 +70,16 @@ CUSTOM_FIELDS = {
 		{"fieldname": "custom_source_type", "fieldtype": "Select", "label": "Source Type", "options": "\n".join(ORDER_SOURCE_TYPES), "insert_after": "pacific_fulfillment_column_break"},
 		{"fieldname": "custom_source_ref", "fieldtype": "Data", "label": "Source Reference", "insert_after": "custom_source_type"},
 		{"fieldname": "custom_stage_history", "fieldtype": "Table", "label": "Stage History", "options": "Order Stage Event", "insert_after": "custom_source_ref"},
+		{
+			"fieldname": "custom_order_channel",
+			"fieldtype": "Select",
+			"label": "Channel",
+			"options": "\n".join(ORDER_CHANNELS),
+			"default": "Retail",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"insert_after": "custom_stage_history",
+		},
 	],
 }
 

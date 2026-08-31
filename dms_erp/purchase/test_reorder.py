@@ -100,6 +100,22 @@ class TestReorder(FrappeTestCase):
 		self.assertGreater(expected_lead_time_demand, 0)
 		self.assertTrue(any(f"{expected_lead_time_demand} boxes of expected demand" in r for r in suggestion["reasons"]))
 
+	def test_recent_retail_sales_qty_excludes_bulk_channel_orders(self):
+		item = make_item("REORDER-BULK-EXCLUDED", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+
+		retail_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
+		order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 40}], expected_dispatch="2026-09-01", inquiry=retail_inquiry["id"])
+
+		bulk_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=900, source="Phone")
+		order_api.create_order(
+			dealer=self.dealer, lines=[{"item": item, "qty": 900}], expected_dispatch="2026-09-01", inquiry=bulk_inquiry["id"], channel="Bulk"
+		)
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["recentRetailSalesQty"], 40)  # the 900-box Bulk order never counts
+
 	def test_open_purchase_order_qty_nets_out_of_suggested_qty(self):
 		item = make_item("REORDER-OPEN-PO", "Vitrified")
 

@@ -28,6 +28,7 @@ from frappe.utils import add_days, today
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.pricing.api import get_dealer_price
+from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.warehouse.utils import default_company
 
 QUOTATION_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
@@ -49,6 +50,7 @@ def _serialize(doc) -> dict:
 		"markupPct": doc.custom_markup_pct,
 		"freight": doc.custom_freight,
 		"inquiryId": doc.custom_inquiry,
+		"channel": doc.custom_order_channel,
 		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
 		"total": doc.grand_total,
 		"status": doc.status,
@@ -122,11 +124,14 @@ def create_quotation(
 	freight: float = 0,
 	validity_days: int = 7,
 	inquiry: str | None = None,
+	channel: str = "Retail",
 ):
 	_assert_can_manage_quotations()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if channel not in ORDER_CHANNELS:
+		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
 
 	items = _priced_items(dealer, markup_pct, lines)
 
@@ -141,6 +146,7 @@ def create_quotation(
 			"custom_markup_pct": markup_pct,
 			"custom_freight": freight,
 			"custom_inquiry": inquiry,
+			"custom_order_channel": channel,
 			"items": items,
 		}
 	)
@@ -230,7 +236,7 @@ def convert_to_order(quotation: str, expected_dispatch=None):
 		for row in so.items:
 			row.delivery_date = expected_dispatch
 
-	order = finalize_new_order(so, source_type="Quotation", source_ref=quotation)
+	order = finalize_new_order(so, source_type="Quotation", source_ref=quotation, channel=qtn.custom_order_channel)
 
 	if qtn.custom_inquiry:
 		frappe.db.set_value("Inquiry", qtn.custom_inquiry, "status", "Converted to Order")

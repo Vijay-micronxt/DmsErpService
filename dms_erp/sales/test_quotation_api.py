@@ -41,6 +41,20 @@ class TestQuotationApi(FrappeTestCase):
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12
 		)
 		self.assertEqual(quotation["lines"][0]["rate"], 560)  # round(500 * 1.12)
+		self.assertEqual(quotation["channel"], "Retail")  # default
+
+	def test_create_quotation_accepts_bulk_channel_and_carries_into_order(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 500}], markup_pct=8, channel="Bulk"
+		)
+		self.assertEqual(quotation["channel"], "Bulk")
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		self.assertEqual(order["channel"], "Bulk")
+
+	def test_create_quotation_rejects_invalid_channel(self):
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10, channel="Wholesale")
 
 	def test_create_quotation_rejects_item_outside_dealer_catalog(self):
 		other_dealer = make_dealer("Quotation Test Dealer 2")

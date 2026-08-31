@@ -17,7 +17,11 @@ to real queries:
   item's own `lead_time_days` (native Item field, already surfaced as `leadTimeDays`
   in Phase 2's catalog API) — the classic reorder-point "expected demand during lead
   time" term, added on top of the flat `SAFETY_STOCK_BOXES` floor rather than
-  replacing it.
+  replacing it. Retail/sub-dealer channel only, per BRD §12.1 — bulk/project orders
+  are excluded. Before Phase 15 added `Sales Order.custom_order_channel`, this
+  module already claimed to be retail-only in this docstring, but nothing actually
+  tagged an order as bulk, so nothing was really being excluded; the filter below is
+  what makes that claim true.
 
 Phase 13 adds `openPurchaseOrderQty`/`openPurchaseOrders`: suggestions have no
 suggestion-id of their own to tag a PO against (a suggestion is a live per-item
@@ -59,7 +63,7 @@ def _grouped_recent_sales_qty() -> dict[str, float]:
 		select soi.item_code as item, sum(soi.qty) as qty
 		from `tabSales Order Item` soi
 		inner join `tabSales Order` so on so.name = soi.parent
-		where so.docstatus = 1 and so.transaction_date >= %s
+		where so.docstatus = 1 and so.transaction_date >= %s and so.custom_order_channel = 'Retail'
 		group by soi.item_code
 		""",
 		(since,),

@@ -68,3 +68,12 @@ Pick Tasks; everyone reads.
   own Purchase/Management role gate), not a parallel "purchase requirement" doctype —
   a requirement here is just a PO with a `custom_source_inquiry` link back, only
   allowed from an Open/Out of Stock/Pre-order Required inquiry.
+- **Order channel** (`custom_order_channel` on Quotation and Sales Order, Phase 15 —
+  BRD "Retail vs bulk report") — Retail / Bulk / Project, defaults to Retail. Before
+  this field existed, every order in the app was *implicitly* retail — the reorder
+  engine's own docstring already claimed "retail channel only, bulk/project excluded
+  per BRD §12.1", but nothing tagged an order as bulk, so nothing was really being
+  excluded. `create_quotation`/`create_order` both accept `channel`; converting a
+  Quotation to an Order carries its channel across; `purchase.reorder_api` now
+  actually filters `recentRetailSalesQty` to `channel = 'Retail'`, making that
+  docstring's claim true for the first time.
