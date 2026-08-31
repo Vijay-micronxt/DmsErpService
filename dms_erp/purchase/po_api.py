@@ -8,7 +8,7 @@ Purchase Receipts back to the PO line it fulfills.
 
 import frappe
 from frappe import _
-from frappe.utils import today
+from frappe.utils import getdate, today
 
 from dms_erp.warehouse.utils import default_company
 
@@ -123,3 +123,69 @@ def line_progress(line: str):
 		"remainingToPlan": remaining_to_plan,
 		"status": status,
 	}
+
+
+def list_pending_po_lines() -> list[dict]:
+	"""Every submitted PO line not yet fully received, with how many days past its
+	own expected-ready date it's now sitting (0 if not yet due, or not yet set).
+	Line-level rather than summed-per-PO, so a partially-received line inside an
+	otherwise-complete-looking PO still surfaces. Shared by the Phase 8 purchase
+	dashboard's pendingPOs/supplierDelays counts and the Phase 17 PO Pending Report."""
+	rows = frappe.db.sql(
+		"""
+		select poi.name as line, poi.parent as po, po.supplier as supplier,
+			po.schedule_date as expected_ready_date, poi.item_code as item_code,
+			poi.qty as ordered_qty, coalesce(poi.received_qty, 0) as received_qty
+		from `tabPurchase Order Item` poi
+		inner join `tabPurchase Order` po on po.name = poi.parent
+		where po.docstatus = 1
+		""",
+		as_dict=True,
+	)
+	today_date = getdate(today())
+	out = []
+	for row in rows:
+		pending_qty = row.ordered_qty - row.received_qty
+		if pending_qty <= 0:
+			continue
+		is_overdue = bool(row.expected_ready_date) and getdate(row.expected_ready_date) < today_date
+		out.append(
+			{
+				"line": row.line,
+				"po": row.po,
+				"supplier": row.supplier,
+				"itemCode": row.item_code,
+				"orderedQty": row.ordered_qty,
+				"receivedQty": row.received_qty,
+				"pendingQty": pending_qty,
+				"expectedReadyDate": row.expected_ready_date,
+				"daysOverdue": (today_date - getdate(row.expected_ready_date)).days if is_overdue else 0,
+			}
+		)
+	return out
+
+
+def list_materials_ready_for_pickup() -> list[dict]:
+	"""PO lines the supplier has confirmed ready (custom_ready_qty > 0) but that
+	haven't all been booked onto an Inward Truck yet. Shared by the Phase 8
+	purchase dashboard's materialsReadyForPickup and the Phase 16 Purchase Pickup
+	Plan report."""
+	out = []
+	for row in frappe.get_all(
+		"Purchase Order Item",
+		filters={"custom_ready_qty": [">", 0], "docstatus": 1},
+		fields=["name", "parent as po", "item_code", "custom_ready_qty as ready_qty"],
+	):
+		booked = frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (row.name,))[0][0]
+		remaining = row.ready_qty - booked
+		if remaining > 0:
+			out.append(
+				{
+					"line": row.name,
+					"po": row.po,
+					"supplier": frappe.db.get_value("Purchase Order", row.po, "supplier"),
+					"itemCode": row.item_code,
+					"readyQty": remaining,
+				}
+			)
+	return out

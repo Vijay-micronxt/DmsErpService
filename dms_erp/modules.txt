@@ -7,3 +7,4 @@ Sales
 Finance
 Comms
 Dashboard
+Reports
