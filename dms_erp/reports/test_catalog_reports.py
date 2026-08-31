@@ -54,3 +54,19 @@ class TestCatalogReports(FrappeTestCase):
 		fast_idx = next(i for i, r in enumerate(fastest_first) if r["productId"] == fast_item)
 		slow_idx = next(i for i, r in enumerate(fastest_first) if r["productId"] == slow_item)
 		self.assertLess(fast_idx, slow_idx)
+
+	def test_product_activity_report_rolls_up_inquiries_orders_and_price_changes(self):
+		item = make_item("CREPORT-ACTIVITY-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		pricing_api.approve_price(item=item, final_price=370, reason="Cost increase")
+
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=30, source="Phone")
+		order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 30}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+
+		result = catalog_reports.product_activity_report(item=item)
+		row = result[0]
+		self.assertEqual(row["productId"], item)
+		self.assertEqual(row["inquiryCount"], 1)
+		self.assertEqual(row["orderQty"], 30)
+		self.assertEqual(row["priceChanges"], 2)

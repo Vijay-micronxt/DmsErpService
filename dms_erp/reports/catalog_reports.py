@@ -5,7 +5,8 @@ the report-vs-dashboard distinction this whole `reports` module follows.
 
 import frappe
 
-from dms_erp.pricing.api import list_price_records
+from dms_erp.catalog.api import list_products
+from dms_erp.pricing.api import get_price_record, list_price_records
 from dms_erp.purchase.reorder_api import sales_velocity_by_item
 
 
@@ -50,4 +51,60 @@ def product_movement_report(order: str = "slow"):
 		for i in items
 	]
 	rows.sort(key=lambda r: r["recentSalesQty"], reverse=(order == "fast"))
+	return rows
+
+
+@frappe.whitelist(methods=["GET"])
+def product_activity_report(item: str | None = None):
+	"""The BRD's "Product activity report" — a per-item rollup across four
+	modules (Inquiry, Sales Order, Stock Entry transfers, price-approval history)
+	that no single existing list/get function crosses on its own."""
+	products = list_products()
+	if item:
+		products = [p for p in products if p["id"] == item]
+
+	rows = []
+	for p in products:
+		code = p["id"]
+		inquiry_count = frappe.db.count("Inquiry", {"item": code})
+		order_qty = (
+			frappe.db.sql(
+				"""
+				select coalesce(sum(soi.qty), 0)
+				from `tabSales Order Item` soi
+				inner join `tabSales Order` so on so.name = soi.parent
+				where soi.item_code = %s and so.docstatus = 1
+				""",
+				(code,),
+			)[0][0]
+			or 0
+		)
+		transfer_count = (
+			frappe.db.sql(
+				"""
+				select count(distinct sed.parent)
+				from `tabStock Entry Detail` sed
+				inner join `tabStock Entry` se on se.name = sed.parent
+				where sed.item_code = %s and se.docstatus = 1 and se.purpose = 'Material Transfer'
+				""",
+				(code,),
+			)[0][0]
+			or 0
+		)
+		price_record = get_price_record(code)
+		price_changes = len(price_record["history"]) if price_record else 0
+
+		rows.append(
+			{
+				"productId": code,
+				"itemName": p["name"],
+				"category": p["category"],
+				"inquiryCount": inquiry_count,
+				"orderQty": order_qty,
+				"transferCount": transfer_count,
+				"priceChanges": price_changes,
+			}
+		)
+
+	rows.sort(key=lambda r: r["orderQty"], reverse=True)
 	return rows

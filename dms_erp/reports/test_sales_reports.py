@@ -4,6 +4,7 @@ from frappe.tests.utils import FrappeTestCase
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.comms import api as comms_api
 from dms_erp.reports import sales_reports
 from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
@@ -71,3 +72,21 @@ class TestSalesReports(FrappeTestCase):
 		by_channel = {r["channel"]: r for r in result["byChannel"]}
 		self.assertGreaterEqual(by_channel["Retail"]["orderCount"], 1)
 		self.assertGreaterEqual(by_channel["Bulk"]["orderCount"], 1)
+
+	def test_dealer_activity_report_rolls_up_inquiries_orders_and_messages(self):
+		activity_dealer = make_dealer("Sales Reports Activity Dealer")
+		inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=10, source="Phone")
+		order_inquiry = inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=20, source="Phone")
+		order_api.create_order(
+			dealer=activity_dealer, lines=[{"item": self.item, "qty": 20}], expected_dispatch="2026-09-01", inquiry=order_inquiry["id"]
+		)
+		comms_api.send_message(dealer=activity_dealer, text="Following up on your order")
+
+		result = sales_reports.dealer_activity_report(dealer=activity_dealer)
+		row = result[0]
+		self.assertEqual(row["dealerId"], activity_dealer)
+		self.assertEqual(row["inquiryCount"], 2)
+		self.assertEqual(row["orderCount"], 1)
+		self.assertEqual(row["orderValue"], 20 * 400)
+		self.assertEqual(row["messageCount"], 1)
+		self.assertIsNotNone(row["lastContact"])

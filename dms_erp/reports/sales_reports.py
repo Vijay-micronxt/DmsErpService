@@ -13,9 +13,10 @@ other list/get endpoint in this app works; only writes are role-gated.
 import frappe
 from frappe.utils import getdate
 
+from dms_erp.comms.api import last_message
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase.reorder_api import MISSED_DEMAND_STATUSES
-from dms_erp.sales import inquiry_api
+from dms_erp.sales import dealer_api, inquiry_api
 
 
 def _in_range(d, from_date, to_date) -> bool:
@@ -87,3 +88,40 @@ def retail_vs_bulk_report(from_date=None, to_date=None):
 		as_dict=True,
 	)
 	return {"byChannel": [{"channel": r.channel, "orderCount": r.order_count, "value": r.value} for r in rows]}
+
+
+@frappe.whitelist(methods=["GET"])
+def dealer_activity_report(dealer: str | None = None):
+	"""The BRD's "Dealer activity report" — a per-dealer rollup across four modules
+	(Inquiry, Quotation, Sales Order, WhatsApp Message) that no single existing
+	list/get function crosses on its own, unlike every other report in this file."""
+	dealers = [dealer_api.get_dealer(dealer)] if dealer else dealer_api.list_dealers()
+
+	rows = []
+	for d in dealers:
+		did = d["id"]
+		inquiry_count = frappe.db.count("Inquiry", {"dealer": did})
+		quotation_count = frappe.db.count("Quotation", {"party_name": did, "quotation_to": "Customer", "docstatus": ["!=", 2]})
+		order_agg = frappe.db.sql(
+			"select count(name) as cnt, coalesce(sum(grand_total), 0) as value from `tabSales Order` where customer=%s and docstatus=1",
+			(did,),
+			as_dict=True,
+		)[0]
+		message_count = frappe.db.count("WhatsApp Message", {"dealer": did})
+		last = last_message(did)
+
+		rows.append(
+			{
+				"dealerId": did,
+				"dealerName": d["name"],
+				"inquiryCount": inquiry_count,
+				"quotationCount": quotation_count,
+				"orderCount": order_agg.cnt,
+				"orderValue": order_agg.value,
+				"messageCount": message_count,
+				"lastContact": last["sentAt"] if last else None,
+			}
+		)
+
+	rows.sort(key=lambda r: r["orderValue"], reverse=True)
+	return rows
