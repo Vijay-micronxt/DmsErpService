@@ -26,26 +26,30 @@ into `purchase/po_api.py` (`list_pending_po_lines`, `list_materials_ready_for_
 pickup`) so the dashboard tile and the Phase 16 reports below compute from the
 same source instead of two copies of the same SQL:
 
-- **`sales_reports.py`** — Dealer Inquiry Report, Missed Demand Report, and
-  (Phase 17) Retail vs Bulk Report — order count/value grouped by `Sales Order.
-  custom_order_channel` (Phase 15). Entirely unblocked by that field; before it
-  existed there was nothing to group by.
+- **`sales_reports.py`** — Dealer Inquiry Report, Missed Demand Report; (Phase 17)
+  Retail vs Bulk Report — order count/value grouped by `Sales Order.
+  custom_order_channel` (Phase 15), entirely unblocked by that field; (Phase 18)
+  Dealer Activity Report — a per-dealer rollup across Inquiry/Quotation/Sales
+  Order/WhatsApp Message, the first report here no single existing list/get
+  function could answer on its own.
 - **`warehouse_reports.py`** — Bay Occupancy Report, Visual Stock Balance.
 - **`purchase_reports.py`** — Purchase Reorder Planning Report, Purchase Pickup
-  Plan, and (Phase 17) Inquiry-to-PO Mapping Report (joins `Purchase Order.
+  Plan; (Phase 17) Inquiry-to-PO Mapping Report (joins `Purchase Order.
   custom_source_inquiry` back to its Inquiry — only POs raised via `sales.
   inquiry_api.convert_to_purchase_requirement` appear; a directly-raised PO has
   nothing to map) and PO Pending Report (wraps `po_api.list_pending_po_lines`).
 - **`finance_reports.py`** — Damage & Insurance Report, Claimable Value Report,
   Unloading Payment Report.
-- **`catalog_reports.py`** (Phase 17) — Pricing & CSP Report (CSP = Customer
+- **`catalog_reports.py`** — (Phase 17) Pricing & CSP Report (CSP = Customer
   Suggested Price, read as the approved proposal's own `suggestedPrice` field —
   landing cost × (1 + margin %) — not a second lookup against the live dealer
   price) and Fast/Slow-Moving Product Report (ranks the whole catalog by the same
   trailing-window Retail sales velocity the reorder engine computes per-item, via
-  a new public `reorder_api.sales_velocity_by_item()` wrapper so both read the
-  same signal instead of two copies of the query).
+  a public `reorder_api.sales_velocity_by_item()` wrapper so both read the same
+  signal instead of two copies of the query); (Phase 18) Product Activity
+  Report — the same cross-module-rollup shape as Dealer Activity, but per item
+  (Inquiry count, Sales Order qty, Stock Entry transfer count, price-approval
+  history length).
 
-BRD reports still to land: Dealer Activity, Product Activity (Phase 18);
-Duplicate Inquiry, Stock Clearance Suggestion, Display Replacement Suggestion
-(Phase 19); Forecasting Dashboard (Phase 20).
+BRD reports still to land: Duplicate Inquiry, Stock Clearance Suggestion,
+Display Replacement Suggestion (Phase 19); Forecasting Dashboard (Phase 20).
