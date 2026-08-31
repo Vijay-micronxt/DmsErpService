@@ -23,7 +23,7 @@ from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_s
 from dms_erp.pricing import api as pricing_api
 from dms_erp.warehouse.utils import total_stock_for_item
 
-CATALOG_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 DEFAULT_STOCK_UOM = "Box"
 
 

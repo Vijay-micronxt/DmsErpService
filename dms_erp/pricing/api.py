@@ -18,7 +18,7 @@ from frappe.utils import now_datetime
 
 from dms_erp.pricing.setup import DEALER_PRICE_LIST
 
-PRICING_WRITE_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
+PRICING_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_pricing():

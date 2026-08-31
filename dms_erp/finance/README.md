@@ -15,7 +15,7 @@ Implemented.
   computed on read, never stored — same pattern as pricing's `landingCost`.
 
 GL posting is optional and config-gated (Phase 14) rather than assuming a Chart
-of Accounts, via a new **Pacific Accounting Settings** Single doctype
+of Accounts, via a new **DMS Accounting Settings** Single doctype
 (`doctype/pacific_accounting_settings`):
 
 - `post_accounting_entries` (Check, default unchecked) — while off, settling a
@@ -42,6 +42,6 @@ Turning posting on later is a config change (check one box, fill in a few
 Account links), not a redeploy — same reasoning as Quotation freight not being
 wired into Sales Taxes and Charges in Phase 5.
 
-Writes restricted to Pacific Warehouse/Management (or System Manager) for
-claims/unloading; Pacific Accounting Settings itself is Management/System
+Writes restricted to DMS Warehouse/Management (or System Manager) for
+claims/unloading; DMS Accounting Settings itself is Management/System
 Manager only. Everyone reads the operational records.

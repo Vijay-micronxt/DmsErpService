@@ -87,7 +87,7 @@
    "label": "Settled At"
   },
   {
-   "description": "Set only when Pacific Accounting Settings has Post Accounting Entries checked — otherwise settlement is a pure status/amount update, same as before this field existed.",
+   "description": "Set only when DMS Accounting Settings has Post Accounting Entries checked — otherwise settlement is a pure status/amount update, same as before this field existed.",
    "fieldname": "settlement_journal_entry",
    "fieldtype": "Link",
    "label": "Settlement Journal Entry",
@@ -128,7 +128,7 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Pacific Warehouse",
+   "role": "DMS Warehouse",
    "share": 1,
    "write": 1
   },
@@ -139,17 +139,17 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Pacific Management",
+   "role": "DMS Management",
    "share": 1,
    "write": 1
   },
   {
    "read": 1,
-   "role": "Pacific Purchase"
+   "role": "DMS Purchase"
   },
   {
    "read": 1,
-   "role": "Pacific Sales"
+   "role": "DMS Sales"
   }
  ],
  "sort_field": "modified",

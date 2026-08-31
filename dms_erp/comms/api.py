@@ -22,7 +22,7 @@ from frappe.utils import now_datetime
 
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
 
-COMMS_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+COMMS_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_comms():

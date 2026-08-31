@@ -14,7 +14,7 @@ from frappe import _
 
 from dms_erp.warehouse.utils import available_for_item, suggest_bays
 
-PICKING_WRITE_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
+PICKING_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 
 
 def _assert_can_manage_picking():

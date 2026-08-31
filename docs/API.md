@@ -1,4 +1,4 @@
-# Pacific DMS — API Reference
+# DMS — API Reference
 
 Generated from the whitelisted methods across `dms_erp`'s modules, on `main` (PRs #1–#25 merged, through Phase 20 — the full 20-report BRD "Reports and Dashboards" set). Every response shape is read directly from each module's own `_serialize`/return value.
 
@@ -32,7 +32,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 ## Cross-cutting flags
 
 1. **Inquiry + Quotation persistence** — the backend leads on both. `Inquiry` is a real custom doctype with full CRUD; `Quotation` is native ERPNext with create, line-edit, and status control.
-2. **No GL account is ever hardcoded or guessed.** Claim settlement and unloading payment both route through **Pacific Accounting Settings** — a single on/off flag plus five nullable Account links. While it's off (the default), both actions are pure status/amount updates with zero accounting side effect.
+2. **No GL account is ever hardcoded or guessed.** Claim settlement and unloading payment both route through **DMS Accounting Settings** — a single on/off flag plus five nullable Account links. While it's off (the default), both actions are pure status/amount updates with zero accounting side effect.
 
 ## Modules
 
@@ -75,7 +75,7 @@ Foundation — must work before anything else does. Staff username+password only
 
 #### POST `dms_erp.auth.api.login` · `guest` (no Bearer token required)
 
-**Staff login** — Username+password → JWT access/refresh pair. Requires one of the four Pacific roles (System Manager also allowed as an admin escape hatch).
+**Staff login** — Username+password → JWT access/refresh pair. Requires one of the four DMS roles (System Manager also allowed as an admin escape hatch).
 
 **Params**
 
@@ -98,14 +98,14 @@ Foundation — must work before anything else does. Staff username+password only
     "name": "priya@pacific.example",
     "email": "priya@pacific.example",
     "full_name": "Priya Shah",
-    "roles": ["Pacific Sales", "..."],
+    "roles": ["DMS Sales", "..."],
     "app_roles": ["sales"],
     "primary_role": "sales"
   }
 }
 ```
 
-> raises AuthenticationError on bad credentials, disabled account, or a role outside the four Pacific roles
+> raises AuthenticationError on bad credentials, disabled account, or a role outside the four DMS roles
 
 
 #### POST `dms_erp.auth.api.refresh_token` · `guest` (no Bearer token required)
@@ -181,7 +181,7 @@ _No parameters._
   "name": "priya@pacific.example",
   "email": "priya@pacific.example",
   "full_name": "Priya Shah",
-  "roles": ["Pacific Sales"],
+  "roles": ["DMS Sales"],
   "app_roles": ["sales"],
   "primary_role": "sales"
 }
@@ -1690,7 +1690,7 @@ _No parameters._
 
 One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is fully config-gated — see the accounting box below.
 
-> **Pacific Accounting Settings (Single doctype)**
+> **DMS Accounting Settings (Single doctype)**
 > post_accounting_entries (Check, default unchecked), default_company, default_bank_account, insurance_claim_receivable_account, insurance_settlement_variance_account (nullable — only needed if a settlement's amount differs from the claimed amount), unloading_expense_account. While the flag is off, update_claim_status is a pure status/amount write. When it's on, the accounts a settlement needs are verified first — a missing one raises ValidationError naming exactly what's missing, never a guessed account — then a Journal Entry posts (debit bank for what was received, credit the receivable account for the full claimed amount, route any delta through the variance account) and links back via the new settlementJournalEntry field.
 
 #### GET `dms_erp.finance.claims_api.list_claims`
@@ -1768,7 +1768,7 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 **Response**
 
 ```json
-(same shape as one list row, with settlementJournalEntry set only if Pacific Accounting Settings has posting on)
+(same shape as one list row, with settlementJournalEntry set only if DMS Accounting Settings has posting on)
 ```
 
 
@@ -1793,7 +1793,7 @@ _No parameters._
 
 One voucher per Inward Truck. Same accounting-settings pattern as Claims.
 
-> **Same Pacific Accounting Settings doctype — not a separate settings object**
+> **Same DMS Accounting Settings doctype — not a separate settings object**
 > mark_paid always updates status/paidBy/paidAt regardless of the flag. When posting is on and unloading_expense_account + default_bank_account are configured, it additionally posts a Payment Entry (Internal Transfer — there's no real ERPNext Party for a labour contractor): debit the expense account, credit the bank account, linked back via the new paymentEntry field.
 
 #### GET `dms_erp.finance.unloading_api.list_charges`

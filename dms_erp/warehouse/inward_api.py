@@ -7,7 +7,7 @@ Receipt (see allocation_api.create_allocation).
 import frappe
 from frappe import _
 
-INWARD_WRITE_ROLES = {"Pacific Warehouse", "Pacific Purchase", "Pacific Management", "System Manager"}
+INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
 TRUCK_FLOW = ["Scheduled", "At Gate", "Unloading", "Put-away"]
 
 

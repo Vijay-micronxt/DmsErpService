@@ -99,7 +99,7 @@
    "label": "Paid At"
   },
   {
-   "description": "Set only when Pacific Accounting Settings has Post Accounting Entries checked — otherwise marking paid is a pure status update, same as before this field existed.",
+   "description": "Set only when DMS Accounting Settings has Post Accounting Entries checked — otherwise marking paid is a pure status update, same as before this field existed.",
    "fieldname": "payment_entry",
    "fieldtype": "Link",
    "label": "Payment Entry",
@@ -140,7 +140,7 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Pacific Warehouse",
+   "role": "DMS Warehouse",
    "share": 1,
    "write": 1
   },
@@ -151,13 +151,13 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Pacific Management",
+   "role": "DMS Management",
    "share": 1,
    "write": 1
   },
   {
    "read": 1,
-   "role": "Pacific Purchase"
+   "role": "DMS Purchase"
   }
  ],
  "sort_field": "modified",

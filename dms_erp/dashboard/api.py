@@ -26,10 +26,10 @@ from dms_erp.warehouse.inward_api import list_trucks
 from dms_erp.warehouse.transfer_api import list_transfers
 from dms_erp.warehouse.utils import list_stock_lots
 
-SALES_READ_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
-WAREHOUSE_READ_ROLES = {"Pacific Warehouse", "Pacific Management", "System Manager"}
-PURCHASE_READ_ROLES = {"Pacific Purchase", "Pacific Management", "System Manager"}
-MANAGEMENT_READ_ROLES = {"Pacific Management", "System Manager"}
+SALES_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
+WAREHOUSE_READ_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
+PURCHASE_READ_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
+MANAGEMENT_READ_ROLES = {"DMS Management", "System Manager"}
 
 
 def _assert_role(allowed: set, message: str):

@@ -7,7 +7,7 @@ TEST_JWT_KEYS = {"test-kid": "unit-test-signing-secret"}
 TEST_PASSWORD = "Pa$$w0rd123!"
 
 
-def make_staff_user(email, role="Pacific Sales"):
+def make_staff_user(email, role="DMS Sales"):
 	if frappe.db.exists("User", email):
 		frappe.delete_doc("User", email, force=True)
 	user = frappe.get_doc(
@@ -105,4 +105,4 @@ class TestAuthSession(FrappeTestCase):
 		frappe.set_user(self.staff_user)
 		profile = api.me()
 		self.assertEqual(profile["name"], self.staff_user)
-		self.assertIn("Pacific Sales", profile["roles"])
+		self.assertIn("DMS Sales", profile["roles"])

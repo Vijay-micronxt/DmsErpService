@@ -27,16 +27,16 @@ class TestClaimsApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		# Pacific Accounting Settings is a Single (global state) — never leave it
+		# DMS Accounting Settings is a Single (global state) — never leave it
 		# configured for the next test.
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 0)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 0)
 		for field in (
 			"default_company",
 			"default_bank_account",
 			"insurance_claim_receivable_account",
 			"insurance_settlement_variance_account",
 		):
-			frappe.db.set_single_value("Pacific Accounting Settings", field, None)
+			frappe.db.set_single_value("DMS Accounting Settings", field, None)
 
 	def _make_damage_transfer(self, batch, qty=20):
 		allocation_api.create_allocation(
@@ -98,7 +98,7 @@ class TestClaimsApi(FrappeTestCase):
 		self.assertIsNone(settled["settlementJournalEntry"])
 
 	def test_update_claim_status_rejects_when_posting_on_but_accounts_missing(self):
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 1)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 1)
 
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-4C")
 		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
@@ -114,11 +114,11 @@ class TestClaimsApi(FrappeTestCase):
 			self.skipTest("Test company has no Chart of Accounts to pick three leaf accounts from.")
 		bank_account, receivable_account, variance_account = accounts
 
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 1)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_company", company)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_bank_account", bank_account)
-		frappe.db.set_single_value("Pacific Accounting Settings", "insurance_claim_receivable_account", receivable_account)
-		frappe.db.set_single_value("Pacific Accounting Settings", "insurance_settlement_variance_account", variance_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 1)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_company", company)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_bank_account", bank_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "insurance_claim_receivable_account", receivable_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "insurance_settlement_variance_account", variance_account)
 
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-4D")
 		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
@@ -140,10 +140,10 @@ class TestClaimsApi(FrappeTestCase):
 			self.skipTest("Test company has no Chart of Accounts to pick two leaf accounts from.")
 		bank_account, receivable_account = accounts
 
-		frappe.db.set_single_value("Pacific Accounting Settings", "post_accounting_entries", 1)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_company", company)
-		frappe.db.set_single_value("Pacific Accounting Settings", "default_bank_account", bank_account)
-		frappe.db.set_single_value("Pacific Accounting Settings", "insurance_claim_receivable_account", receivable_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "post_accounting_entries", 1)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_company", company)
+		frappe.db.set_single_value("DMS Accounting Settings", "default_bank_account", bank_account)
+		frappe.db.set_single_value("DMS Accounting Settings", "insurance_claim_receivable_account", receivable_account)
 		# insurance_settlement_variance_account deliberately left unset.
 
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-4E")

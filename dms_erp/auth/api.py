@@ -28,8 +28,8 @@ from dms_erp.auth import jwt_utils
 from dms_erp.auth.utils import build_user_profile, generate_opaque_token, hash_token
 
 # System Manager is included as an admin escape hatch (e.g. MicroNXT support access);
-# every real staff user should hold one of the four Pacific roles.
-STAFF_ROLES = ["Pacific Sales", "Pacific Warehouse", "Pacific Purchase", "Pacific Management", "System Manager"]
+# every real staff user should hold one of the four DMS roles.
+STAFF_ROLES = ["DMS Sales", "DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"]
 
 
 def _assert_staff_access(user: str):

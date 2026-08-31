@@ -31,7 +31,7 @@ from dms_erp.pricing.api import get_dealer_price
 from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.warehouse.utils import default_company
 
-QUOTATION_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
+QUOTATION_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 NON_EDITABLE_STATUSES = {"Ordered", "Lost", "Cancelled", "Expired"}
 
 

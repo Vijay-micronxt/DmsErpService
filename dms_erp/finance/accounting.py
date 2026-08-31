@@ -1,5 +1,5 @@
 """Shared accounting-settings gate for optional GL posting (claim settlement,
-unloading payment). Everything here is conditional on `Pacific Accounting
+unloading payment). Everything here is conditional on `DMS Accounting
 Settings.post_accounting_entries` — unchecked by default, so the app stays fully
 usable/demoable before an accountant has picked a Chart of Accounts. Turning
 posting on later is a config change (check a box, fill in a few Account links),
@@ -16,14 +16,14 @@ from frappe.utils import today
 
 
 def get_settings() -> "frappe.model.document.Document":
-	return frappe.get_cached_doc("Pacific Accounting Settings")
+	return frappe.get_cached_doc("DMS Accounting Settings")
 
 
 def _require(settings, *fieldnames: str):
 	missing = [f for f in fieldnames if not settings.get(f)]
 	if missing:
 		frappe.throw(
-			_("Pacific Accounting Settings is missing: {0}. Configure these (or uncheck Post Accounting Entries) first.").format(
+			_("DMS Accounting Settings is missing: {0}. Configure these (or uncheck Post Accounting Entries) first.").format(
 				", ".join(missing)
 			),
 			frappe.ValidationError,
@@ -47,7 +47,7 @@ def post_claim_settlement(claim_amount: float, settled_amount: float, claim_ref:
 		frappe.throw(
 			_(
 				"Settled amount ({0}) differs from claimed amount ({1}) for {2}, but no Insurance Settlement "
-				"Variance Account is configured in Pacific Accounting Settings."
+				"Variance Account is configured in DMS Accounting Settings."
 			).format(settled_amount, claim_amount, claim_ref),
 			frappe.ValidationError,
 		)
