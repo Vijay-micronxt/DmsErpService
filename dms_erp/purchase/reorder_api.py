@@ -72,6 +72,14 @@ def _grouped_recent_sales_qty() -> dict[str, float]:
 	return {r.item: r.qty for r in rows}
 
 
+def sales_velocity_by_item() -> dict[str, float]:
+	"""Public wrapper over the same trailing-`SALES_VELOCITY_WINDOW_DAYS`, Retail-only
+	sales query `_grouped_recent_sales_qty` uses internally — shared with Phase 17's
+	Fast/Slow-Moving Product Report so both read the same signal instead of two
+	copies of the same query drifting apart."""
+	return _grouped_recent_sales_qty()
+
+
 def _grouped_open_purchase_orders() -> dict[str, list[dict]]:
 	"""Per item, every submitted PO line not yet fully received — docstatus=1 already
 	excludes Cancelled; Completed/Closed are excluded explicitly since those are done,

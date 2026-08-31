@@ -26,13 +26,26 @@ into `purchase/po_api.py` (`list_pending_po_lines`, `list_materials_ready_for_
 pickup`) so the dashboard tile and the Phase 16 reports below compute from the
 same source instead of two copies of the same SQL:
 
-- **`sales_reports.py`** — Dealer Inquiry Report, Missed Demand Report.
+- **`sales_reports.py`** — Dealer Inquiry Report, Missed Demand Report, and
+  (Phase 17) Retail vs Bulk Report — order count/value grouped by `Sales Order.
+  custom_order_channel` (Phase 15). Entirely unblocked by that field; before it
+  existed there was nothing to group by.
 - **`warehouse_reports.py`** — Bay Occupancy Report, Visual Stock Balance.
-- **`purchase_reports.py`** — Purchase Reorder Planning Report, Purchase Pickup Plan.
+- **`purchase_reports.py`** — Purchase Reorder Planning Report, Purchase Pickup
+  Plan, and (Phase 17) Inquiry-to-PO Mapping Report (joins `Purchase Order.
+  custom_source_inquiry` back to its Inquiry — only POs raised via `sales.
+  inquiry_api.convert_to_purchase_requirement` appear; a directly-raised PO has
+  nothing to map) and PO Pending Report (wraps `po_api.list_pending_po_lines`).
 - **`finance_reports.py`** — Damage & Insurance Report, Claimable Value Report,
   Unloading Payment Report.
+- **`catalog_reports.py`** (Phase 17) — Pricing & CSP Report (CSP = Customer
+  Suggested Price, read as the approved proposal's own `suggestedPrice` field —
+  landing cost × (1 + margin %) — not a second lookup against the live dealer
+  price) and Fast/Slow-Moving Product Report (ranks the whole catalog by the same
+  trailing-window Retail sales velocity the reorder engine computes per-item, via
+  a new public `reorder_api.sales_velocity_by_item()` wrapper so both read the
+  same signal instead of two copies of the query).
 
-BRD reports still to land: Inquiry-to-PO Mapping, PO Pending, Pricing & CSP,
-Fast/Slow-Moving Product, Retail vs Bulk (Phase 17); Dealer Activity, Product
-Activity (Phase 18); Duplicate Inquiry, Stock Clearance Suggestion, Display
-Replacement Suggestion (Phase 19); Forecasting Dashboard (Phase 20).
+BRD reports still to land: Dealer Activity, Product Activity (Phase 18);
+Duplicate Inquiry, Stock Clearance Suggestion, Display Replacement Suggestion
+(Phase 19); Forecasting Dashboard (Phase 20).

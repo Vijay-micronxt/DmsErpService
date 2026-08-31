@@ -59,3 +59,31 @@ def missed_demand_report(from_date=None, to_date=None):
 
 	rows.sort(key=lambda r: r["estimatedValue"], reverse=True)
 	return {"rows": rows, "totalValue": total_value}
+
+
+@frappe.whitelist(methods=["GET"])
+def retail_vs_bulk_report(from_date=None, to_date=None):
+	"""The BRD's "Retail vs bulk report" — order count and value by
+	`Sales Order.custom_order_channel` (Phase 15), over an optional date range.
+	Unblocked entirely by Phase 15; before that field existed there was nothing
+	to group by."""
+	conditions = ["so.docstatus = 1"]
+	values: dict = {}
+	if from_date:
+		conditions.append("so.transaction_date >= %(from_date)s")
+		values["from_date"] = from_date
+	if to_date:
+		conditions.append("so.transaction_date <= %(to_date)s")
+		values["to_date"] = to_date
+
+	rows = frappe.db.sql(
+		f"""
+		select so.custom_order_channel as channel, count(so.name) as order_count, coalesce(sum(so.grand_total), 0) as value
+		from `tabSales Order` so
+		where {' and '.join(conditions)}
+		group by so.custom_order_channel
+		""",
+		values,
+		as_dict=True,
+	)
+	return {"byChannel": [{"channel": r.channel, "orderCount": r.order_count, "value": r.value} for r in rows]}
