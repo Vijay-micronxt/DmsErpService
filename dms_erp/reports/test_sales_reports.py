@@ -5,7 +5,7 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.reports import sales_reports
-from dms_erp.sales import inquiry_api
+from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
@@ -57,3 +57,17 @@ class TestSalesReports(FrappeTestCase):
 		result = sales_reports.missed_demand_report()
 		ids = {r["id"] for r in result["rows"]}
 		self.assertNotIn(inquiry["id"], ids)
+
+	def test_retail_vs_bulk_report_groups_by_channel(self):
+		retail_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=retail_inquiry["id"])
+
+		bulk_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=800, source="Phone")
+		order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 800}], expected_dispatch="2026-09-01", inquiry=bulk_inquiry["id"], channel="Bulk"
+		)
+
+		result = sales_reports.retail_vs_bulk_report()
+		by_channel = {r["channel"]: r for r in result["byChannel"]}
+		self.assertGreaterEqual(by_channel["Retail"]["orderCount"], 1)
+		self.assertGreaterEqual(by_channel["Bulk"]["orderCount"], 1)
