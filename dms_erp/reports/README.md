@@ -64,4 +64,13 @@ same source instead of two copies of the same SQL:
   (Inquiry count, Sales Order qty, Stock Entry transfer count, price-approval
   history length).
 
-BRD report still to land: Forecasting Dashboard (Phase 20).
+- **`forecasting.py`** (Phase 20) — Forecasting Dashboard. Same "BRD names the
+  report, not the formula" situation as three of Phase 19's reports, taken to
+  its logical simplest: a trailing 12-week average of Retail sales velocity,
+  projected flat across the requested horizon. Deliberately does not model
+  seasonality or trend — every row is flagged `"low"` confidence for exactly
+  that reason, so a caller can't mistake this for more than it is. Swap the
+  method in this one file once a real methodology is confirmed; nothing else in
+  `reports` depends on how it's computed.
+
+All 20 BRD reports now have an endpoint.
