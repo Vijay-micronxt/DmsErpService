@@ -1,0 +1,61 @@
+"""Sales-side reports (BRD "Reports and Dashboards"). Every report here reads
+through the existing sales-module list/get functions rather than re-querying the
+underlying doctypes directly — the date-range/grouping logic that makes a listing
+into a "report" lives here; the data access itself stays owned by sales/inquiry_api.py
+and sales/quotation_api.py.
+
+Unlike Phase 8's Dashboard endpoints (a fixed KPI snapshot for one role's home
+screen), reports here take filters (dealer, status, date range) and return rows
+meant for a report screen — no role gate on the read itself, matching how every
+other list/get endpoint in this app works; only writes are role-gated.
+"""
+
+import frappe
+from frappe.utils import getdate
+
+from dms_erp.pricing.api import get_dealer_price
+from dms_erp.purchase.reorder_api import MISSED_DEMAND_STATUSES
+from dms_erp.sales import inquiry_api
+
+
+def _in_range(d, from_date, to_date) -> bool:
+	if not d:
+		return from_date is None and to_date is None
+	d = getdate(d)
+	if from_date and d < getdate(from_date):
+		return False
+	if to_date and d > getdate(to_date):
+		return False
+	return True
+
+
+@frappe.whitelist(methods=["GET"])
+def dealer_inquiry_report(dealer: str | None = None, status: str | None = None, from_date=None, to_date=None):
+	"""Every inquiry for a dealer (or across all dealers), with a status breakdown —
+	the BRD's "Dealer inquiry report"."""
+	rows = [r for r in inquiry_api.list_inquiries(dealer=dealer, status=status) if _in_range(r["date"], from_date, to_date)]
+
+	by_status: dict[str, int] = {}
+	for r in rows:
+		by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+
+	return {"rows": rows, "summary": {"total": len(rows), "byStatus": by_status}}
+
+
+@frappe.whitelist(methods=["GET"])
+def missed_demand_report(from_date=None, to_date=None):
+	"""Every inquiry that current stock couldn't satisfy (Out of Stock / Pre-order
+	Required), each priced at the approved dealer price — the row-level version of
+	the Phase 8 sales dashboard's single missedDemandValue number."""
+	rows = []
+	total_value = 0
+	for r in inquiry_api.list_inquiries():
+		if r["status"] not in MISSED_DEMAND_STATUSES or not _in_range(r["date"], from_date, to_date):
+			continue
+		price = get_dealer_price(r["productId"]) or 0
+		value = r["qty"] * price
+		total_value += value
+		rows.append({**r, "estimatedValue": value})
+
+	rows.sort(key=lambda r: r["estimatedValue"], reverse=True)
+	return {"rows": rows, "totalValue": total_value}

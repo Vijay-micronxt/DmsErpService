@@ -18,6 +18,7 @@ from frappe.utils import add_days
 
 from dms_erp.finance.claims_api import claim_summary
 from dms_erp.pricing.api import get_dealer_price
+from dms_erp.purchase import po_api
 from dms_erp.purchase.reorder_api import reorder_suggestions
 from dms_erp.sales.picking_api import list_pick_tasks
 from dms_erp.warehouse.bay_api import list_bays
@@ -239,19 +240,9 @@ def purchase_dashboard():
 	_assert_role(PURCHASE_READ_ROLES, "Only Purchase or Management can view the purchase dashboard.")
 
 	today = date.today()
-	po_progress = frappe.db.sql(
-		"""
-		select poi.parent as po, po.supplier as supplier, po.schedule_date as schedule_date,
-			sum(poi.qty) as ordered_qty, sum(poi.received_qty) as received_qty
-		from `tabPurchase Order Item` poi
-		inner join `tabPurchase Order` po on po.name = poi.parent
-		where po.docstatus = 1
-		group by poi.parent
-		""",
-		as_dict=True,
-	)
-	pending_pos = [r for r in po_progress if r.received_qty < r.ordered_qty]
-	supplier_delays = [r for r in pending_pos if r.schedule_date and r.schedule_date < today]
+	pending_lines = po_api.list_pending_po_lines()
+	pending_po_names = {l["po"] for l in pending_lines}
+	supplier_delay_po_names = {l["po"] for l in pending_lines if l["daysOverdue"] > 0}
 
 	window_end = add_days(today, 7)
 	pickup_plans_this_week = frappe.db.count(
@@ -274,32 +265,13 @@ def purchase_dashboard():
 		as_dict=True,
 	)
 
-	ready_for_pickup = []
-	for row in frappe.get_all(
-		"Purchase Order Item",
-		filters={"custom_ready_qty": [">", 0], "docstatus": 1},
-		fields=["name", "parent as po", "item_code", "custom_ready_qty as ready_qty"],
-	):
-		remaining = row.ready_qty - (
-			frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (row.name,))[0][0]
-		)
-		if remaining > 0:
-			ready_for_pickup.append(
-				{
-					"po": row.po,
-					"supplier": frappe.db.get_value("Purchase Order", row.po, "supplier"),
-					"itemCode": row.item_code,
-					"readyQty": remaining,
-				}
-			)
-
 	return {
-		"pendingPOs": len(pending_pos),
-		"supplierDelays": len(supplier_delays),
+		"pendingPOs": len(pending_po_names),
+		"supplierDelays": len(supplier_delay_po_names),
 		"pickupPlansThisWeek": pickup_plans_this_week,
 		"reorderSuggestionsCount": len(suggestions),
 		"purchaseTrend": list(reversed([{"month": r.month, "value": r.value} for r in trend_rows])),
-		"materialsReadyForPickup": ready_for_pickup,
+		"materialsReadyForPickup": po_api.list_materials_ready_for_pickup(),
 	}
 
 
