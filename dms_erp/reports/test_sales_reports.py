@@ -90,3 +90,24 @@ class TestSalesReports(FrappeTestCase):
 		self.assertEqual(row["orderValue"], 20 * 400)
 		self.assertEqual(row["messageCount"], 1)
 		self.assertIsNotNone(row["lastContact"])
+
+	def test_duplicate_inquiry_report_flags_repeated_open_inquiries(self):
+		dup_dealer = make_dealer("Sales Reports Duplicate Dealer")
+		i1 = inquiry_api.create_inquiry(dealer=dup_dealer, item=self.item, qty=10, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=dup_dealer, item=self.item, qty=15, source="WhatsApp")
+
+		result = sales_reports.duplicate_inquiry_report()
+		group = next(r for r in result if r["dealerId"] == dup_dealer and r["productId"] == self.item)
+		self.assertEqual(group["count"], 2)
+		self.assertEqual({i["id"] for i in group["inquiries"]}, {i1["id"], i2["id"]})
+
+	def test_duplicate_inquiry_report_excludes_closed_inquiries(self):
+		dealer = make_dealer("Sales Reports Non Duplicate Dealer")
+		item = make_item("SREPORT-NODUP-ITEM", "Vitrified")
+		i1 = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=15, source="Phone")
+		inquiry_api.update_inquiry(i2["id"], {"status": "Closed"})
+
+		result = sales_reports.duplicate_inquiry_report()
+		self.assertFalse(any(r["dealerId"] == dealer and r["productId"] == item for r in result))
+		self.assertTrue(i1)  # kept alive to document intent: only i2 was closed

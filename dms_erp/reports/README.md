@@ -31,8 +31,21 @@ same source instead of two copies of the same SQL:
   custom_order_channel` (Phase 15), entirely unblocked by that field; (Phase 18)
   Dealer Activity Report — a per-dealer rollup across Inquiry/Quotation/Sales
   Order/WhatsApp Message, the first report here no single existing list/get
-  function could answer on its own.
-- **`warehouse_reports.py`** — Bay Occupancy Report, Visual Stock Balance.
+  function could answer on its own; (Phase 19) Duplicate Inquiry Report — no
+  BRD-specified duplicate rule existed, so this is a proposed one (two or more
+  still-open inquiries, same dealer and item, logged within `window_days`,
+  default 7, of each other), easy to retune via the `window_days` param.
+- **`warehouse_reports.py`** — Bay Occupancy Report, Visual Stock Balance;
+  (Phase 19) Stock Clearance Suggestion and Display Replacement Suggestion —
+  neither had a BRD-specified formula either, so both are proposed heuristics
+  built from small, named constants at the top of the file
+  (`CLEARANCE_STOCK_MULTIPLE`, `CLEARANCE_MIN_AGE_DAYS`) rather than magic
+  numbers buried in the query, specifically so the actual thresholds can be
+  corrected without touching the logic around them. Clearance: current stock
+  well above the safety-stock floor, barely moving, oldest batch aged past the
+  threshold. Display replacement: an item on display that's not selling or is
+  past Active in the discontinuation lifecycle, paired with the fastest-moving
+  currently-sellable item in the same category not already displayed.
 - **`purchase_reports.py`** — Purchase Reorder Planning Report, Purchase Pickup
   Plan; (Phase 17) Inquiry-to-PO Mapping Report (joins `Purchase Order.
   custom_source_inquiry` back to its Inquiry — only POs raised via `sales.
@@ -51,5 +64,4 @@ same source instead of two copies of the same SQL:
   (Inquiry count, Sales Order qty, Stock Entry transfer count, price-approval
   history length).
 
-BRD reports still to land: Duplicate Inquiry, Stock Clearance Suggestion,
-Display Replacement Suggestion (Phase 19); Forecasting Dashboard (Phase 20).
+BRD report still to land: Forecasting Dashboard (Phase 20).

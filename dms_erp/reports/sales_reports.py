@@ -18,6 +18,12 @@ from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase.reorder_api import MISSED_DEMAND_STATUSES
 from dms_erp.sales import dealer_api, inquiry_api
 
+DUPLICATE_INQUIRY_WINDOW_DAYS = 7
+# Inquiry's 10-state lifecycle (sales/inquiry_api.py) — these four are the ones
+# that mean the demand has already been actioned or dropped; everything else is
+# still "open" and eligible to be flagged as a duplicate.
+CLOSED_INQUIRY_STATUSES = {"Converted to Order", "Rejected", "Mapped to PO", "Closed"}
+
 
 def _in_range(d, from_date, to_date) -> bool:
 	if not d:
@@ -125,3 +131,36 @@ def dealer_activity_report(dealer: str | None = None):
 
 	rows.sort(key=lambda r: r["orderValue"], reverse=True)
 	return rows
+
+
+@frappe.whitelist(methods=["GET"])
+def duplicate_inquiry_report(window_days: int = DUPLICATE_INQUIRY_WINDOW_DAYS):
+	"""The BRD's "Duplicate inquiry report". No duplicate rule was specified in
+	the BRD text, so this is a proposed one, easy to retune via `window_days`:
+	two or more still-open inquiries (not yet Converted to Order / Mapped to PO /
+	Rejected / Closed) for the same dealer and item, all logged within
+	`window_days` of each other."""
+	open_inquiries = [i for i in inquiry_api.list_inquiries() if i["status"] not in CLOSED_INQUIRY_STATUSES]
+
+	groups: dict[tuple, list] = {}
+	for i in open_inquiries:
+		groups.setdefault((i["dealerId"], i["productId"]), []).append(i)
+
+	out = []
+	for (dealer, product), group in groups.items():
+		if len(group) < 2:
+			continue
+		dates = sorted(getdate(i["date"]) for i in group if i["date"])
+		if not dates or (dates[-1] - dates[0]).days > window_days:
+			continue
+		out.append(
+			{
+				"dealerId": dealer,
+				"productId": product,
+				"count": len(group),
+				"inquiries": [{"id": i["id"], "date": i["date"], "qty": i["qty"], "status": i["status"]} for i in group],
+			}
+		)
+
+	out.sort(key=lambda r: r["count"], reverse=True)
+	return out
