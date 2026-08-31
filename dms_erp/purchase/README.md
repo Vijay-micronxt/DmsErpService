@@ -25,6 +25,10 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
   (it's a live per-item computation, not a stored row), so "already ordered"
   means "sum of open PO lines for this item, still pending receipt", netted
   straight out of `raw_need` so `suggestedQty` drops once a PO already covers it.
+  Phase 15: `recentRetailSalesQty` now actually filters to `Sales Order.
+  custom_order_channel = 'Retail'` — this module's own docstring always claimed
+  "retail channel only, bulk/project excluded per BRD §12.1", but until Phase 15
+  added the channel field to Quotation/Sales Order, nothing existed to exclude.
 
 `Product.stockQty` (Phase 2) now reads real data from Phase 3's Bin aggregate
 instead of a `0` stub, now that Warehouse exists.

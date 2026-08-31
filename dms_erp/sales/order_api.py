@@ -15,7 +15,7 @@ from frappe import _
 from frappe.utils import now_datetime, today
 
 from dms_erp.pricing.api import get_dealer_price
-from dms_erp.sales.setup import ORDER_STAGES
+from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
 
 ORDER_WRITE_ROLES = {"Pacific Sales", "Pacific Management", "System Manager"}
@@ -35,6 +35,7 @@ def _serialize(doc) -> dict:
 		"dealerId": doc.customer,
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,
+		"channel": doc.custom_order_channel,
 		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
 		# Server-computed only — every line's rate came from get_dealer_price at
 		# creation time, never a client-supplied value, so this total is trustworthy.
@@ -50,11 +51,15 @@ def _serialize(doc) -> dict:
 	}
 
 
-def finalize_new_order(so, source_type: str, source_ref: str) -> dict:
+def finalize_new_order(so, source_type: str, source_ref: str, channel: str = "Retail") -> dict:
 	"""Insert + submit a freshly-built (unsaved) Sales Order doc, stamping Pacific's
 	fulfillment-stage bookkeeping. Shared by create_order and quotation_api.convert_to_order."""
+	if channel not in ORDER_CHANNELS:
+		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
+
 	so.custom_source_type = source_type
 	so.custom_source_ref = source_ref
+	so.custom_order_channel = channel
 	so.custom_fulfillment_stage = "Confirmed"
 
 	now = now_datetime()
@@ -83,7 +88,7 @@ def get_order(order: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str):
+def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str = "Retail"):
 	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
 	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
 	plain approved dealer-price rates). The Quotation-sourced path is
@@ -114,7 +119,7 @@ def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str
 		}
 	)
 
-	order = finalize_new_order(so, source_type="Inquiry", source_ref=inquiry)
+	order = finalize_new_order(so, source_type="Inquiry", source_ref=inquiry, channel=channel)
 	frappe.db.set_value("Inquiry", inquiry, "status", "Converted to Order")
 
 	return order

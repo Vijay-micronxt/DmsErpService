@@ -40,7 +40,22 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["sourceType"], "Inquiry")
 		self.assertEqual(order["sourceRef"], inquiry["id"])
 		self.assertEqual(order["stage"], "Confirmed")
+		self.assertEqual(order["channel"], "Retail")
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+
+	def test_create_order_accepts_bulk_channel(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 500}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Bulk"
+		)
+		self.assertEqual(order["channel"], "Bulk")
+
+	def test_create_order_rejects_invalid_channel(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.create_order(
+				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Wholesale"
+			)
 
 	def test_advance_order_stage_follows_forward_flow(self):
 		order = self._make_order()
