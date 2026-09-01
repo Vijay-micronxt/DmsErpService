@@ -47,11 +47,20 @@ URGENCY_STYLES_ORDER = ["Critical", "High", "Watch", "Healthy"]
 
 
 def _grouped_inquiry_qty(statuses: list[str]) -> dict[str, float]:
-	rows = frappe.get_all(
-		"Inquiry",
-		filters={"status": ["in", statuses]},
-		fields=["item", "sum(qty) as qty"],
-		group_by="item",
+	# Raw SQL rather than frappe.get_all(fields=["sum(qty) as qty"]) -- newer
+	# Frappe versions reject a raw SQL function inside get_all/get_list's
+	# fields list outright ("Use of sub-query or function is restricted"),
+	# confirmed live. Matches _grouped_recent_sales_qty just below, which
+	# already used raw SQL for the same reason.
+	rows = frappe.db.sql(
+		"""
+		select item, sum(qty) as qty
+		from `tabInquiry`
+		where status in %s
+		group by item
+		""",
+		(statuses,),
+		as_dict=True,
 	)
 	return {r.item: r.qty for r in rows}
 

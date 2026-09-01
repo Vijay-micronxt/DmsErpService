@@ -60,10 +60,18 @@ def sales_dashboard():
 	# lost/expired) is the closest native proxy.
 	pending_quotations = frappe.db.count("Quotation", {"status": "Open", "quotation_to": "Customer"})
 
-	orders_this_month = frappe.get_all(
-		"Sales Order",
-		filters={"docstatus": 1, "transaction_date": [">=", month_start]},
-		fields=["count(name) as count", "coalesce(sum(grand_total), 0) as value"],
+	# Raw SQL rather than frappe.get_all(fields=["count(name) as count", ...]) --
+	# newer Frappe versions reject a raw SQL function inside get_all/get_list's
+	# fields list outright ("Use of sub-query or function is restricted"),
+	# confirmed live.
+	orders_this_month = frappe.db.sql(
+		"""
+		select count(name) as count, coalesce(sum(grand_total), 0) as value
+		from `tabSales Order`
+		where docstatus = 1 and transaction_date >= %s
+		""",
+		(month_start,),
+		as_dict=True,
 	)[0]
 
 	missed_demand_value = 0
