@@ -45,4 +45,9 @@ def authenticate_request():
 	if not session or session.user != user or session.revoked_at:
 		return
 
+	# frappe.set_user() resets frappe.local.form_dict as a side effect (it's normally
+	# called before the request body/query string has been parsed). This hook runs
+	# after that parsing, so the request's args would otherwise be silently wiped out.
+	form_dict = frappe.local.form_dict
 	frappe.set_user(user)
+	frappe.local.form_dict = form_dict
