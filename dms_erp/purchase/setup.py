@@ -29,6 +29,7 @@ CUSTOM_FIELDS = {
 			"label": "Ready Qty (confirmed at supplier)",
 			"description": "Material confirmed ready at supplier/factory — updated manually as the supplier confirms (BRD §13.2).",
 			"insert_after": "qty",
+			"allow_on_submit": 1,
 		},
 	],
 }
