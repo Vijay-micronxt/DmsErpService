@@ -23,6 +23,7 @@ from dms_erp.purchase.reorder_api import reorder_suggestions
 from dms_erp.sales.picking_api import list_pick_tasks
 from dms_erp.warehouse.bay_api import list_bays
 from dms_erp.warehouse.inward_api import list_trucks
+from dms_erp.warehouse.utils import default_company
 from dms_erp.warehouse.transfer_api import list_transfers
 from dms_erp.warehouse.utils import list_stock_lots
 
@@ -335,20 +336,29 @@ def management_dashboard():
 
 
 def _credit_exposure_alerts() -> list[dict]:
-	"""Order value against Customer.credit_limit — a real, native figure, but an
-	approximation of true credit risk: it's every submitted Sales Order's value, not
-	actual outstanding receivables net of delivery/payment, since this app posts no
-	Sales Invoice. Flag if a real AR-aging phase should replace this."""
+	"""Order value against Customer's per-company credit limit — a real, native
+	figure, but an approximation of true credit risk: it's every submitted Sales
+	Order's value, not actual outstanding receivables net of delivery/payment,
+	since this app posts no Sales Invoice. Flag if a real AR-aging phase should
+	replace this.
+
+	Credit limit lives on the `Customer Credit Limit` child table (keyed by
+	company), not a flat `Customer.credit_limit` column — ERPNext moved it there
+	some versions back since a credit limit is now set per company, not
+	globally. Scoped to this app's own default_company() the same way every
+	other company-scoped query in this app is."""
 	rows = frappe.db.sql(
 		"""
-		select c.name as dealer, c.customer_name as dealer_name, c.credit_limit as credit_limit,
+		select c.name as dealer, c.customer_name as dealer_name, ccl.credit_limit as credit_limit,
 			coalesce(sum(so.grand_total), 0) as order_value
 		from `tabCustomer` c
-		inner join `tabSales Order` so on so.customer = c.name and so.docstatus = 1
-		where c.credit_limit > 0
+		inner join `tabCustomer Credit Limit` ccl on ccl.parent = c.name and ccl.company = %(company)s
+		inner join `tabSales Order` so on so.customer = c.name and so.docstatus = 1 and so.company = %(company)s
+		where ccl.credit_limit > 0
 		group by c.name
-		having order_value > c.credit_limit
+		having order_value > ccl.credit_limit
 		""",
+		{"company": default_company()},
 		as_dict=True,
 	)
 	return [
