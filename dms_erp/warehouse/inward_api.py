@@ -31,6 +31,7 @@ def _serialize(doc) -> dict:
 		"poId": doc.purchase_order,
 		"poLineId": doc.purchase_order_item,
 		"allocationSlip": doc.allocation_slip,
+		"pickupRun": doc.pickup_run,
 	}
 
 
@@ -51,6 +52,7 @@ def add_truck(
 	purchase_order: str | None = None,
 	purchase_order_item: str | None = None,
 	po_reference: str | None = None,
+	pickup_run: str | None = None,
 ):
 	_assert_can_manage_inward()
 
@@ -67,6 +69,7 @@ def add_truck(
 			"purchase_order": purchase_order,
 			"purchase_order_item": purchase_order_item,
 			"po_reference": po_reference,
+			"pickup_run": pickup_run,
 		}
 	)
 	truck.insert(ignore_permissions=True)

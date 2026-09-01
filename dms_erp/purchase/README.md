@@ -38,3 +38,21 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
 
 `Product.stockQty` (Phase 2) now reads real data from Phase 3's Bin aggregate
 instead of a `0` stub, now that Warehouse exists.
+
+- **Pickup Run** (`pickup_run_api.py`, new doctypes `Vehicle Type` / `Pickup
+  Run` / `Pickup Run Item`) — the capacity-aware planning layer in front of
+  `list_materials_ready_for_pickup`. A run groups one or more supplier-ready PO
+  lines onto one truck, scoped to a single supplier (no multi-stop/multi-supplier
+  routing is modeled) and validated against two things before it can be created
+  or edited: the PO line's own remaining ready-for-pickup qty
+  (`po_api.remaining_ready_qty_for_line`, extracted from
+  `list_materials_ready_for_pickup`'s own math and extended to also net out
+  other still-Draft runs' reservations, so two drafts can't double-claim the
+  same stock) and the chosen `Vehicle Type`'s total box capacity. `Vehicle Type`
+  is a small user-maintained master (name + `capacity_boxes`) — there's no real
+  fleet/registration doctype; the truck itself stays a free-text plate number
+  per run, same as `Inward Truck.vehicle_number` already was. Dispatching a run
+  doesn't replace Inward Truck's own gate/unloading/put-away flow — it creates
+  one real `Inward Truck` per line via the same `inward_api.add_truck` every
+  direct booking already goes through, tagged back via a new `pickup_run` field
+  on Inward Truck for traceability; everything downstream is untouched.

@@ -165,19 +165,50 @@ def list_pending_po_lines() -> list[dict]:
 	return out
 
 
+def remaining_ready_qty_for_line(po_item: str, ready_qty: float | None = None, exclude_pickup_run: str | None = None) -> float:
+	"""How many boxes of this PO line's supplier-confirmed-ready qty are still
+	available to book onto a truck. Nets out two things: boxes already booked
+	onto an Inward Truck (this covers both a directly-booked truck and one
+	created by dispatching a Pickup Run, since dispatch creates real Inward
+	Truck rows), and boxes reserved by any other still-open (Draft) Pickup Run
+	line for this same PO line — a Draft run has no Inward Truck yet, so
+	without this second check two draft runs could both claim the same ready
+	stock. A Dispatched/Completed/Cancelled Pickup Run's own lines are never
+	counted here (Dispatched is already covered via its Inward Trucks;
+	Completed/Cancelled reserve nothing). `exclude_pickup_run` lets a run
+	re-validate its own edited lines without double-counting its own
+	not-yet-saved reservation."""
+	if ready_qty is None:
+		ready_qty = frappe.db.get_value("Purchase Order Item", po_item, "custom_ready_qty") or 0
+
+	booked = frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (po_item,))[0][0]
+
+	reserved = frappe.db.sql(
+		"""
+		select coalesce(sum(pri.qty), 0)
+		from `tabPickup Run Item` pri
+		inner join `tabPickup Run` pr on pr.name = pri.parent
+		where pri.purchase_order_item = %s and pr.status = 'Draft' and pr.name != %s
+		""",
+		(po_item, exclude_pickup_run or ""),
+	)[0][0]
+
+	return ready_qty - booked - reserved
+
+
 def list_materials_ready_for_pickup() -> list[dict]:
 	"""PO lines the supplier has confirmed ready (custom_ready_qty > 0) but that
-	haven't all been booked onto an Inward Truck yet. Shared by the Phase 8
-	purchase dashboard's materialsReadyForPickup and the Phase 16 Purchase Pickup
-	Plan report."""
+	haven't all been booked onto an Inward Truck or reserved by an open Pickup
+	Run yet. Shared by the Phase 8 purchase dashboard's materialsReadyForPickup,
+	the Phase 16 Purchase Pickup Plan report, and Pickup Run's own capacity
+	validation (remaining_ready_qty_for_line, above — same underlying math)."""
 	out = []
 	for row in frappe.get_all(
 		"Purchase Order Item",
 		filters={"custom_ready_qty": [">", 0], "docstatus": 1},
 		fields=["name", "parent as po", "item_code", "custom_ready_qty as ready_qty"],
 	):
-		booked = frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (row.name,))[0][0]
-		remaining = row.ready_qty - booked
+		remaining = remaining_ready_qty_for_line(row.name, ready_qty=row.ready_qty)
 		if remaining > 0:
 			out.append(
 				{
