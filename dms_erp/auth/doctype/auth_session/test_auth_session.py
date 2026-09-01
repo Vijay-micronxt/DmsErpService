@@ -81,6 +81,26 @@ class TestAuthSession(FrappeTestCase):
 		with self.assertRaises(frappe.AuthenticationError):
 			api.refresh_token(refresh_token=rotated["refresh_token"])
 
+	def test_concurrent_refresh_race_raises_clean_auth_error_without_revoking(self):
+		# Simulates two refresh_token calls racing on the same session (e.g. a
+		# client that fires more than one 401-triggered refresh instead of
+		# sharing one in-flight request): forcing Document.save to raise the
+		# same TimestampMismatchError Frappe raises when the DB row changed
+		# out from under a loaded doc, deterministically, without needing real
+		# threading. Must come back as a clean AuthenticationError, not the
+		# raw framework exception, and must NOT revoke the session -- this is
+		# an ordinary race between two legitimate calls, not a replay.
+		from unittest.mock import patch
+
+		tokens = api.login(usr=self.staff_user, pwd=TEST_PASSWORD, device_id="dev-race")
+
+		with patch("frappe.model.document.Document.save", side_effect=frappe.TimestampMismatchError):
+			with self.assertRaises(frappe.AuthenticationError):
+				api.refresh_token(refresh_token=tokens["refresh_token"])
+
+		session_name = frappe.db.get_value("Auth Session", {"user": self.staff_user, "device_id": "dev-race"}, "name")
+		self.assertIsNone(frappe.db.get_value("Auth Session", session_name, "revoked_at"))
+
 	def test_logout_revokes_session(self):
 		tokens = api.login(usr=self.staff_user, pwd=TEST_PASSWORD, device_id="dev-4")
 		api.logout(refresh_token=tokens["refresh_token"])

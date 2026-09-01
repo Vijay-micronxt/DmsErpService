@@ -126,7 +126,21 @@ def refresh_token(refresh_token: str):
 	session.refresh_token_hash = hash_token(new_refresh_token)
 	session.issued_at = now
 	session.expires_at = add_to_date(now, days=jwt_utils.refresh_token_ttl_days())
-	session.save(ignore_permissions=True)
+	try:
+		session.save(ignore_permissions=True)
+	except frappe.TimestampMismatchError:
+		# Two refresh_token calls raced on the same session (e.g. a client that
+		# fires more than one 401-triggered refresh at once instead of sharing a
+		# single in-flight request) -- one already won and rotated the token.
+		# Fail cleanly instead of leaking Frappe's raw document-versioning error.
+		# Not a reuse/replay case (that's handled above, at the hash-lookup
+		# miss) -- this is two legitimate concurrent calls, so the session is
+		# NOT revoked; the caller that won the race still has a valid session.
+		frappe.clear_messages()
+		frappe.throw(
+			_("This refresh token was just used by another request. Use the tokens that request returned."),
+			frappe.AuthenticationError,
+		)
 
 	access_token, expires_in = jwt_utils.encode_access_token(session.user, session.name)
 
