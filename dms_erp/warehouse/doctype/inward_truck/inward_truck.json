@@ -20,7 +20,8 @@
   "purchase_order_item",
   "po_reference",
   "column_break_2",
-  "allocation_slip"
+  "allocation_slip",
+  "pickup_run"
  ],
  "fields": [
   {
@@ -112,6 +113,13 @@
    "fieldtype": "Link",
    "label": "Allocation Slip",
    "options": "Bay Allocation"
+  },
+  {
+   "fieldname": "pickup_run",
+   "fieldtype": "Link",
+   "label": "Pickup Run",
+   "options": "Pickup Run",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
