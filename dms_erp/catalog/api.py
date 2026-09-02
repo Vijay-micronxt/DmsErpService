@@ -217,3 +217,20 @@ def update_product(item: str, patch: dict):
 	doc.save(ignore_permissions=True)
 
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_groups():
+	# is_group: 0 excludes the root ("All Item Groups") -- catalog/setup.py seeds
+	# every category as a leaf under that root, so this is the full, flat list of
+	# categories a product form should offer, with no separate detail endpoint
+	# needed (there's nothing more to a category than its name and parent).
+	rows = frappe.get_all(
+		"Item Group",
+		filters={"is_group": 0},
+		fields=["name", "item_group_name", "parent_item_group"],
+		order_by="item_group_name asc",
+	)
+	return [
+		{"id": r.name, "name": r.item_group_name, "parentItemGroup": r.parent_item_group} for r in rows
+	]
