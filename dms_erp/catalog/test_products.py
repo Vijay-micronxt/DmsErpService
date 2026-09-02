@@ -77,6 +77,17 @@ class TestProducts(FrappeTestCase):
 		updated = catalog_api.update_product("PROD-TEST-A", {"hsnCode": "69072200"})
 		self.assertEqual(updated["hsnCode"], "69072200")
 
+	def test_list_item_groups_returns_seeded_leaf_categories_only(self):
+		groups = catalog_api.list_item_groups()
+		names = [g["name"] for g in groups]
+		self.assertIn("Vitrified", names)
+		self.assertIn("Floor Tiles", names)
+		self.assertNotIn("All Item Groups", names)
+
+		vitrified = next(g for g in groups if g["name"] == "Vitrified")
+		self.assertEqual(vitrified["id"], "Vitrified")
+		self.assertIsNotNone(vitrified["parentItemGroup"])
+
 	def test_create_product_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

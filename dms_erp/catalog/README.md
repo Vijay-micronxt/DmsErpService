@@ -8,7 +8,12 @@ catalog visibility. Implemented.
   color, series, swatch color, pieces/sqft/weight per box, discontinuation status).
   `category` is the native `Item Group`; `leadTimeDays` is Item's own
   `lead_time_days`; `altItemId` is the native `Item Alternative` doctype — none of
-  those needed a custom field.
+  those needed a custom field. `list_item_groups` is the read endpoint for
+  `category`'s options — the native `Item Group` tree, filtered to `is_group: 0`
+  (the leaf categories `catalog/setup.py` seeds; the root "All Item Groups" is
+  excluded), for populating the category field on product forms. No new doctype
+  or field, and no separate detail endpoint — a category has nothing beyond its
+  name and parent worth a second call for.
 - **Dealer Catalog** (`dealer_catalog_api.py` + `doctype/dealer_catalog`) — a custom
   doctype (no ERPNext equivalent) mapping a dealer (`Customer`) to the set of items
   they're allowed to see. No assignment yet = full catalog visible, matching the
