@@ -56,3 +56,10 @@ instead of a `0` stub, now that Warehouse exists.
   one real `Inward Truck` per line via the same `inward_api.add_truck` every
   direct booking already goes through, tagged back via a new `pickup_run` field
   on Inward Truck for traceability; everything downstream is untouched.
+
+- **Suppliers** (`supplier_api.py`) — the same gap `sales.dealer_api` closed for
+  Customer, closed here for `Supplier`: every module (`po_api`, `pricing.api`,
+  `allocation_api`, `inward_api`) already treats "supplier" as a bare native
+  Supplier id, but no read endpoint over it ever existed. `list_suppliers`/
+  `get_supplier`, no new doctype or field. Unlike Customer, Supplier has no
+  per-company credit-limit child table to resolve — nothing else to net out.
