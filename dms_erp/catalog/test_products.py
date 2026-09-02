@@ -78,15 +78,56 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(updated["hsnCode"], "69072200")
 
 	def test_list_item_groups_returns_seeded_leaf_categories_only(self):
-		groups = catalog_api.list_item_groups()
-		names = [g["name"] for g in groups]
+		result = catalog_api.list_item_groups()
+		names = [g["name"] for g in result["items"]]
 		self.assertIn("Vitrified", names)
 		self.assertIn("Floor Tiles", names)
 		self.assertNotIn("All Item Groups", names)
+		self.assertEqual(result["total"], len(names))
 
-		vitrified = next(g for g in groups if g["name"] == "Vitrified")
+		vitrified = next(g for g in result["items"] if g["name"] == "Vitrified")
 		self.assertEqual(vitrified["id"], "Vitrified")
 		self.assertIsNotNone(vitrified["parentItemGroup"])
+
+	def test_list_item_groups_is_paginated_and_searchable(self):
+		page = catalog_api.list_item_groups(limit=2, offset=0)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertGreaterEqual(page["total"], 4)  # the 4 seeded groups, at least
+
+		found = catalog_api.list_item_groups(search="Vitrified")
+		self.assertEqual(found["total"], 1)
+		self.assertEqual(found["items"][0]["name"], "Vitrified")
+
+	def test_list_products_is_paginated_and_searchable(self):
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		catalog_api.create_product(
+			code="PROD-TEST-B",
+			name="Another Product",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		page = catalog_api.list_products(limit=1, offset=0)
+		self.assertEqual(len(page["items"]), 1)
+		self.assertGreaterEqual(page["total"], 2)
+
+		found = catalog_api.list_products(search="Test Marble Look")
+		self.assertEqual(found["total"], 1)
+		self.assertEqual(found["items"][0]["code"], "PROD-TEST-A")
+
+		all_products = catalog_api.list_all_products()
+		self.assertGreaterEqual(len(all_products), 2)
 
 	def test_create_product_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")

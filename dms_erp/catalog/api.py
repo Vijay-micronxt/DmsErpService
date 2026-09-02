@@ -21,12 +21,18 @@ app (GST/India tax compliance) is installed on a given site, which mandates it o
 every Item via its own validate hook. Passed straight through as optional here
 (getattr'd defensively on read) so a site with india_compliance installed can supply
 it, without requiring it or assuming its existence on a site without that app.
+
+list_products and list_item_groups are paginated (`limit`/`offset`, via dms_erp.
+pagination.clamp) and return `{"items", "total", "limit", "offset"}`, not a bare
+list -- reports need the whole result set, not a page of it, so they call
+list_all_products (unpaginated, internal-only) instead of the whitelisted endpoint.
 """
 
 import frappe
 from frappe import _
 
 from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable
+from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
 from dms_erp.warehouse.utils import total_stock_for_item
 
@@ -105,12 +111,43 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_products(dealer: str | None = None):
+def _product_filters(dealer: str | None, search: str | None) -> dict:
 	from dms_erp.catalog.dealer_catalog_api import catalog_for
 
-	item_codes = catalog_for(dealer) if dealer else frappe.get_all("Item", pluck="name")
-	return [_serialize(frappe.get_doc("Item", code)) for code in item_codes]
+	filters = {}
+	if dealer:
+		# catalog_for() can only be expressed as an explicit id list, not a SQL
+		# condition -- an empty list is a real "nothing assigned" result, not "no
+		# filter", so it's given a sentinel that matches no real item code rather
+		# than an empty ["in", []] (Frappe doesn't guarantee that shape short-circuits).
+		filters["name"] = ["in", catalog_for(dealer) or [""]]
+	if search:
+		filters["item_name"] = ["like", f"%{search}%"]
+	return filters
+
+
+def list_all_products(dealer: str | None = None, search: str | None = None) -> list[dict]:
+	"""Unpaginated -- for internal callers (reports) that need the full result set,
+	not a page of it. list_products (the whitelisted endpoint) is the paginated one."""
+	filters = _product_filters(dealer, search)
+	codes = frappe.get_all("Item", filters=filters, pluck="name", order_by="item_code asc")
+	return [_serialize(frappe.get_doc("Item", code)) for code in codes]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_products(dealer: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	filters = _product_filters(dealer, search)
+	total = frappe.db.count("Item", filters=filters)
+	codes = frappe.get_all(
+		"Item", filters=filters, pluck="name", order_by="item_code asc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Item", code)) for code in codes],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -220,17 +257,29 @@ def update_product(item: str, patch: dict):
 
 
 @frappe.whitelist(methods=["GET"])
-def list_item_groups():
+def list_item_groups(search: str | None = None, limit: int = 20, offset: int = 0):
 	# is_group: 0 excludes the root ("All Item Groups") -- catalog/setup.py seeds
 	# every category as a leaf under that root, so this is the full, flat list of
 	# categories a product form should offer, with no separate detail endpoint
 	# needed (there's nothing more to a category than its name and parent).
+	limit, offset = clamp(limit, offset)
+	filters = {"is_group": 0}
+	if search:
+		filters["item_group_name"] = ["like", f"%{search}%"]
+	total = frappe.db.count("Item Group", filters=filters)
 	rows = frappe.get_all(
 		"Item Group",
-		filters={"is_group": 0},
+		filters=filters,
 		fields=["name", "item_group_name", "parent_item_group"],
 		order_by="item_group_name asc",
+		limit_start=offset,
+		limit_page_length=limit,
 	)
-	return [
-		{"id": r.name, "name": r.item_group_name, "parentItemGroup": r.parent_item_group} for r in rows
-	]
+	return {
+		"items": [
+			{"id": r.name, "name": r.item_group_name, "parentItemGroup": r.parent_item_group} for r in rows
+		],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}

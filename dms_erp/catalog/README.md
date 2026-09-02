@@ -13,7 +13,12 @@ catalog visibility. Implemented.
   (the leaf categories `catalog/setup.py` seeds; the root "All Item Groups" is
   excluded), for populating the category field on product forms. No new doctype
   or field, and no separate detail endpoint — a category has nothing beyond its
-  name and parent worth a second call for.
+  name and parent worth a second call for. `list_products` and `list_item_groups`
+  both take `search`/`limit`/`offset` and return `{"items", "total", "limit",
+  "offset"}` rather than a bare array (`dms_erp.pagination.clamp` caps `limit` at
+  100) — `reports/catalog_reports.py` needs the whole result set, not a page of
+  it, so it calls the unpaginated `list_all_products` instead of the whitelisted
+  endpoint.
 - **Dealer Catalog** (`dealer_catalog_api.py` + `doctype/dealer_catalog`) — a custom
   doctype (no ERPNext equivalent) mapping a dealer (`Customer`) to the set of items
   they're allowed to see. No assignment yet = full catalog visible, matching the

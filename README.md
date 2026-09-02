@@ -189,10 +189,11 @@ everyone can read.
 
 | Method | Notes |
 |---|---|
-| `dms_erp.catalog.api.list_products` | optional `dealer` param filters to that dealer's catalog (BRD §6.4) |
+| `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search` |
 | `dms_erp.catalog.api.get_product` | `item` (Item Code) |
 | `dms_erp.catalog.api.create_product` | write-restricted; also seeds a Pending `Item Price Proposal` |
 | `dms_erp.catalog.api.update_product` | write-restricted; `patch` is a partial `Product`-shaped dict |
+| `dms_erp.catalog.api.list_item_groups` | paginated; optional `search`; leaf `Item Group` categories only |
 | `dms_erp.catalog.dealer_catalog_api.catalog_for` | item codes visible to a dealer; full catalog if unassigned |
 | `dms_erp.catalog.dealer_catalog_api.is_visible` | single dealer+item check |
 | `dms_erp.catalog.dealer_catalog_api.set_product_visibility` | write-restricted |
@@ -254,13 +255,13 @@ Manager`). Everyone reads.
 
 | Method | Notes |
 |---|---|
-| `inquiry_api.list_inquiries` / `get_inquiry` | optional `dealer`/`status` filters |
+| `inquiry_api.list_inquiries` / `get_inquiry` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer`/`status`/`search` filters |
 | `inquiry_api.create_inquiry` | write-restricted; always starts `Open` |
 | `inquiry_api.update_inquiry` | write-restricted; `patch` is a partial `Inquiry`-shaped dict |
-| `quotation_api.list_quotations` / `get_quotation` | native Quotation |
+| `quotation_api.list_quotations` / `get_quotation` | native Quotation; paginated, optional `dealer`/`search` filters |
 | `quotation_api.create_quotation` | write-restricted; rejects items outside the dealer's catalog or with no approved price; rate = approved dealer price × (1 + markup%) |
 | `quotation_api.convert_to_order` | write-restricted; wraps ERPNext's native Quotation→Sales Order mapper |
-| `order_api.list_orders` / `get_order` | native Sales Order; optional `dealer`/`stage` filters |
+| `order_api.list_orders` / `get_order` | native Sales Order; paginated, optional `dealer`/`stage`/`search` filters |
 | `order_api.create_order` | write-restricted; direct Inquiry→Order (no markup) — the only other path is `convert_to_order` |
 | `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks |
 | `picking_api.list_pick_tasks` | optional `order` filter |

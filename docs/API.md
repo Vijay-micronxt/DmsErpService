@@ -245,26 +245,32 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
 
 #### GET `dms_erp.catalog.api.list_products`
 
-**List / search products**
+**List / search products** — paginated.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `dealer` | string | optional | if set, filtered through that dealer's catalog assignment AND current sellability (Phase 11) |
+| `search` | string | optional | substring match on product name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "PVT-6060", "code": "PVT-6060", "name": "Marbella Beige Vitrified 600x600",
-  "size": "600x600mm", "finish": "Glossy", "color": "Beige", "series": "Marbella",
-  "category": "Vitrified", "swatch": "#D8C7A8",
-  "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
-  "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
-  "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
-  "leadTimeDays": 21, "altItemId": null
-}]
+{
+  "items": [{
+    "id": "PVT-6060", "code": "PVT-6060", "name": "Marbella Beige Vitrified 600x600",
+    "size": "600x600mm", "finish": "Glossy", "color": "Beige", "series": "Marbella",
+    "category": "Vitrified", "swatch": "#D8C7A8",
+    "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
+    "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
+    "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
+    "leadTimeDays": 21, "altItemId": null
+  }],
+  "total": 214, "limit": 20, "offset": 0
+}
 ```
 
 > ⚠️ bay and lastSoldDays are stubs — a real item can span several bays (see Stock/Lots for the per-bay breakdown), and last-sold has no dedicated aggregation yet
@@ -283,7 +289,35 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
 **Response**
 
 ```json
-(same shape as one list_products row)
+(same shape as one row of list_products' "items")
+```
+
+
+#### GET `dms_erp.catalog.api.list_item_groups`
+
+**List / search product categories** — paginated. Backed by the native `Item Group`
+tree, filtered to the leaf categories `catalog/setup.py` seeds (the root "All Item
+Groups" is excluded). No separate detail endpoint — a category has nothing beyond
+its name and parent worth a second call for.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on category name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [
+    { "id": "Vitrified", "name": "Vitrified", "parentItemGroup": "All Item Groups" },
+    { "id": "Floor Tiles", "name": "Floor Tiles", "parentItemGroup": "All Item Groups" }
+  ],
+  "total": 4, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -500,7 +534,7 @@ Real custom doctype with full CRUD — the frontend's own creation flow is the t
 
 #### GET `dms_erp.sales.inquiry_api.list_inquiries`
 
-**List / search inquiries**
+**List / search inquiries** — paginated.
 
 **Params**
 
@@ -508,16 +542,22 @@ Real custom doctype with full CRUD — the frontend's own creation flow is the t
 |---|---|---|---|
 | `dealer` | string | optional |  |
 | `status` | string | optional | one of the 10 lifecycle states |
+| `search` | string | optional | substring match on item code |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "INQ-2026-00042", "number": "INQ-2026-00042", "date": "2026-08-29",
-  "dealerId": "CUST-0004", "productId": "PVT-6060", "qty": 60, "status": "Open",
-  "source": "WhatsApp", "expectedDelivery": "2026-09-05", "followUpDate": "2026-08-31",
-  "assignedTo": "priya@pacific.example", "remarks": null, "whatsappReplied": false
-}]
+{
+  "items": [{
+    "id": "INQ-2026-00042", "number": "INQ-2026-00042", "date": "2026-08-29",
+    "dealerId": "CUST-0004", "productId": "PVT-6060", "qty": 60, "status": "Open",
+    "source": "WhatsApp", "expectedDelivery": "2026-09-05", "followUpDate": "2026-08-31",
+    "assignedTo": "priya@pacific.example", "remarks": null, "whatsappReplied": false
+  }],
+  "total": 87, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -589,24 +629,30 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 
 #### GET `dms_erp.sales.quotation_api.list_quotations`
 
-**List / search quotations** — Excludes cancelled (amend-superseded) quotations.
+**List / search quotations** — paginated. Excludes cancelled (amend-superseded) quotations.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `dealer` | string | optional |  |
+| `search` | string | optional | substring match on quotation number |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "SQTN-2026-00011", "number": "SQTN-2026-00011", "date": "2026-08-29",
-  "dealerId": "CUST-0004", "validTill": "2026-09-05", "markupPct": 12, "freight": 1500,
-  "inquiryId": "INQ-2026-00042",
-  "lines": [{ "itemCode": "PVT-6060", "qty": 60, "rate": 627 }],
-  "total": 37620, "status": "Open"
-}]
+{
+  "items": [{
+    "id": "SQTN-2026-00011", "number": "SQTN-2026-00011", "date": "2026-08-29",
+    "dealerId": "CUST-0004", "validTill": "2026-09-05", "markupPct": 12, "freight": 1500,
+    "inquiryId": "INQ-2026-00042",
+    "lines": [{ "itemCode": "PVT-6060", "qty": 60, "rate": 627 }],
+    "total": 37620, "status": "Open"
+  }],
+  "total": 31, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -757,7 +803,7 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 
 #### GET `dms_erp.sales.order_api.list_orders`
 
-**List / search orders**
+**List / search orders** — paginated.
 
 **Params**
 
@@ -765,21 +811,27 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 |---|---|---|---|
 | `dealer` | string | optional |  |
 | `stage` | string | optional | Confirmed | Picking | Ready to Dispatch | Dispatched | Delivered | Cancelled |
+| `search` | string | optional | substring match on order number |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "SAL-ORD-2026-00033", "number": "SAL-ORD-2026-00033", "date": "2026-08-29",
-  "dealerId": "CUST-0004", "sourceType": "Quotation", "sourceRef": "SQTN-2026-00011",
-  "lines": [{ "itemCode": "PVT-6060", "qty": 60, "rate": 627 }],
-  "total": 37620, "stage": "Confirmed", "expectedDispatch": "2026-09-05",
-  "vehicle": null, "owner": "priya@pacific.example",
-  "history": [
-    { "stage": "Created", "at": "2026-08-29 10:14:02", "by": "priya@pacific.example", "note": "Converted from SQTN-2026-00011" },
-    { "stage": "Confirmed", "at": "2026-08-29 10:14:02", "by": "priya@pacific.example", "note": null }
-  ]
-}]
+{
+  "items": [{
+    "id": "SAL-ORD-2026-00033", "number": "SAL-ORD-2026-00033", "date": "2026-08-29",
+    "dealerId": "CUST-0004", "sourceType": "Quotation", "sourceRef": "SQTN-2026-00011",
+    "lines": [{ "itemCode": "PVT-6060", "qty": 60, "rate": 627 }],
+    "total": 37620, "stage": "Confirmed", "expectedDispatch": "2026-09-05",
+    "vehicle": null, "owner": "priya@pacific.example",
+    "history": [
+      { "stage": "Created", "at": "2026-08-29 10:14:02", "by": "priya@pacific.example", "note": "Converted from SQTN-2026-00011" },
+      { "stage": "Confirmed", "at": "2026-08-29 10:14:02", "by": "priya@pacific.example", "note": null }
+    ]
+  }],
+  "total": 58, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1984,7 +2036,7 @@ BRD "Reports and Dashboards" — the report half. Filterable, dealer/date-range/
 
 ```json
 {
-  "rows": [{ "id": "INQ-2026-00042", "dealerId": "CUST-0004", "productId": "PVT-6060", "qty": 60, "status": "Open", "...": "same shape as one list_inquiries row" }],
+  "rows": [{ "id": "INQ-2026-00042", "dealerId": "CUST-0004", "productId": "PVT-6060", "qty": 60, "status": "Open", "...": "same shape as one row of list_inquiries' items" }],
   "summary": { "total": 14, "byStatus": { "Open": 6, "Quoted": 3, "Closed": 5 } }
 }
 ```
