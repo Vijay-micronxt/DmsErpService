@@ -57,6 +57,26 @@ class TestProducts(FrappeTestCase):
 		price_record = pricing_api.get_price_record("PROD-TEST-A")
 		self.assertEqual(price_record["status"], "Pending")
 
+	def test_hsn_code_passes_through_on_create_and_update(self):
+		# gst_hsn_code only exists on Item when india_compliance is installed --
+		# not the case in this test environment, so this only verifies our own
+		# code threads the value through correctly, not that india_compliance's
+		# own validation accepts/requires it (untestable here either way).
+		product = catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			hsn_code="69072100",
+		)
+		self.assertEqual(product["hsnCode"], "69072100")
+
+		updated = catalog_api.update_product("PROD-TEST-A", {"hsnCode": "69072200"})
+		self.assertEqual(updated["hsnCode"], "69072200")
+
 	def test_create_product_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
