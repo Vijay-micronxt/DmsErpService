@@ -40,7 +40,7 @@ def _in_range(d, from_date, to_date) -> bool:
 def dealer_inquiry_report(dealer: str | None = None, status: str | None = None, from_date=None, to_date=None):
 	"""Every inquiry for a dealer (or across all dealers), with a status breakdown —
 	the BRD's "Dealer inquiry report"."""
-	rows = [r for r in inquiry_api.list_inquiries(dealer=dealer, status=status) if _in_range(r["date"], from_date, to_date)]
+	rows = [r for r in inquiry_api.list_all_inquiries(dealer=dealer, status=status) if _in_range(r["date"], from_date, to_date)]
 
 	by_status: dict[str, int] = {}
 	for r in rows:
@@ -56,7 +56,7 @@ def missed_demand_report(from_date=None, to_date=None):
 	the Phase 8 sales dashboard's single missedDemandValue number."""
 	rows = []
 	total_value = 0
-	for r in inquiry_api.list_inquiries():
+	for r in inquiry_api.list_all_inquiries():
 		if r["status"] not in MISSED_DEMAND_STATUSES or not _in_range(r["date"], from_date, to_date):
 			continue
 		price = get_dealer_price(r["productId"]) or 0
@@ -140,7 +140,7 @@ def duplicate_inquiry_report(window_days: int = DUPLICATE_INQUIRY_WINDOW_DAYS):
 	two or more still-open inquiries (not yet Converted to Order / Mapped to PO /
 	Rejected / Closed) for the same dealer and item, all logged within
 	`window_days` of each other."""
-	open_inquiries = [i for i in inquiry_api.list_inquiries() if i["status"] not in CLOSED_INQUIRY_STATUSES]
+	open_inquiries = [i for i in inquiry_api.list_all_inquiries() if i["status"] not in CLOSED_INQUIRY_STATUSES]
 
 	groups: dict[tuple, list] = {}
 	for i in open_inquiries:

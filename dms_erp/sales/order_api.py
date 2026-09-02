@@ -8,12 +8,16 @@ once a real dispatch/delivery step is in scope.
 An Order sourced directly from an Inquiry (no Quotation, no retail markup) is created
 here; an Order sourced from a Quotation goes through quotation_api.convert_to_order,
 which reuses ERPNext's own Quotation-to-Sales-Order mapper.
+
+list_orders is paginated (`limit`/`offset`) and returns `{"items", "total",
+"limit", "offset"}`, not a bare list.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import now_datetime, today
 
+from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
@@ -72,14 +76,27 @@ def finalize_new_order(so, source_type: str, source_ref: str, channel: str = "Re
 
 
 @frappe.whitelist(methods=["GET"])
-def list_orders(dealer: str | None = None, stage: str | None = None):
+def list_orders(
+	dealer: str | None = None, stage: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+):
+	limit, offset = clamp(limit, offset)
 	filters = {}
 	if dealer:
 		filters["customer"] = dealer
 	if stage:
 		filters["custom_fulfillment_stage"] = stage
-	names = frappe.get_all("Sales Order", filters=filters, pluck="name", order_by="creation desc")
-	return [_serialize(frappe.get_doc("Sales Order", name)) for name in names]
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
+	total = frappe.db.count("Sales Order", filters=filters)
+	names = frappe.get_all(
+		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Sales Order", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

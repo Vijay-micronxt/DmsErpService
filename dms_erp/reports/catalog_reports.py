@@ -5,7 +5,7 @@ the report-vs-dashboard distinction this whole `reports` module follows.
 
 import frappe
 
-from dms_erp.catalog.api import list_products
+from dms_erp.catalog.api import list_all_products
 from dms_erp.pricing.api import get_price_record, list_price_records
 from dms_erp.purchase.reorder_api import sales_velocity_by_item
 
@@ -59,7 +59,7 @@ def product_activity_report(item: str | None = None):
 	"""The BRD's "Product activity report" — a per-item rollup across four
 	modules (Inquiry, Sales Order, Stock Entry transfers, price-approval history)
 	that no single existing list/get function crosses on its own."""
-	products = list_products()
+	products = list_all_products()
 	if item:
 		products = [p for p in products if p["id"] == item]
 

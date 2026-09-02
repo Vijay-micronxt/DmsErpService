@@ -98,3 +98,27 @@ class TestOrderApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+
+	def test_list_orders_is_paginated_and_searchable(self):
+		dealer = make_dealer("Order Pagination Dealer")
+		item = make_item("ORDER-PAGINATION-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+
+		created = []
+		for _ in range(3):
+			inquiry = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="Phone")
+			created.append(
+				order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+			)
+
+		page = order_api.list_orders(dealer=dealer, limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+
+		next_page = order_api.list_orders(dealer=dealer, limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)
+
+		found = order_api.list_orders(dealer=dealer, search=created[0]["id"])
+		self.assertEqual(found["total"], 1)
+		self.assertEqual(found["items"][0]["id"], created[0]["id"])

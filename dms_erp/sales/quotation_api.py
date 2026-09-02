@@ -19,6 +19,9 @@ one line asked for and leaving the rest stale — then insert and resubmit. The
 quotation's `id` changes on every edit, same as amending any other submitted
 ERPNext document; callers should always use the `id` a write endpoint returns, not
 the one they started with.
+
+list_quotations is paginated (`limit`/`offset`) and returns `{"items", "total",
+"limit", "offset"}`, not a bare list.
 """
 
 import frappe
@@ -27,6 +30,7 @@ from frappe.utils import add_days, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable
+from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.warehouse.utils import default_company
@@ -101,14 +105,25 @@ def _amend_with_lines(doc, lines: list[dict]) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_quotations(dealer: str | None = None):
+def list_quotations(dealer: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
 	# Excludes cancelled quotations — an edited (Phase 12 amended) quotation leaves
 	# its pre-edit version behind as docstatus=2, which is history, not a live document.
+	limit, offset = clamp(limit, offset)
 	filters = {"quotation_to": "Customer", "docstatus": ["!=", 2]}
 	if dealer:
 		filters["party_name"] = dealer
-	names = frappe.get_all("Quotation", filters=filters, pluck="name", order_by="creation desc")
-	return [_serialize(frappe.get_doc("Quotation", name)) for name in names]
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
+	total = frappe.db.count("Quotation", filters=filters)
+	names = frappe.get_all(
+		"Quotation", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Quotation", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

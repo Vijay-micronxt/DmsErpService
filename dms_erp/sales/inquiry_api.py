@@ -19,6 +19,10 @@ since a requirement here is just a PO with a `custom_source_inquiry` link back.
 create_quotation` always has — dealer-assigned visibility and current sellability —
 so a hidden or Pulled Back item is rejected here too, not just at the Quotation
 step further down the funnel.
+
+list_inquiries is paginated (`limit`/`offset`) and returns `{"items", "total",
+"limit", "offset"}`, not a bare list -- reports need the whole result set, so
+they call list_all_inquiries (unpaginated, internal-only) instead.
 """
 
 import frappe
@@ -26,6 +30,7 @@ from frappe import _
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable
+from dms_erp.pagination import clamp
 
 INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
@@ -54,15 +59,41 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_inquiries(dealer: str | None = None, status: str | None = None):
+def _inquiry_filters(dealer: str | None, status: str | None, search: str | None) -> dict:
 	filters = {}
 	if dealer:
 		filters["dealer"] = dealer
 	if status:
 		filters["status"] = status
+	if search:
+		filters["item"] = ["like", f"%{search}%"]
+	return filters
+
+
+def list_all_inquiries(dealer: str | None = None, status: str | None = None, search: str | None = None) -> list[dict]:
+	"""Unpaginated -- for internal callers (reports) that need the full result set,
+	not a page of it. list_inquiries (the whitelisted endpoint) is the paginated one."""
+	filters = _inquiry_filters(dealer, status, search)
 	names = frappe.get_all("Inquiry", filters=filters, pluck="name", order_by="creation desc")
 	return [_serialize(frappe.get_doc("Inquiry", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_inquiries(
+	dealer: str | None = None, status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+):
+	limit, offset = clamp(limit, offset)
+	filters = _inquiry_filters(dealer, status, search)
+	total = frappe.db.count("Inquiry", filters=filters)
+	names = frappe.get_all(
+		"Inquiry", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Inquiry", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

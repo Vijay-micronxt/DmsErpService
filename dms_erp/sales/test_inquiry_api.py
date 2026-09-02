@@ -72,3 +72,27 @@ class TestInquiryApi(FrappeTestCase):
 
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=5, source="Phone")
+
+	def test_list_inquiries_is_paginated_and_searchable(self):
+		dealer = make_dealer("Inquiry Pagination Dealer")
+		for _ in range(3):
+			inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=1, source="Phone")
+
+		page = inquiry_api.list_inquiries(dealer=dealer, limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		next_page = inquiry_api.list_inquiries(dealer=dealer, limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)
+
+		found = inquiry_api.list_inquiries(dealer=dealer, search=self.item)
+		self.assertEqual(found["total"], 3)
+
+	def test_list_all_inquiries_returns_the_full_unpaginated_set(self):
+		dealer = make_dealer("Inquiry Unpaginated Dealer")
+		for _ in range(3):
+			inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=1, source="Phone")
+
+		self.assertEqual(len(inquiry_api.list_all_inquiries(dealer=dealer)), 3)
