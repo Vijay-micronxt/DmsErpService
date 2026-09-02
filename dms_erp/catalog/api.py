@@ -14,6 +14,13 @@ because it needs Sales history (Phase 5).
 
 Creating/editing item masters and publishing a launch price are Purchase/Management
 actions per the BRD flow; Sales/Warehouse only read the catalog.
+
+hsnCode is a third category, alongside "native ERPNext field" and "our own Custom
+Field": it's neither — gst_hsn_code only exists on Item when the india_compliance
+app (GST/India tax compliance) is installed on a given site, which mandates it on
+every Item via its own validate hook. Passed straight through as optional here
+(getattr'd defensively on read) so a site with india_compliance installed can supply
+it, without requiring it or assuming its existence on a site without that app.
 """
 
 import frappe
@@ -90,6 +97,11 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
 		"leadTimeDays": item_doc.lead_time_days,
 		"altItemId": _get_alt_item(item_doc.name),
+		# gst_hsn_code isn't a dms_erp field at all -- it's added to Item by the
+		# india_compliance app when installed (mandatory there for GST invoicing
+		# on Indian sites). getattr() rather than direct access since the field
+		# simply doesn't exist in the doc's meta on a site without that app.
+		"hsnCode": getattr(item_doc, "gst_hsn_code", None),
 	}
 
 
@@ -126,6 +138,7 @@ def create_product(
 	weight_per_box_kg: float = 0,
 	lead_time_days: int = 0,
 	alt_item: str | None = None,
+	hsn_code: str | None = None,
 ):
 	_assert_can_manage_products()
 
@@ -150,6 +163,11 @@ def create_product(
 			"custom_sqft_per_box": sqft_per_box,
 			"custom_weight_per_box_kg": weight_per_box_kg,
 			"lead_time_days": lead_time_days,
+			# Only meaningful (and only mandatory) when india_compliance is
+			# installed -- harmless to set on a site without it (Frappe just
+			# ignores a value for a field that doesn't exist in the doctype's
+			# meta on that site).
+			"gst_hsn_code": hsn_code,
 		}
 	)
 	item.insert(ignore_permissions=True)
@@ -185,6 +203,7 @@ def update_product(item: str, patch: dict):
 		"sqftPerBox": "custom_sqft_per_box",
 		"weightPerBoxKg": "custom_weight_per_box_kg",
 		"leadTimeDays": "lead_time_days",
+		"hsnCode": "gst_hsn_code",
 	}
 
 	doc = frappe.get_doc("Item", item)
