@@ -92,20 +92,29 @@ def claim_ref_for_lot(bay_name: str, item_code: str, batch_no: str) -> str | Non
 	"""Trace a lot back through Stock Ledger Entry to the Stock Entry that moved it
 	into this bay, and return its `custom_claim_ref` (Phase 6) if one was filed.
 	Shared by `list_stock_lots` (per-lot `claimRef`) and the Phase 8 dashboard's
-	"damage awaiting claim" count, so both use the same trace."""
-	voucher_nos = frappe.get_all(
-		"Stock Ledger Entry",
-		filters={
-			"warehouse": bay_name,
-			"item_code": item_code,
-			"batch_no": batch_no,
-			"voucher_type": "Stock Entry",
-			"actual_qty": [">", 0],
-		},
-		pluck="voucher_no",
+	"damage awaiting claim" count, so both use the same trace.
+
+	Same v15 Serial and Batch Bundle wrinkle as `list_stock_lots` (see its
+	docstring) — `batch_no` lives on the bundle's Serial and Batch Entry rows,
+	not on Stock Ledger Entry directly, once a site is on that batch-tracking
+	model, so this needs the same left join rather than filtering `batch_no`
+	on Stock Ledger Entry directly."""
+	rows = frappe.db.sql(
+		"""
+		select distinct sle.voucher_no as voucher_no
+		from `tabStock Ledger Entry` sle
+		left join `tabSerial and Batch Entry` sbe on sbe.parent = sle.serial_and_batch_bundle
+		where sle.warehouse = %(warehouse)s
+			and sle.item_code = %(item_code)s
+			and coalesce(sbe.batch_no, sle.batch_no) = %(batch_no)s
+			and sle.voucher_type = 'Stock Entry'
+			and coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty) > 0
+		""",
+		{"warehouse": bay_name, "item_code": item_code, "batch_no": batch_no},
+		as_dict=True,
 	)
-	for voucher_no in voucher_nos:
-		claim_ref = frappe.db.get_value("Stock Entry", voucher_no, "custom_claim_ref")
+	for row in rows:
+		claim_ref = frappe.db.get_value("Stock Entry", row.voucher_no, "custom_claim_ref")
 		if claim_ref:
 			return claim_ref
 	return None
@@ -115,8 +124,18 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	"""Live aggregate of on-hand qty by item+warehouse+batch, sourced from Stock
 	Ledger Entry (Bin has no batch dimension). Zero/negative-cleared batches are
 	dropped, matching how the frontend's `lots` only ever lists what's physically
-	present."""
-	conditions = ["sle.is_cancelled = 0", "sle.batch_no != ''"]
+	present.
+
+	ERPNext v15 moved batch tracking off the legacy `Stock Ledger Entry.batch_no`
+	column and onto `Serial and Batch Bundle` (child table `Serial and Batch
+	Entry`, one row per batch in the bundle, linked via `sle.serial_and_batch_bundle`).
+	`batch_no` is left blank on every such entry now, so filtering on it directly
+	silently returned nothing. This left-joins the bundle's per-batch rows and
+	falls back to the legacy column for any entry that still uses it directly —
+	`Serial and Batch Entry.qty` is always positive with a separate `is_outward`
+	flag, unlike `sle.actual_qty` which is signed, so the outward case is negated
+	to match."""
+	conditions = ["sle.is_cancelled = 0"]
 	values: dict = {}
 	if bay:
 		conditions.append("sle.warehouse = %(warehouse)s")
@@ -130,13 +149,15 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 		select
 			sle.warehouse as bay,
 			sle.item_code as item_code,
-			sle.batch_no as batch_no,
-			sum(sle.actual_qty) as boxes,
+			coalesce(sbe.batch_no, sle.batch_no) as batch_no,
+			sum(coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty)) as boxes,
 			min(sle.posting_date) as stored_at
 		from `tabStock Ledger Entry` sle
+		left join `tabSerial and Batch Entry` sbe on sbe.parent = sle.serial_and_batch_bundle
 		where {' and '.join(conditions)}
-		group by sle.warehouse, sle.item_code, sle.batch_no
-		having sum(sle.actual_qty) > 0
+			and (sbe.batch_no is not null or (sle.batch_no is not null and sle.batch_no != ''))
+		group by sle.warehouse, sle.item_code, coalesce(sbe.batch_no, sle.batch_no)
+		having sum(coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty)) > 0
 		""",
 		values,
 		as_dict=True,
