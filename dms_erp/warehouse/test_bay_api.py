@@ -22,14 +22,24 @@ class TestBayApi(FrappeTestCase):
 		self.assertEqual(bay["freeBoxes"], 900)
 		self.assertEqual(bay["occupancyPct"], 0)
 
+	def test_list_warehouse_groups_returns_the_two_physical_warehouses(self):
+		groups = bay_api.list_warehouse_groups()
+		names = {g["name"] for g in groups}
+		self.assertIn("Pacific Main — Morbi", names)
+		self.assertIn("Pacific Buffer — Wankaner", names)
+
+		main = next(g for g in groups if g["name"] == "Pacific Main — Morbi")
+		self.assertEqual(main["id"], frappe.db.get_value("Warehouse", {"warehouse_name": "Pacific Main — Morbi"}, "name"))
+
 	def test_create_bay_grid_creates_sequential_codes(self):
+		main_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Main — Morbi")
 		result = bay_api.create_bay_grid(
 			prefix="GRID",
 			count=3,
 			start_at=1,
 			bay_type="main",
 			dimensions="32x6",
-			parent_warehouse=frappe.db.get_value("Warehouse", {"warehouse_name": "Pacific Main — Morbi"}, "name"),
+			parent_warehouse=main_warehouse,
 			zone="Zone-G",
 		)
 		self.assertEqual(result["created"], 3)

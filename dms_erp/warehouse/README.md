@@ -7,7 +7,12 @@ in this module.
 - **Bays** (`bay_api.py`) — ERPNext `Warehouse`, nested under the two physical
   warehouses ("Pacific Main — Morbi", "Pacific Buffer — Wankaner"). Custom Fields
   only for what Warehouse has no equivalent for: bay type, dimensions, capacity,
-  suitable categories, zone/row, a 3-state bay status.
+  suitable categories, zone/row, a 3-state bay status. `list_warehouse_groups`
+  is the read endpoint for those two physical warehouses themselves — `create_bay`'s
+  `parent_warehouse` wants a group's raw, ERPNext-autonamed `name` (company-
+  abbreviation-suffixed, e.g. "Pacific Main — Morbi - PI"), not its clean
+  `warehouse_name`, and nothing else exposed that raw id (`serialize_bay` only
+  ever resolves it the other way, back to the clean name).
 - **Stock / lots** (`stock_api.py`, `utils.list_stock_lots`) — a live aggregate over
   `Stock Ledger Entry` grouped by item+warehouse+batch. Not a doctype — Bin has no
   batch dimension, so batch-wise on-hand qty is read straight from the ledger. Each
