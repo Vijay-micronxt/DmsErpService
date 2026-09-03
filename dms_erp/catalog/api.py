@@ -111,7 +111,7 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 	}
 
 
-def _product_filters(dealer: str | None, search: str | None) -> dict:
+def _product_filters(dealer: str | None, search: str | None, category: str | None = None, status: str | None = None) -> dict:
 	from dms_erp.catalog.dealer_catalog_api import catalog_for
 
 	filters = {}
@@ -123,21 +123,34 @@ def _product_filters(dealer: str | None, search: str | None) -> dict:
 		filters["name"] = ["in", catalog_for(dealer) or [""]]
 	if search:
 		filters["item_name"] = ["like", f"%{search}%"]
+	if category:
+		filters["item_group"] = category
+	if status:
+		filters["custom_discontinuation_status"] = status
 	return filters
 
 
-def list_all_products(dealer: str | None = None, search: str | None = None) -> list[dict]:
+def list_all_products(
+	dealer: str | None = None, search: str | None = None, category: str | None = None, status: str | None = None
+) -> list[dict]:
 	"""Unpaginated -- for internal callers (reports) that need the full result set,
 	not a page of it. list_products (the whitelisted endpoint) is the paginated one."""
-	filters = _product_filters(dealer, search)
+	filters = _product_filters(dealer, search, category, status)
 	codes = frappe.get_all("Item", filters=filters, pluck="name", order_by="item_code asc")
 	return [_serialize(frappe.get_doc("Item", code)) for code in codes]
 
 
 @frappe.whitelist(methods=["GET"])
-def list_products(dealer: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+def list_products(
+	dealer: str | None = None,
+	search: str | None = None,
+	category: str | None = None,
+	status: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+):
 	limit, offset = clamp(limit, offset)
-	filters = _product_filters(dealer, search)
+	filters = _product_filters(dealer, search, category, status)
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
 		"Item", filters=filters, pluck="name", order_by="item_code asc", limit_start=offset, limit_page_length=limit

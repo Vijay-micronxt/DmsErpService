@@ -110,3 +110,20 @@ class TestBayApi(FrappeTestCase):
 
 		codes = {b["code"] for b in bay_api.list_all_bays(search="ALL-B-")}
 		self.assertEqual(codes, {"ALL-B-01", "ALL-B-02", "ALL-B-03"})
+
+	def test_list_bays_filters_by_type_status_and_parent_warehouse(self):
+		main_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Main — Morbi")
+		buffer_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Buffer — Wankaner")
+
+		make_bay("FILTER-MAIN-01", bay_type="main", parent_warehouse=main_warehouse)
+		make_bay("FILTER-BUFFER-01", bay_type="buffer", parent_warehouse=buffer_warehouse)
+		bay_api.update_bay("FILTER-MAIN-01", {"status": "reserved"})
+
+		by_type = bay_api.list_bays(bay_type="buffer", search="FILTER-")
+		self.assertEqual({b["code"] for b in by_type["items"]}, {"FILTER-BUFFER-01"})
+
+		by_status = bay_api.list_bays(status="reserved", search="FILTER-")
+		self.assertEqual({b["code"] for b in by_status["items"]}, {"FILTER-MAIN-01"})
+
+		by_parent = bay_api.list_bays(parent_warehouse=buffer_warehouse, search="FILTER-")
+		self.assertEqual({b["code"] for b in by_parent["items"]}, {"FILTER-BUFFER-01"})

@@ -129,6 +129,37 @@ class TestProducts(FrappeTestCase):
 		all_products = catalog_api.list_all_products()
 		self.assertGreaterEqual(len(all_products), 2)
 
+	def test_list_products_filters_by_category_and_status(self):
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		catalog_api.create_product(
+			code="PROD-TEST-B",
+			name="Another Product",
+			category="Floor Tiles",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		catalog_api.update_product("PROD-TEST-B", {"status": "Pulled Back"})
+
+		vitrified_only = catalog_api.list_products(category="Vitrified")
+		codes = {p["code"] for p in vitrified_only["items"]}
+		self.assertIn("PROD-TEST-A", codes)
+		self.assertNotIn("PROD-TEST-B", codes)
+
+		pulled_back_only = catalog_api.list_products(status="Pulled Back")
+		codes = {p["code"] for p in pulled_back_only["items"]}
+		self.assertIn("PROD-TEST-B", codes)
+		self.assertNotIn("PROD-TEST-A", codes)
+
 	def test_create_product_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
