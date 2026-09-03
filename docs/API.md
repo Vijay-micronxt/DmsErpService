@@ -1055,6 +1055,24 @@ _No parameters._
 
 Bays are native ERPNext Warehouse records, nested under two physical warehouses. No bespoke bay table.
 
+#### GET `dms_erp.warehouse.bay_api.list_warehouse_groups`
+
+**List bay groups (physical warehouses)** — for populating `create_bay`'s `parent_warehouse`. A group warehouse's real `name` isn't its clean display name — ERPNext autonames it with a company-abbreviation suffix (e.g. `"Pacific Main — Morbi - PI"`) — so this is the only place that raw id is exposed; `list_bays`/`get_bay_detail` resolve it back to the clean name on the way out, not in.
+
+**Params**
+
+_No parameters._
+
+**Response**
+
+```json
+[
+  { "id": "Pacific Buffer — Wankaner - PI", "name": "Pacific Buffer — Wankaner" },
+  { "id": "Pacific Main — Morbi - PI", "name": "Pacific Main — Morbi" }
+]
+```
+
+
 #### GET `dms_erp.warehouse.bay_api.list_bays`
 
 **List bays**

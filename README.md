@@ -219,6 +219,7 @@ read.
 
 | Method | Notes |
 |---|---|
+| `bay_api.list_warehouse_groups` | the two physical warehouses `create_bay`'s `parent_warehouse` needs — its `id` is the ERPNext-autonamed raw name, not the clean display name |
 | `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`) |
 | `bay_api.create_bay` / `create_bay_grid` / `update_bay` / `delete_bay` | write-restricted; delete relies on ERPNext's own refusal to delete a Warehouse with stock |
 | `stock_api.list_stock` | optional `bay`/`item` filters; live aggregate over Stock Ledger Entry, not a stored table |
