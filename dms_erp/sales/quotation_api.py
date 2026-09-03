@@ -221,7 +221,12 @@ def update_quotation_status(quotation: str, status: str, lost_reasons: list[str]
 	the amend-driven states, etc.) is a side effect of some other action, not
 	something a caller sets by hand. Reuses ERPNext's own `declare_enquiry_lost`
 	rather than writing `status` on a submitted document ourselves; that's the
-	native, safe way this doctype supports a manual post-submit status change."""
+	native, safe way this doctype supports a manual post-submit status change.
+
+	`declare_enquiry_lost` is a whitelisted Quotation document method, not a
+	standalone importable function — it must be called on a loaded doc instance,
+	with each reason as a {"lost_reason": ...} dict matching an existing
+	Quotation Lost Reason record, not a plain string."""
 	_assert_can_manage_quotations()
 
 	if status != "Lost":
@@ -230,9 +235,12 @@ def update_quotation_status(quotation: str, status: str, lost_reasons: list[str]
 			frappe.ValidationError,
 		)
 
-	from erpnext.selling.doctype.quotation.quotation import declare_enquiry_lost
-
-	declare_enquiry_lost(quotation, lost_reasons or [], detailed_reason)
+	doc = frappe.get_doc("Quotation", quotation)
+	doc.declare_enquiry_lost(
+		lost_reasons_list=[{"lost_reason": reason} for reason in (lost_reasons or [])],
+		competitors=[],
+		detailed_reason=detailed_reason,
+	)
 	return get_quotation(quotation)
 
 
