@@ -23,9 +23,8 @@ from dms_erp.purchase.reorder_api import reorder_suggestions
 from dms_erp.sales.picking_api import list_pick_tasks
 from dms_erp.warehouse.bay_api import list_bays
 from dms_erp.warehouse.inward_api import list_trucks
-from dms_erp.warehouse.utils import default_company
 from dms_erp.warehouse.transfer_api import list_transfers
-from dms_erp.warehouse.utils import list_stock_lots
+from dms_erp.warehouse.utils import default_company, list_stock_lots
 
 SALES_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 WAREHOUSE_READ_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}

@@ -177,9 +177,16 @@ def remaining_ready_qty_for_line(po_item: str, ready_qty: float | None = None, e
 	counted here (Dispatched is already covered via its Inward Trucks;
 	Completed/Cancelled reserve nothing). `exclude_pickup_run` lets a run
 	re-validate its own edited lines without double-counting its own
-	not-yet-saved reservation."""
+	not-yet-saved reservation.
+
+	When `ready_qty` isn't supplied (the pickup_run_api validation path, not
+	the read-only listing below which always passes it in), this locks the
+	Purchase Order Item row (`for_update=True`) for the rest of the caller's
+	transaction -- without it, two concurrent requests booking the same line
+	can both read the same booked/reserved sums before either commits its own
+	reservation, and both pass validation, over-booking the line."""
 	if ready_qty is None:
-		ready_qty = frappe.db.get_value("Purchase Order Item", po_item, "custom_ready_qty") or 0
+		ready_qty = frappe.db.get_value("Purchase Order Item", po_item, "custom_ready_qty", for_update=True) or 0
 
 	booked = frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (po_item,))[0][0]
 
