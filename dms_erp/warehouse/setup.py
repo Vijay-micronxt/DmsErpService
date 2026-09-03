@@ -1,11 +1,11 @@
 """Idempotent install/migrate-time setup for the warehouse module.
 
-Per the architecture decision, bays are ERPNext Warehouses (nested under one of the
-two physical warehouses), not a custom stock model — so Bin/Stock Ledger Entry stay
-the single source of truth for on-hand quantities everywhere in this module. Only
-the attributes ERPNext's Warehouse doctype has no equivalent for (bay type,
-dimensions, capacity, suitable categories, zone/row, a 3-state bay status) become
-Custom Fields, mirroring how catalog/setup.py extended Item in Phase 2.
+Per the architecture decision, bays are ERPNext Warehouses (nested under a physical
+warehouse), not a custom stock model — so Bin/Stock Ledger Entry stay the single
+source of truth for on-hand quantities everywhere in this module. Only the
+attributes ERPNext's Warehouse doctype has no equivalent for (bay type, dimensions,
+capacity, suitable categories, zone/row, a 3-state bay status) become Custom
+Fields, mirroring how catalog/setup.py extended Item in Phase 2.
 
 Stock Entry (native, used for Phase 3 transfers) similarly only gets custom fields
 for the handful of Pacific-specific attributes (transfer type/reason, damage type,
@@ -17,7 +17,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from dms_erp.catalog.setup import ITEM_GROUPS
 
-# Matches pacific-tileflow's warehouses[] in bay-master.ts.
+# Matches pacific-tileflow's warehouses[] in bay-master.ts -- the starting set, not
+# a hard limit. A site isn't restricted to these two: bay_api.create_warehouse_group
+# creates further physical warehouses at runtime, the same way create_bay creates a
+# bay under one.
 PHYSICAL_WAREHOUSES = ["Pacific Main — Morbi", "Pacific Buffer — Wankaner"]
 
 BAY_TYPES = ["main", "buffer", "damage", "insurance_claim", "display", "blocked"]

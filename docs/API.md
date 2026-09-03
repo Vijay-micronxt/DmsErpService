@@ -1053,7 +1053,7 @@ _No parameters._
 
 ## Warehouse — Bay Master
 
-Bays are native ERPNext Warehouse records, nested under two physical warehouses. No bespoke bay table.
+Bays are native ERPNext Warehouse records, nested under a physical warehouse (a "warehouse group"). No bespoke bay table. The physical-warehouse count isn't fixed — "Pacific Main — Morbi" and "Pacific Buffer — Wankaner" are just the initial seed (`warehouse/setup.py`'s `PHYSICAL_WAREHOUSES`); `create_warehouse_group` adds more at runtime.
 
 #### GET `dms_erp.warehouse.bay_api.list_warehouse_groups`
 
@@ -1070,6 +1070,23 @@ _No parameters._
   { "id": "Pacific Buffer — Wankaner - PI", "name": "Pacific Buffer — Wankaner" },
   { "id": "Pacific Main — Morbi - PI", "name": "Pacific Main — Morbi" }
 ]
+```
+
+
+#### POST `dms_erp.warehouse.bay_api.create_warehouse_group`
+
+**Create a bay group (physical warehouse)** — Warehouse/Management only. No `parent_warehouse` param — a group sits at the root, unlike a bay.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | required | e.g. "Pacific Overflow — Rajkot" |
+
+**Response**
+
+```json
+{ "id": "Pacific Overflow — Rajkot - PI", "name": "Pacific Overflow — Rajkot" }
 ```
 
 
