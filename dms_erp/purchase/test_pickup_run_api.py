@@ -77,6 +77,15 @@ class TestPickupRunApi(FrappeTestCase):
 				supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line, "qty": 100}]
 			)
 
+	def test_rejects_two_lines_in_one_request_that_together_overbook_the_same_po_line(self):
+		line = self._ready_line(ready_qty=200)
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_pickup_run(
+				supplier=self.supplier,
+				vehicle_type=self.big_truck["id"],
+				lines=[{"purchase_order_item": line, "qty": 150}, {"purchase_order_item": line, "qty": 150}],
+			)
+
 	def test_add_pickup_run_line_recomputes_total_and_rejects_once_dispatched(self):
 		line1 = self._ready_line(ready_qty=300)
 		line2 = self._ready_line(ready_qty=300)
