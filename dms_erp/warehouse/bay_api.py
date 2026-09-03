@@ -1,10 +1,16 @@
 """Bay master (BRD §10) — bays are ERPNext Warehouses (see warehouse/setup.py and
 warehouse/utils.py for the mapping and serialization).
+
+list_bays is paginated (`limit`/`offset`, via dms_erp.pagination.clamp) and
+returns `{"items", "total", "limit", "offset"}`, not a bare list -- reports and
+the warehouse dashboard need the whole result set, so they call list_all_bays
+(unpaginated, internal-only) instead of the whitelisted endpoint.
 """
 
 import frappe
 from frappe import _
 
+from dms_erp.pagination import clamp
 from dms_erp.warehouse.utils import CAPACITY_FOR, default_company, get_bay, serialize_bay
 
 BAY_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
@@ -60,10 +66,36 @@ def create_warehouse_group(name: str):
 	return {"id": group.name, "name": group.warehouse_name}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_bays():
-	names = frappe.get_all("Warehouse", filters={"is_group": 0, "custom_bay_code": ["!=", ""]}, pluck="name")
+def _bay_filters(search: str | None) -> dict:
+	filters = {"is_group": 0}
+	# search's LIKE pattern already can't match an empty string, so it doubles as
+	# the "has a real bay code" exclusion the no-search case needs explicitly.
+	filters["custom_bay_code"] = ["like", f"%{search}%"] if search else ["!=", ""]
+	return filters
+
+
+def list_all_bays(search: str | None = None) -> list[dict]:
+	"""Unpaginated -- for internal callers (reports, dashboard) that need the full
+	result set, not a page of it. list_bays (the whitelisted endpoint) is the
+	paginated one."""
+	names = frappe.get_all("Warehouse", filters=_bay_filters(search), pluck="name")
 	return [serialize_bay(frappe.get_doc("Warehouse", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_bays(search: str | None = None, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	filters = _bay_filters(search)
+	total = frappe.db.count("Warehouse", filters=filters)
+	names = frappe.get_all(
+		"Warehouse", filters=filters, pluck="name", order_by="custom_bay_code asc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [serialize_bay(frappe.get_doc("Warehouse", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

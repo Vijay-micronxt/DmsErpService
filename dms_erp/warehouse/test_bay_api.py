@@ -86,3 +86,27 @@ class TestBayApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			bay_api.update_bay("TEST-A-03", {"status": "blocked"})
+
+	def test_list_bays_is_paginated_and_searchable(self):
+		for code in ("PAGE-B-01", "PAGE-B-02", "PAGE-B-03"):
+			make_bay(code)
+
+		page = bay_api.list_bays(search="PAGE-B-", limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		next_page = bay_api.list_bays(search="PAGE-B-", limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)
+
+		found = bay_api.list_bays(search="PAGE-B-02")
+		self.assertEqual(found["total"], 1)
+		self.assertEqual(found["items"][0]["code"], "PAGE-B-02")
+
+	def test_list_all_bays_returns_the_full_unpaginated_set(self):
+		for code in ("ALL-B-01", "ALL-B-02", "ALL-B-03"):
+			make_bay(code)
+
+		codes = {b["code"] for b in bay_api.list_all_bays(search="ALL-B-")}
+		self.assertEqual(codes, {"ALL-B-01", "ALL-B-02", "ALL-B-03"})

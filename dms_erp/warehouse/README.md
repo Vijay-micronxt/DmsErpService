@@ -13,7 +13,11 @@ in this module.
   `parent_warehouse` wants a group's raw, ERPNext-autonamed `name` (company-
   abbreviation-suffixed, e.g. "Pacific Main — Morbi - PI"), not its clean
   `warehouse_name`, and nothing else exposed that raw id (`serialize_bay` only
-  ever resolves it the other way, back to the clean name).
+  ever resolves it the other way, back to the clean name). `list_bays` itself is
+  paginated (`search`/`limit`/`offset`, `{"items", "total", "limit", "offset"}`)
+  — reports and the warehouse dashboard need the whole result set, not a page of
+  it, so they call the unpaginated `list_all_bays` instead of the whitelisted
+  endpoint.
 - **Stock / lots** (`stock_api.py`, `utils.list_stock_lots`) — a live aggregate over
   `Stock Ledger Entry` grouped by item+warehouse+batch. Not a doctype — Bin has no
   batch dimension, so batch-wise on-hand qty is read straight from the ledger. Each
