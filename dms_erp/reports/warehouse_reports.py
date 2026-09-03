@@ -14,7 +14,7 @@ from frappe.utils import getdate, today
 
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, SALES_VELOCITY_WINDOW_DAYS, sales_velocity_by_item
-from dms_erp.warehouse.bay_api import list_bays
+from dms_erp.warehouse.bay_api import list_all_bays
 from dms_erp.warehouse.utils import list_stock_lots, total_stock_for_item
 
 DISPLAY_BAY_TYPE = "display"
@@ -27,7 +27,7 @@ def bay_occupancy_report(warehouse: str | None = None, bay_type: str | None = No
 	"""Every bay's occupancy — the BRD's "Bay occupancy report". `list_bays` already
 	returns occupiedBoxes/occupancyPct/freeBoxes per bay; this just adds the
 	warehouse/type filters and a fleet-wide summary a report screen wants."""
-	rows = list_bays()
+	rows = list_all_bays()
 	if warehouse:
 		rows = [r for r in rows if r["warehouse"] == warehouse]
 	if bay_type:
@@ -51,7 +51,7 @@ def visual_stock_balance(warehouse: str | None = None):
 	balance". Shaped for a bay-grid/heatmap UI: the "visual" part is a frontend
 	rendering job over data that's otherwise identical to bay_occupancy_report plus
 	list_stock grouped by bay."""
-	bays = list_bays()
+	bays = list_all_bays()
 	if warehouse:
 		bays = [b for b in bays if b["warehouse"] == warehouse]
 
@@ -118,7 +118,7 @@ def display_replacement_suggestions():
 	Retail sales) or past Active in the discontinuation lifecycle, suggests the
 	fastest-moving currently-sellable item in the same category that isn't
 	already on display."""
-	display_bay_ids = {b["id"] for b in list_bays() if b["type"] == DISPLAY_BAY_TYPE}
+	display_bay_ids = {b["id"] for b in list_all_bays() if b["type"] == DISPLAY_BAY_TYPE}
 	if not display_bay_ids:
 		return []
 

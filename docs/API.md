@@ -1094,21 +1094,28 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 
 #### GET `dms_erp.warehouse.bay_api.list_bays`
 
-**List bays**
+**List / search bays** — paginated.
 
 **Params**
 
-_No parameters._
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on bay code |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "Main Bay A-01 - PTC", "code": "A-01", "name": "Main Bay A-01",
-  "warehouse": "Pacific Main — Morbi", "type": "main", "dimensions": "36x8",
-  "capacityBoxes": 900, "suitableCategories": ["Vitrified"], "status": "active",
-  "zone": "A", "row": "R1", "occupiedBoxes": 640, "occupancyPct": 71, "freeBoxes": 260
-}]
+{
+  "items": [{
+    "id": "Main Bay A-01 - PTC", "code": "A-01", "name": "Main Bay A-01",
+    "warehouse": "Pacific Main — Morbi", "type": "main", "dimensions": "36x8",
+    "capacityBoxes": 900, "suitableCategories": ["Vitrified"], "status": "active",
+    "zone": "A", "row": "R1", "occupiedBoxes": 640, "occupancyPct": 71, "freeBoxes": 260
+  }],
+  "total": 48, "limit": 20, "offset": 0
+}
 ```
 
 

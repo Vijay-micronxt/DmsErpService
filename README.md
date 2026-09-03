@@ -221,7 +221,7 @@ read.
 |---|---|
 | `bay_api.list_warehouse_groups` | the physical warehouses `create_bay`'s `parent_warehouse` needs — its `id` is the ERPNext-autonamed raw name, not the clean display name; optional `search`, no pagination |
 | `bay_api.create_warehouse_group` | write-restricted; adds another physical warehouse — the seeded two aren't a hard limit |
-| `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`) |
+| `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`); `list_bays` is paginated (`limit`/`offset`, `{items, total}`) with optional `search` |
 | `bay_api.create_bay` / `create_bay_grid` / `update_bay` / `delete_bay` | write-restricted; delete relies on ERPNext's own refusal to delete a Warehouse with stock |
 | `stock_api.list_stock` | optional `bay`/`item` filters; live aggregate over Stock Ledger Entry, not a stored table |
 | `stock_api.suggest_bays` | category/free-capacity scoring, ported from the frontend's `suggestBays` |
