@@ -27,6 +27,30 @@ def list_warehouse_groups():
 	return [{"id": r.name, "name": r.warehouse_name} for r in rows]
 
 
+@frappe.whitelist(methods=["POST"])
+def create_warehouse_group(name: str):
+	# The two physical warehouses (warehouse/setup.py's PHYSICAL_WAREHOUSES) are
+	# only the initial seed, not a hard limit -- a new physical site is created
+	# through here, the same way a bay is created through create_bay, and its
+	# `parent_warehouse` (none, since a group warehouse sits at the root) is why
+	# it needs no such param itself.
+	_assert_can_manage_bays()
+
+	if frappe.db.exists("Warehouse", {"warehouse_name": name, "company": default_company()}):
+		frappe.throw(_("A warehouse named {0} already exists.").format(name), frappe.DuplicateEntryError)
+
+	group = frappe.get_doc(
+		{
+			"doctype": "Warehouse",
+			"warehouse_name": name,
+			"company": default_company(),
+			"is_group": 1,
+		}
+	)
+	group.insert(ignore_permissions=True)
+	return {"id": group.name, "name": group.warehouse_name}
+
+
 @frappe.whitelist(methods=["GET"])
 def list_bays():
 	names = frappe.get_all("Warehouse", filters={"is_group": 0, "custom_bay_code": ["!=", ""]}, pluck="name")

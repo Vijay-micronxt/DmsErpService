@@ -31,6 +31,27 @@ class TestBayApi(FrappeTestCase):
 		main = next(g for g in groups if g["name"] == "Pacific Main — Morbi")
 		self.assertEqual(main["id"], frappe.db.get_value("Warehouse", {"warehouse_name": "Pacific Main — Morbi"}, "name"))
 
+	def test_create_warehouse_group_adds_a_third_physical_site(self):
+		created = bay_api.create_warehouse_group("Pacific Overflow — Rajkot")
+		self.assertEqual(created["name"], "Pacific Overflow — Rajkot")
+
+		groups = bay_api.list_warehouse_groups()
+		self.assertIn("Pacific Overflow — Rajkot", {g["name"] for g in groups})
+
+		bay = bay_api.create_bay(
+			code="OVERFLOW-A-01",
+			bay_type="main",
+			dimensions="32x6",
+			parent_warehouse=created["id"],
+			zone="Zone-O",
+			row="R1",
+		)
+		self.assertEqual(bay["warehouse"], "Pacific Overflow — Rajkot")
+
+	def test_create_warehouse_group_rejects_a_duplicate_name(self):
+		with self.assertRaises(frappe.DuplicateEntryError):
+			bay_api.create_warehouse_group("Pacific Main — Morbi")
+
 	def test_create_bay_grid_creates_sequential_codes(self):
 		main_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Main — Morbi")
 		result = bay_api.create_bay_grid(

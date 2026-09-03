@@ -4,11 +4,12 @@ Phase 3: Bay management, allocation, inward, transfers, stock. Implemented, enti
 on top of ERPNext's native stock doctypes — there is no custom stock ledger anywhere
 in this module.
 
-- **Bays** (`bay_api.py`) — ERPNext `Warehouse`, nested under the two physical
-  warehouses ("Pacific Main — Morbi", "Pacific Buffer — Wankaner"). Custom Fields
-  only for what Warehouse has no equivalent for: bay type, dimensions, capacity,
-  suitable categories, zone/row, a 3-state bay status. `list_warehouse_groups`
-  is the read endpoint for those two physical warehouses themselves — `create_bay`'s
+- **Bays** (`bay_api.py`) — ERPNext `Warehouse`, nested under a physical warehouse
+  ("Pacific Main — Morbi" and "Pacific Buffer — Wankaner" are `warehouse/setup.py`'s
+  initial seed, not a hard limit — `create_warehouse_group` adds more at runtime).
+  Custom Fields only for what Warehouse has no equivalent for: bay type, dimensions,
+  capacity, suitable categories, zone/row, a 3-state bay status. `list_warehouse_groups`
+  is the read endpoint for physical warehouses themselves — `create_bay`'s
   `parent_warehouse` wants a group's raw, ERPNext-autonamed `name` (company-
   abbreviation-suffixed, e.g. "Pacific Main — Morbi - PI"), not its clean
   `warehouse_name`, and nothing else exposed that raw id (`serialize_bay` only
