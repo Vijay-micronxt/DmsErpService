@@ -1057,11 +1057,13 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 
 #### GET `dms_erp.warehouse.bay_api.list_warehouse_groups`
 
-**List bay groups (physical warehouses)** — for populating `create_bay`'s `parent_warehouse`. A group warehouse's real `name` isn't its clean display name — ERPNext autonames it with a company-abbreviation suffix (e.g. `"Pacific Main — Morbi - PI"`) — so this is the only place that raw id is exposed; `list_bays`/`get_bay_detail` resolve it back to the clean name on the way out, not in.
+**List / search bay groups (physical warehouses)** — for populating `create_bay`'s `parent_warehouse`. A group warehouse's real `name` isn't its clean display name — ERPNext autonames it with a company-abbreviation suffix (e.g. `"Pacific Main — Morbi - PI"`) — so this is the only place that raw id is exposed; `list_bays`/`get_bay_detail` resolve it back to the clean name on the way out, not in. No pagination — a physical-site directory stays small even as `create_warehouse_group` grows it past the original two, unlike the product/order lists.
 
 **Params**
 
-_No parameters._
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on warehouse group name |
 
 **Response**
 
