@@ -189,7 +189,7 @@ everyone can read.
 
 | Method | Notes |
 |---|---|
-| `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search` |
+| `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search`/`category`/`status` |
 | `dms_erp.catalog.api.get_product` | `item` (Item Code) |
 | `dms_erp.catalog.api.create_product` | write-restricted; also seeds a Pending `Item Price Proposal` |
 | `dms_erp.catalog.api.update_product` | write-restricted; `patch` is a partial `Product`-shaped dict |
@@ -221,7 +221,7 @@ read.
 |---|---|
 | `bay_api.list_warehouse_groups` | the physical warehouses `create_bay`'s `parent_warehouse` needs — its `id` is the ERPNext-autonamed raw name, not the clean display name; optional `search`, no pagination |
 | `bay_api.create_warehouse_group` | write-restricted; adds another physical warehouse — the seeded two aren't a hard limit |
-| `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`); `list_bays` is paginated (`limit`/`offset`, `{items, total}`) with optional `search` |
+| `bay_api.list_bays` / `get_bay_detail` | includes live occupancy (`occupiedBoxes`/`occupancyPct`/`freeBoxes`); `list_bays` is paginated (`limit`/`offset`, `{items, total}`) with optional `search`/`bay_type`/`status`/`parent_warehouse` |
 | `bay_api.create_bay` / `create_bay_grid` / `update_bay` / `delete_bay` | write-restricted; delete relies on ERPNext's own refusal to delete a Warehouse with stock |
 | `stock_api.list_stock` | optional `bay`/`item` filters; live aggregate over Stock Ledger Entry, not a stored table |
 | `stock_api.suggest_bays` | category/free-capacity scoring, ported from the frontend's `suggestBays` |

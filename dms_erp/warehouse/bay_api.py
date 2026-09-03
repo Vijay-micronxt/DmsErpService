@@ -66,26 +66,44 @@ def create_warehouse_group(name: str):
 	return {"id": group.name, "name": group.warehouse_name}
 
 
-def _bay_filters(search: str | None) -> dict:
+def _bay_filters(
+	search: str | None, bay_type: str | None = None, status: str | None = None, parent_warehouse: str | None = None
+) -> dict:
 	filters = {"is_group": 0}
 	# search's LIKE pattern already can't match an empty string, so it doubles as
 	# the "has a real bay code" exclusion the no-search case needs explicitly.
 	filters["custom_bay_code"] = ["like", f"%{search}%"] if search else ["!=", ""]
+	if bay_type:
+		filters["custom_bay_type"] = bay_type
+	if status:
+		filters["custom_bay_status"] = status
+	if parent_warehouse:
+		filters["parent_warehouse"] = parent_warehouse
 	return filters
 
 
-def list_all_bays(search: str | None = None) -> list[dict]:
+def list_all_bays(
+	search: str | None = None, bay_type: str | None = None, status: str | None = None, parent_warehouse: str | None = None
+) -> list[dict]:
 	"""Unpaginated -- for internal callers (reports, dashboard) that need the full
 	result set, not a page of it. list_bays (the whitelisted endpoint) is the
 	paginated one."""
-	names = frappe.get_all("Warehouse", filters=_bay_filters(search), pluck="name")
+	filters = _bay_filters(search, bay_type, status, parent_warehouse)
+	names = frappe.get_all("Warehouse", filters=filters, pluck="name")
 	return [serialize_bay(frappe.get_doc("Warehouse", name)) for name in names]
 
 
 @frappe.whitelist(methods=["GET"])
-def list_bays(search: str | None = None, limit: int = 20, offset: int = 0):
+def list_bays(
+	search: str | None = None,
+	bay_type: str | None = None,
+	status: str | None = None,
+	parent_warehouse: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+):
 	limit, offset = clamp(limit, offset)
-	filters = _bay_filters(search)
+	filters = _bay_filters(search, bay_type, status, parent_warehouse)
 	total = frappe.db.count("Warehouse", filters=filters)
 	names = frappe.get_all(
 		"Warehouse", filters=filters, pluck="name", order_by="custom_bay_code asc", limit_start=offset, limit_page_length=limit

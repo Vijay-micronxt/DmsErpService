@@ -253,6 +253,8 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
 |---|---|---|---|
 | `dealer` | string | optional | if set, filtered through that dealer's catalog assignment AND current sellability (Phase 11) |
 | `search` | string | optional | substring match on product name |
+| `category` | string | optional | exact match on Item Group, e.g. "Vitrified" |
+| `status` | string | optional | exact match on the 5-state discontinuation lifecycle |
 | `limit` | int | optional, default 20, max 100 | page size |
 | `offset` | int | optional, default 0 | rows to skip |
 
@@ -1101,6 +1103,9 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `search` | string | optional | substring match on bay code |
+| `bay_type` | string | optional | exact match; main \| buffer \| damage \| insurance_claim \| display \| blocked |
+| `status` | string | optional | exact match; active \| blocked \| reserved |
+| `parent_warehouse` | string | optional | exact match on the raw, autonamed group `name` (as returned by `list_warehouse_groups`'s `id`), not the clean display name |
 | `limit` | int | optional, default 20, max 100 | page size |
 | `offset` | int | optional, default 0 | rows to skip |
 
