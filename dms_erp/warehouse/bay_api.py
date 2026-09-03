@@ -16,14 +16,23 @@ def _assert_can_manage_bays():
 
 
 @frappe.whitelist(methods=["GET"])
-def list_warehouse_groups():
+def list_warehouse_groups(search: str | None = None):
 	# The other half of "bays are ERPNext Warehouses" (see module docstring):
 	# create_bay's parent_warehouse wants a group Warehouse's raw `name`, which
 	# ERPNext autonames with a company-abbreviation suffix (e.g. "Pacific Main —
 	# Morbi - PI") -- different from its clean warehouse_name, and nothing else
 	# exposed that raw id. This is that lookup, kept minimal since a bay group
 	# has nothing worth serializing beyond id/name (unlike a bay itself).
-	rows = frappe.get_all("Warehouse", filters={"is_group": 1}, fields=["name", "warehouse_name"], order_by="warehouse_name asc")
+	#
+	# search, no pagination: create_warehouse_group means this list can now grow
+	# past the original two, but a physical-site directory stays small (dozens,
+	# not the thousands a product/order list can reach) -- same shape as
+	# dealer_api.list_dealers/supplier_api.list_suppliers, not the paginated
+	# {items, total} list endpoints.
+	filters = {"is_group": 1}
+	if search:
+		filters["warehouse_name"] = ["like", f"%{search}%"]
+	rows = frappe.get_all("Warehouse", filters=filters, fields=["name", "warehouse_name"], order_by="warehouse_name asc")
 	return [{"id": r.name, "name": r.warehouse_name} for r in rows]
 
 

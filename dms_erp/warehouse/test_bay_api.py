@@ -52,6 +52,14 @@ class TestBayApi(FrappeTestCase):
 		with self.assertRaises(frappe.DuplicateEntryError):
 			bay_api.create_warehouse_group("Pacific Main — Morbi")
 
+	def test_list_warehouse_groups_search_filters_by_name(self):
+		bay_api.create_warehouse_group("Pacific Search Test — Junagadh")
+
+		found = bay_api.list_warehouse_groups(search="Search Test")
+		self.assertEqual({g["name"] for g in found}, {"Pacific Search Test — Junagadh"})
+
+		self.assertNotIn("Pacific Search Test — Junagadh", {g["name"] for g in bay_api.list_warehouse_groups(search="Morbi")})
+
 	def test_create_bay_grid_creates_sequential_codes(self):
 		main_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Main — Morbi")
 		result = bay_api.create_bay_grid(
