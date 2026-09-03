@@ -68,8 +68,19 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 	already-saved reservation isn't double-counted against itself."""
 	vt = frappe.get_doc("Vehicle Type", vehicle_type)
 
+	# Two lines in the same request can name the same PO line item (e.g. a
+	# duplicate submission) -- validating each in isolation would let both pass
+	# against the same unreduced "remaining" figure and together over-book the
+	# line. Requested qty is summed per PO line item first, and each unique line
+	# is checked once against that combined total.
+	requested_by_po_item: dict[str, int] = {}
+	for line in lines:
+		po_item_name = line["purchase_order_item"]
+		requested_by_po_item[po_item_name] = requested_by_po_item.get(po_item_name, 0) + int(line["qty"])
+
 	enriched = []
 	total_boxes = 0
+	checked_po_items: set[str] = set()
 	for line in lines:
 		po_item_name = line["purchase_order_item"]
 		po_item = frappe.get_doc("Purchase Order Item", po_item_name)
@@ -83,14 +94,17 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 			)
 
 		qty = int(line["qty"])
-		remaining = remaining_ready_qty_for_line(po_item_name, exclude_pickup_run=exclude_pickup_run)
-		if qty > remaining:
-			frappe.throw(
-				_("Only {0} boxes of {1} are still available for pickup on line {2} (already booked or reserved elsewhere).").format(
-					remaining, po_item.item_code, po_item_name
-				),
-				frappe.ValidationError,
-			)
+		if po_item_name not in checked_po_items:
+			checked_po_items.add(po_item_name)
+			remaining = remaining_ready_qty_for_line(po_item_name, exclude_pickup_run=exclude_pickup_run)
+			requested = requested_by_po_item[po_item_name]
+			if requested > remaining:
+				frappe.throw(
+					_("Only {0} boxes of {1} are still available for pickup on line {2} (already booked or reserved elsewhere).").format(
+						remaining, po_item.item_code, po_item_name
+					),
+					frappe.ValidationError,
+				)
 
 		total_boxes += qty
 		enriched.append({"purchase_order": po_item.parent, "purchase_order_item": po_item_name, "item": po_item.item_code, "qty": qty})
