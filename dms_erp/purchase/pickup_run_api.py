@@ -16,6 +16,7 @@ unaffected and untouched.
 import frappe
 from frappe import _
 
+from dms_erp.pagination import clamp
 from dms_erp.purchase.po_api import remaining_ready_qty_for_line
 from dms_erp.warehouse import inward_api
 
@@ -119,9 +120,18 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 
 
 @frappe.whitelist(methods=["GET"])
-def list_vehicle_types():
-	names = frappe.get_all("Vehicle Type", pluck="name", order_by="vehicle_type_name")
-	return [_serialize_vehicle_type(frappe.get_doc("Vehicle Type", name)) for name in names]
+def list_vehicle_types(limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("Vehicle Type")
+	names = frappe.get_all(
+		"Vehicle Type", pluck="name", order_by="vehicle_type_name", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize_vehicle_type(frappe.get_doc("Vehicle Type", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -134,14 +144,23 @@ def create_vehicle_type(name: str, capacity_boxes: int):
 
 
 @frappe.whitelist(methods=["GET"])
-def list_pickup_runs(supplier: str | None = None, status: str | None = None):
+def list_pickup_runs(supplier: str | None = None, status: str | None = None, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
 	filters = {}
 	if supplier:
 		filters["supplier"] = supplier
 	if status:
 		filters["status"] = status
-	names = frappe.get_all("Pickup Run", filters=filters, pluck="name", order_by="creation desc")
-	return [_serialize(frappe.get_doc("Pickup Run", name)) for name in names]
+	total = frappe.db.count("Pickup Run", filters=filters)
+	names = frappe.get_all(
+		"Pickup Run", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Pickup Run", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

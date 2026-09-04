@@ -21,6 +21,7 @@ from frappe import _
 from frappe.utils import now_datetime
 
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
+from dms_erp.pagination import clamp
 
 COMMS_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 
@@ -44,21 +45,38 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_messages(dealer: str):
+def list_all_messages(dealer: str) -> list[dict]:
+	"""Unpaginated — for internal callers (last_message, unreplied_inbound_count)
+	that need the full thread, not a page of it. list_messages (the whitelisted
+	endpoint) is the paginated one."""
 	names = frappe.get_all("WhatsApp Message", filters={"dealer": dealer}, pluck="name", order_by="sent_at asc")
 	return [_serialize(frappe.get_doc("WhatsApp Message", name)) for name in names]
 
 
 @frappe.whitelist(methods=["GET"])
+def list_messages(dealer: str, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("WhatsApp Message", filters={"dealer": dealer})
+	names = frappe.get_all(
+		"WhatsApp Message", filters={"dealer": dealer}, pluck="name", order_by="sent_at asc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("WhatsApp Message", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
 def last_message(dealer: str):
-	thread = list_messages(dealer)
+	thread = list_all_messages(dealer)
 	return thread[-1] if thread else None
 
 
 @frappe.whitelist(methods=["GET"])
 def unreplied_inbound_count(dealer: str) -> int:
-	thread = list_messages(dealer)
+	thread = list_all_messages(dealer)
 	reversed_thread = list(reversed(thread))
 	last_inbound_idx = next((i for i, m in enumerate(reversed_thread) if m["direction"] == "Inbound"), -1)
 	if last_inbound_idx == -1:

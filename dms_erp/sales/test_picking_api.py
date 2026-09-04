@@ -41,7 +41,7 @@ class TestPickingApi(FrappeTestCase):
 			item=self.item, batch_no="PICK-BATCH-1", total_qty=15, lines=[{"bay": "PICK-A-01", "qty": 15}], supplier=self.supplier
 		)
 		order = self._make_order_in_picking(qty=25)
-		task = picking_api.list_pick_tasks(order["id"])[0]
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
 
 		allocated = picking_api.auto_allocate(task["id"])
 		self.assertEqual(allocated["allocated"], 15)  # only 15 in stock against a 25 qty task
@@ -49,7 +49,7 @@ class TestPickingApi(FrappeTestCase):
 
 	def test_patch_task_assigns_picker(self):
 		order = self._make_order_in_picking(qty=5)
-		task = picking_api.list_pick_tasks(order["id"])[0]
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
 
 		updated = picking_api.patch_task(task["id"], {"picker": "Administrator", "status": "Picked"})
 		self.assertEqual(updated["picker"], "Administrator")
@@ -57,7 +57,7 @@ class TestPickingApi(FrappeTestCase):
 
 	def test_write_requires_warehouse_or_management_role(self):
 		order = self._make_order_in_picking(qty=5)
-		task = picking_api.list_pick_tasks(order["id"])[0]
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
 
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

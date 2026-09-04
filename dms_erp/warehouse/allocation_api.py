@@ -29,6 +29,7 @@ import frappe
 from frappe import _
 from frappe.utils import today
 
+from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_record
 from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
 from dms_erp.warehouse.utils import default_company, ensure_batch, get_bay, list_stock_lots, validate_allocation
@@ -59,7 +60,10 @@ def _serialize(doc) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_allocations(inward_truck: str | None = None, status: str | None = None, item: str | None = None):
+def list_allocations(
+	inward_truck: str | None = None, status: str | None = None, item: str | None = None, limit: int = 20, offset: int = 0
+):
+	limit, offset = clamp(limit, offset)
 	filters = {}
 	if inward_truck:
 		filters["inward_truck"] = inward_truck
@@ -67,8 +71,16 @@ def list_allocations(inward_truck: str | None = None, status: str | None = None,
 		filters["status"] = status
 	if item:
 		filters["item"] = item
-	names = frappe.get_all("Bay Allocation", filters=filters, pluck="name", order_by="creation desc")
-	return [_serialize(frappe.get_doc("Bay Allocation", name)) for name in names]
+	total = frappe.db.count("Bay Allocation", filters=filters)
+	names = frappe.get_all(
+		"Bay Allocation", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Bay Allocation", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

@@ -34,7 +34,7 @@ class TestPickupRunApi(FrappeTestCase):
 	def test_create_vehicle_type_and_list(self):
 		vt = pickup_run_api.create_vehicle_type("Mini Truck", 250)
 		self.assertEqual(vt["capacityBoxes"], 250)
-		names = {v["name"] for v in pickup_run_api.list_vehicle_types()}
+		names = {v["name"] for v in pickup_run_api.list_vehicle_types()["items"]}
 		self.assertIn("Mini Truck", names)
 
 	def test_create_pickup_run_computes_total_boxes(self):

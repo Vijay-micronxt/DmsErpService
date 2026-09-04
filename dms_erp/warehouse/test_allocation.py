@@ -92,7 +92,7 @@ class TestAllocation(FrappeTestCase):
 		placed = allocation_api.confirm_putaway(alloc["id"])
 		self.assertEqual(placed["status"], "Placed")
 
-		trucks = {t["id"]: t for t in inward_api.list_trucks()}
+		trucks = {t["id"]: t for t in inward_api.list_all_trucks()}
 		self.assertEqual(trucks[truck["id"]]["status"], "Put-away")
 
 	def test_resolve_scan_bay_code(self):
@@ -113,10 +113,10 @@ class TestAllocation(FrappeTestCase):
 		self.assertEqual(fetched, created)
 
 		listed = allocation_api.list_allocations(item=self.item)
-		self.assertIn(created["id"], [a["id"] for a in listed])
+		self.assertIn(created["id"], [a["id"] for a in listed["items"]])
 
 		by_status = allocation_api.list_allocations(status="Confirmed")
-		self.assertIn(created["id"], [a["id"] for a in by_status])
+		self.assertIn(created["id"], [a["id"] for a in by_status["items"]])
 
 	def test_get_allocation_qr_codes_one_per_bay_split_and_resolves_via_scan(self):
 		alloc = allocation_api.create_allocation(

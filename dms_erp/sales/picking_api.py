@@ -12,6 +12,7 @@ sales/order_api.py's module docstring) — that's a natural future refinement.
 import frappe
 from frappe import _
 
+from dms_erp.pagination import clamp
 from dms_erp.warehouse.utils import available_for_item, suggest_bays
 
 PICKING_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
@@ -36,11 +37,28 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_pick_tasks(order: str | None = None):
+def list_all_pick_tasks(order: str | None = None) -> list[dict]:
+	"""Unpaginated — for internal callers (dashboard) that need the full result set,
+	not a page of it. list_pick_tasks (the whitelisted endpoint) is the paginated one."""
 	filters = {"sales_order": order} if order else {}
 	names = frappe.get_all("Pick Task", filters=filters, pluck="name", order_by="creation asc")
 	return [_serialize(frappe.get_doc("Pick Task", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_pick_tasks(order: str | None = None, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	filters = {"sales_order": order} if order else {}
+	total = frappe.db.count("Pick Task", filters=filters)
+	names = frappe.get_all(
+		"Pick Task", filters=filters, pluck="name", order_by="creation asc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Pick Task", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 def ensure_pick_tasks(order: str):

@@ -26,7 +26,7 @@ def damage_and_insurance_report(status: str | None = None, insurer: str | None =
 	and filed-date range on top of claims_api.list_claims's own status filter."""
 	rows = [
 		r
-		for r in claims_api.list_claims(status=status)
+		for r in claims_api.list_all_claims(status=status)
 		if (not insurer or r["insurer"] == insurer) and _in_range(r["filedAt"], from_date, to_date)
 	]
 	return {
@@ -47,7 +47,7 @@ def claimable_value_report():
 	summary = claims_api.claim_summary()
 
 	by_insurer: dict[str, dict] = {}
-	for c in claims_api.list_claims():
+	for c in claims_api.list_all_claims():
 		bucket = by_insurer.setdefault(c["insurer"], {"insurer": c["insurer"], "receivable": 0, "settled": 0})
 		if c["status"] in ("Filed", "Approved"):
 			bucket["receivable"] += c["claimAmount"] or 0
@@ -63,7 +63,7 @@ def unloading_payment_report(status: str | None = None, contractor: str | None =
 	and recorded-date range on top of unloading_api.list_charges's own status filter."""
 	rows = [
 		r
-		for r in unloading_api.list_charges(status=status)
+		for r in unloading_api.list_all_charges(status=status)
 		if (not contractor or r["contractor"] == contractor) and _in_range(r["recordedAt"], from_date, to_date)
 	]
 	return {

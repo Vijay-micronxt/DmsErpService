@@ -38,7 +38,7 @@ class TestCommsApi(FrappeTestCase):
 		comms_api.send_message(dealer=self.dealer, text="first")
 		comms_api.send_message(dealer=self.dealer, text="second")
 
-		thread = comms_api.list_messages(self.dealer)
+		thread = comms_api.list_messages(self.dealer)["items"]
 		self.assertEqual([m["text"] for m in thread[-2:]], ["first", "second"])
 		self.assertEqual(comms_api.last_message(self.dealer)["text"], "second")
 

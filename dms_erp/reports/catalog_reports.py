@@ -6,7 +6,7 @@ the report-vs-dashboard distinction this whole `reports` module follows.
 import frappe
 
 from dms_erp.catalog.api import list_all_products
-from dms_erp.pricing.api import get_price_record, list_price_records
+from dms_erp.pricing.api import get_price_record, list_all_price_records
 from dms_erp.purchase.reorder_api import sales_velocity_by_item
 
 
@@ -17,7 +17,7 @@ def pricing_and_csp_report(min_margin_pct: float | None = None):
 	on top of). Only approved price records are meaningful here; a Pending one has
 	no CSP to report yet."""
 	rows = []
-	for record in list_price_records():
+	for record in list_all_price_records():
 		if record["status"] != "Approved" or not record["landingCost"]:
 			continue
 		csp = record["suggestedPrice"]
