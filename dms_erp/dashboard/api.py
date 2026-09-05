@@ -385,15 +385,17 @@ def _credit_exposure_alerts() -> list[dict]:
 
 # ==================== Role-agnostic entry point ====================
 
-# One native ERPNext `Dashboard` doc per role, populated by a System Manager via the desk UI
+# One native ERPNext `Dashboard` doc per role, named after that role's own DMS Role doc (e.g. the
+# "sales" role's Dashboard is named "DMS Sales", same as the Role that gates sales_dashboard() --
+# not an arbitrary separate naming scheme), populated by a System Manager via the desk UI
 # (Dashboard List > New, then add Number Card / Dashboard Chart widgets there) -- not code. An
 # unconfigured or missing Dashboard just returns an empty widgets list below rather than erroring,
 # so this ships ahead of that setup being done.
 _DASHBOARD_DOC_BY_ROLE = {
-	"management": "Management Dashboard",
-	"purchase": "Purchase Dashboard",
-	"warehouse": "Warehouse Dashboard",
-	"sales": "Sales Dashboard",
+	"management": "DMS Management",
+	"purchase": "DMS Purchase",
+	"warehouse": "DMS Warehouse",
+	"sales": "DMS Sales",
 }
 
 

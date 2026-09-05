@@ -36,8 +36,8 @@ all four), plus one role-agnostic entry point in front of them:
   resolves the caller's own primary role via `auth.utils.resolve_primary_role` (the
   exact same precedence `auth.api.login`'s `user.primary_role` is computed from,
   so the dashboard you get back always agrees with what login said you are), then
-  reads that role's ERPNext-**native** `Dashboard` doc (`Sales Dashboard`/
-  `Purchase Dashboard`/`Warehouse Dashboard`/`Management Dashboard`) and returns
+  reads that role's ERPNext-**native** `Dashboard` doc (`DMS Sales`/`DMS Purchase`/
+  `DMS Warehouse`/`DMS Management` — same name as the DMS Role doc itself) and returns
   `{"role", "widgets"}` — the Number Card/Dashboard Chart widgets a System Manager
   configured on it via the desk UI, permission-filtered per widget by Frappe's own
   `Dashboard.get_permitted_cards`/`get_permitted_charts`. Unlike the four functions
