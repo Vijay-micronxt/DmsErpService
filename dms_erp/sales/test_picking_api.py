@@ -62,3 +62,29 @@ class TestPickingApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			picking_api.auto_allocate(task["id"])
+
+	def test_list_pick_tasks_is_paginated(self):
+		items = []
+		for i in range(3):
+			item = make_item(f"PICK-PAGE-ITEM-{i}", "Vitrified")
+			pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+			pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+			items.append(item)
+
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=items[0], qty=5, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 5} for item in items],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		order_api.advance_order_stage(order["id"], "Picking")
+
+		page = picking_api.list_pick_tasks(order["id"], limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		next_page = picking_api.list_pick_tasks(order["id"], limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)

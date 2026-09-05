@@ -65,3 +65,16 @@ class TestPoApi(FrappeTestCase):
 	def test_source_inquiry_is_optional_and_defaults_to_none(self):
 		po = po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
 		self.assertIsNone(po["sourceInquiry"])
+
+	def test_list_purchase_orders_is_paginated(self):
+		before = po_api.list_purchase_orders()
+		baseline_total = before["total"]
+
+		for _ in range(3):
+			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+
+		page = po_api.list_purchase_orders(limit=2, offset=0)
+		self.assertEqual(page["total"], baseline_total + 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)

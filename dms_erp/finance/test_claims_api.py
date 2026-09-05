@@ -163,6 +163,25 @@ class TestClaimsApi(FrappeTestCase):
 		self.assertGreaterEqual(summary["receivable"], 1000)
 		self.assertGreaterEqual(summary["settled"], 450)
 
+	def test_list_claims_is_paginated_and_filters_by_status(self):
+		se1 = self._make_damage_transfer("CLAIM-BATCH-PAGE-1")
+		se2 = self._make_damage_transfer("CLAIM-BATCH-PAGE-2")
+		se3 = self._make_damage_transfer("CLAIM-BATCH-PAGE-3")
+		c1 = claims_api.file_claim(stock_entry=se1, insurer="HDFC Ergo", claim_amount=100)
+		claims_api.file_claim(stock_entry=se2, insurer="HDFC Ergo", claim_amount=200)
+		claims_api.file_claim(stock_entry=se3, insurer="HDFC Ergo", claim_amount=300)
+		claims_api.update_claim_status(c1["id"], "Settled", settled_amount=100)
+
+		page = claims_api.list_claims(limit=2, offset=0)
+		self.assertGreaterEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		by_status = claims_api.list_claims(status="Settled")
+		self.assertEqual(by_status["total"], 1)
+		self.assertEqual(by_status["items"][0]["id"], c1["id"])
+
 	def test_write_requires_warehouse_or_management_role(self):
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-7")
 		frappe.set_user("Guest")

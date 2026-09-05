@@ -45,20 +45,26 @@ def _serialize(doc) -> dict:
 	}
 
 
+def _message_filters(dealer: str) -> dict:
+	return {"dealer": dealer}
+
+
 def list_all_messages(dealer: str) -> list[dict]:
 	"""Unpaginated — for internal callers (last_message, unreplied_inbound_count)
 	that need the full thread, not a page of it. list_messages (the whitelisted
 	endpoint) is the paginated one."""
-	names = frappe.get_all("WhatsApp Message", filters={"dealer": dealer}, pluck="name", order_by="sent_at asc")
+	filters = _message_filters(dealer)
+	names = frappe.get_all("WhatsApp Message", filters=filters, pluck="name", order_by="sent_at asc")
 	return [_serialize(frappe.get_doc("WhatsApp Message", name)) for name in names]
 
 
 @frappe.whitelist(methods=["GET"])
 def list_messages(dealer: str, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("WhatsApp Message", filters={"dealer": dealer})
+	filters = _message_filters(dealer)
+	total = frappe.db.count("WhatsApp Message", filters=filters)
 	names = frappe.get_all(
-		"WhatsApp Message", filters={"dealer": dealer}, pluck="name", order_by="sent_at asc", limit_start=offset, limit_page_length=limit
+		"WhatsApp Message", filters=filters, pluck="name", order_by="sent_at asc", limit_start=offset, limit_page_length=limit
 	)
 	return {
 		"items": [_serialize(frappe.get_doc("WhatsApp Message", name)) for name in names],

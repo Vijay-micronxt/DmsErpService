@@ -91,3 +91,27 @@ class TestTransfer(FrappeTestCase):
 				transfer_type="Main→Buffer",
 				reason="Consolidation",
 			)
+
+	def test_list_transfers_is_paginated(self):
+		before = transfer_api.list_transfers()
+		baseline_total = before["total"]
+
+		for _ in range(3):
+			transfer_api.transfer_stock(
+				from_bay="XFER-MAIN-01",
+				to_bay="XFER-BUF-01",
+				item=self.item,
+				batch_no="XFER-BATCH-1",
+				qty=1,
+				transfer_type="Main→Buffer",
+				reason="Consolidation",
+			)
+
+		page = transfer_api.list_transfers(limit=2, offset=0)
+		self.assertEqual(page["total"], baseline_total + 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		all_transfers = transfer_api.list_all_transfers()
+		self.assertEqual(len(all_transfers), baseline_total + 3)

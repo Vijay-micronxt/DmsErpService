@@ -37,6 +37,36 @@ class TestPickupRunApi(FrappeTestCase):
 		names = {v["name"] for v in pickup_run_api.list_vehicle_types()["items"]}
 		self.assertIn("Mini Truck", names)
 
+	def test_list_vehicle_types_is_paginated(self):
+		before = pickup_run_api.list_vehicle_types()
+		baseline_total = before["total"]
+
+		for name in ("Page Truck A", "Page Truck B", "Page Truck C"):
+			pickup_run_api.create_vehicle_type(name, 100)
+
+		page = pickup_run_api.list_vehicle_types(limit=2, offset=0)
+		self.assertEqual(page["total"], baseline_total + 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+	def test_list_pickup_runs_is_paginated_and_filters_by_supplier_and_status(self):
+		line1 = self._ready_line(ready_qty=300)
+		line2 = self._ready_line(ready_qty=300)
+		line3 = self._ready_line(supplier=self.other_supplier, ready_qty=300)
+		pickup_run_api.create_pickup_run(supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line1, "qty": 100}])
+		run2 = pickup_run_api.create_pickup_run(supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line2, "qty": 100}])
+		pickup_run_api.create_pickup_run(supplier=self.other_supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line3, "qty": 100}])
+		pickup_run_api.advance_pickup_run_status(run2["id"], "Dispatched")
+
+		page = pickup_run_api.list_pickup_runs(supplier=self.supplier, limit=1, offset=0)
+		self.assertEqual(page["total"], 2)
+		self.assertEqual(len(page["items"]), 1)
+
+		by_status = pickup_run_api.list_pickup_runs(supplier=self.supplier, status="Dispatched")
+		self.assertEqual(by_status["total"], 1)
+		self.assertEqual(by_status["items"][0]["id"], run2["id"])
+
 	def test_create_pickup_run_computes_total_boxes(self):
 		line = self._ready_line(ready_qty=400)
 		run = pickup_run_api.create_pickup_run(
