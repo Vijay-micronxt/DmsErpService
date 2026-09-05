@@ -38,9 +38,25 @@ class TestCommsApi(FrappeTestCase):
 		comms_api.send_message(dealer=self.dealer, text="first")
 		comms_api.send_message(dealer=self.dealer, text="second")
 
-		thread = comms_api.list_messages(self.dealer)
+		thread = comms_api.list_messages(self.dealer)["items"]
 		self.assertEqual([m["text"] for m in thread[-2:]], ["first", "second"])
 		self.assertEqual(comms_api.last_message(self.dealer)["text"], "second")
+
+	def test_list_messages_is_paginated(self):
+		dealer = make_dealer("Comms Pagination Dealer")
+		for text in ("one", "two", "three"):
+			comms_api.send_message(dealer=dealer, text=text)
+
+		page = comms_api.list_messages(dealer, limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+		self.assertEqual([m["text"] for m in page["items"]], ["one", "two"])
+
+		next_page = comms_api.list_messages(dealer, limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)
+		self.assertEqual(next_page["items"][0]["text"], "three")
 
 	def test_webhook_inbound_message_rejects_wrong_secret(self):
 		with self.assertRaises(frappe.PermissionError):

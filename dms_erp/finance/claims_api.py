@@ -23,6 +23,7 @@ from frappe import _
 from frappe.utils import today
 
 from dms_erp.finance import accounting
+from dms_erp.pagination import clamp
 
 CLAIM_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 DAMAGE_TO_CLAIM_TRANSFER_TYPE = "Damage→Insurance Claim"
@@ -56,11 +57,32 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_claims(status: str | None = None):
-	filters = {"status": status} if status else {}
+def _claim_filters(status: str | None) -> dict:
+	return {"status": status} if status else {}
+
+
+def list_all_claims(status: str | None = None) -> list[dict]:
+	"""Unpaginated — for internal callers (reports) that need the full result set,
+	not a page of it. list_claims (the whitelisted endpoint) is the paginated one."""
+	filters = _claim_filters(status)
 	names = frappe.get_all("Insurance Claim", filters=filters, pluck="name", order_by="creation desc")
 	return [_serialize(frappe.get_doc("Insurance Claim", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_claims(status: str | None = None, limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	filters = _claim_filters(status)
+	total = frappe.db.count("Insurance Claim", filters=filters)
+	names = frappe.get_all(
+		"Insurance Claim", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Insurance Claim", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

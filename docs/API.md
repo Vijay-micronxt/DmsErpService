@@ -52,6 +52,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Inward](#inward)
 - [Picking](#picking)
 - [Purchase Orders](#purchase-orders)
+- [Pickup Run](#pickup-run)
 - [Purchase Requirements / Reorder Planning](#purchase-requirements-reorder-planning)
 - [Damage & Insurance Claims](#damage-insurance-claims)
 - [Unloading Payment](#unloading-payment)
@@ -377,6 +378,24 @@ its name and parent worth a second call for.
 ## Pricing
 
 Item Price Proposal (custom doctype, holds the audit trail) publishes to native Item Price on approval — every other ERPNext read of item pricing sees the standard thing.
+
+#### GET `dms_erp.pricing.api.list_price_records`
+
+**List price records** — paginated. Every Item Price Proposal, regardless of status.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{ "items": [(same shape as get_price_record)], "total": 62, "limit": 20, "offset": 0 }
+```
+
 
 #### GET `dms_erp.pricing.api.get_price_record`
 
@@ -904,22 +923,27 @@ System of record + webhook contract for a (not-yet-built) middleware layer that 
 
 #### GET `dms_erp.comms.api.list_messages`
 
-**Message log for a dealer**
+**Message log for a dealer** — paginated.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `dealer` | string | required |  |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "row-1", "dealerId": "CUST-0004", "direction": "Inbound", "text": "Stock available for PVT-6060?",
-  "status": "Delivered", "relatedType": "Inquiry", "relatedRef": "INQ-2026-00042",
-  "sentAt": "2026-08-29 09:40:00", "sentBy": null
-}]
+{
+  "items": [{
+    "id": "row-1", "dealerId": "CUST-0004", "direction": "Inbound", "text": "Stock available for PVT-6060?",
+    "status": "Delivered", "relatedType": "Inquiry", "relatedRef": "INQ-2026-00042",
+    "sentAt": "2026-08-29 09:40:00", "sentBy": null
+  }],
+  "total": 14, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1298,7 +1322,7 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 
 #### GET `dms_erp.warehouse.allocation_api.list_allocations`
 
-**List allocation slips**
+**List allocation slips** — paginated.
 
 **Params**
 
@@ -1307,11 +1331,13 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 | `inward_truck` | string | optional |  |
 | `status` | string | optional |  |
 | `item` | string | optional |  |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-(array of get_allocation shape)
+{ "items": [(get_allocation shape)], "total": 5, "limit": 20, "offset": 0 }
 ```
 
 
@@ -1420,22 +1446,28 @@ Native Stock Entry (Material Transfer) — not a custom doctype.
 
 #### GET `dms_erp.warehouse.transfer_api.list_transfers`
 
-**List transfers**
+**List transfers** — paginated.
 
 **Params**
 
-_No parameters._
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "MAT-STE-2026-00081", "ref": "MAT-STE-2026-00081", "itemCode": "PVT-6060",
-  "batchNumber": "BATCH-2608-11", "fromBayId": "Main Bay A-01 - PTC", "toBayId": "Damage Bay D-01 - PTC",
-  "qty": 12, "transferType": "Damage→Insurance Claim", "reason": "Insurance Claim",
-  "damageType": "Broken", "claimRef": null, "remarks": null,
-  "transferredAt": "2026-08-29", "transferredBy": "raj@pacific.example"
-}]
+{
+  "items": [{
+    "id": "MAT-STE-2026-00081", "ref": "MAT-STE-2026-00081", "itemCode": "PVT-6060",
+    "batchNumber": "BATCH-2608-11", "fromBayId": "Main Bay A-01 - PTC", "toBayId": "Damage Bay D-01 - PTC",
+    "qty": 12, "transferType": "Damage→Insurance Claim", "reason": "Insurance Claim",
+    "damageType": "Broken", "claimRef": null, "remarks": null,
+    "transferredAt": "2026-08-29", "transferredBy": "raj@pacific.example"
+  }],
+  "total": 37, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1502,20 +1534,26 @@ Gate/LR/ETA tracking — the actual stock effect happens later, at allocation.
 
 #### GET `dms_erp.warehouse.inward_api.list_trucks`
 
-**List trucks**
+**List trucks** — paginated.
 
 **Params**
 
-_No parameters._
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "IWT-2026-0021", "lr": "LR-88213", "supplier": "Orient Ceramics", "vehicle": "GJ-05-XX-1234",
-  "eta": "2026-08-20", "boxes": 640, "status": "Put-away", "item": "PVT-6060", "batchNumber": "BATCH-2608-11",
-  "poReference": null, "poId": "PUR-ORD-2026-00014", "poLineId": "row-9", "allocationSlip": "BAS-2026-0007"
-}]
+{
+  "items": [{
+    "id": "IWT-2026-0021", "lr": "LR-88213", "supplier": "Orient Ceramics", "vehicle": "GJ-05-XX-1234",
+    "eta": "2026-08-20", "boxes": 640, "status": "Put-away", "item": "PVT-6060", "batchNumber": "BATCH-2608-11",
+    "poReference": null, "poId": "PUR-ORD-2026-00014", "poLineId": "row-9", "allocationSlip": "BAS-2026-0007"
+  }],
+  "total": 22, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1571,22 +1609,27 @@ Custom Pick Task doctype — one row per order line, finer-grained than ERPNext'
 
 #### GET `dms_erp.sales.picking_api.list_pick_tasks`
 
-**List pick tasks** — Created automatically when an order enters the Picking stage.
+**List pick tasks** — Created automatically when an order enters the Picking stage. Paginated.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `order` | string | optional |  |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "PT-2026-00061", "orderNumber": "SAL-ORD-2026-00033", "itemCode": "PVT-6060",
-  "batchNumber": null, "qty": 60, "allocated": 0, "suggestedBayId": "Main Bay A-01 - PTC",
-  "picker": null, "status": "Pending"
-}]
+{
+  "items": [{
+    "id": "PT-2026-00061", "orderNumber": "SAL-ORD-2026-00033", "itemCode": "PVT-6060",
+    "batchNumber": null, "qty": 60, "allocated": 0, "suggestedBayId": "Main Bay A-01 - PTC",
+    "picker": null, "status": "Pending"
+  }],
+  "total": 9, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1635,22 +1678,28 @@ Native ERPNext Purchase Order, submitted immediately ("Raise PO" is one action).
 
 #### GET `dms_erp.purchase.po_api.list_purchase_orders`
 
-**List purchase orders**
+**List purchase orders** — paginated.
 
 **Params**
 
-_No parameters._
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "PUR-ORD-2026-00014", "number": "PUR-ORD-2026-00014", "date": "2026-08-10",
-  "supplier": "Orient Ceramics", "expectedReadyDate": "2026-08-20", "remarks": null,
-  "sourceInquiry": null,
-  "lines": [{ "id": "row-9", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
-    "orderedQty": 640, "readyQty": 640, "receivedQty": 640 }]
-}]
+{
+  "items": [{
+    "id": "PUR-ORD-2026-00014", "number": "PUR-ORD-2026-00014", "date": "2026-08-10",
+    "supplier": "Orient Ceramics", "expectedReadyDate": "2026-08-20", "remarks": null,
+    "sourceInquiry": null,
+    "lines": [{ "id": "row-9", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
+      "orderedQty": 640, "readyQty": 640, "receivedQty": 640 }]
+  }],
+  "total": 18, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1733,6 +1782,60 @@ _No parameters._
 
 ---
 
+## Pickup Run
+
+Capacity-aware planning layer in front of supplier-ready PO lines — groups them onto one truck per supplier, checked against a Vehicle Type's box capacity before booking.
+
+#### GET `dms_erp.purchase.pickup_run_api.list_vehicle_types`
+
+**List vehicle types** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{ "id": "VEH-TYPE-0001", "name": "Big Truck", "capacityBoxes": 900 }],
+  "total": 4, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.purchase.pickup_run_api.list_pickup_runs`
+
+**List pickup runs** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `supplier` | string | optional |  |
+| `status` | string | optional | Draft \| Dispatched \| Completed \| Cancelled |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "PICKUP-RUN-2026-0004", "supplier": "Orient Ceramics", "vehicleType": "VEH-TYPE-0001",
+    "vehicleNumber": "GJ-05-XX-9999", "scheduledDate": null, "status": "Draft", "totalBoxes": 200,
+    "lines": [{ "purchaseOrder": "PUR-ORD-2026-00014", "purchaseOrderItem": "row-9", "item": "PVT-6060", "qty": 200 }]
+  }],
+  "total": 6, "limit": 20, "offset": 0
+}
+```
+
+
+---
+
 ## Purchase Requirements / Reorder Planning
 
 Fully real formula as of Phase 10+13: current stock, missed demand, pending inquiries, retail sales velocity, and open-PO coverage.
@@ -1797,24 +1900,29 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 
 #### GET `dms_erp.finance.claims_api.list_claims`
 
-**List claims**
+**List claims** — paginated.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `status` | string | optional | Filed | Approved | Settled | Rejected |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "stockEntry": "MAT-STE-2026-00081",
-  "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
-  "insurer": "HDFC Ergo", "claimAmount": 25600, "status": "Filed",
-  "filedAt": "2026-08-29", "filedBy": "raj@pacific.example",
-  "settledAmount": null, "settledAt": null, "settlementJournalEntry": null, "remarks": "Transit damage"
-}]
+{
+  "items": [{
+    "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "stockEntry": "MAT-STE-2026-00081",
+    "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
+    "insurer": "HDFC Ergo", "claimAmount": 25600, "status": "Filed",
+    "filedAt": "2026-08-29", "filedBy": "raj@pacific.example",
+    "settledAmount": null, "settledAt": null, "settlementJournalEntry": null, "remarks": "Transit damage"
+  }],
+  "total": 11, "limit": 20, "offset": 0
+}
 ```
 
 
@@ -1900,23 +2008,28 @@ One voucher per Inward Truck. Same accounting-settings pattern as Claims.
 
 #### GET `dms_erp.finance.unloading_api.list_charges`
 
-**List charges**
+**List charges** — paginated.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `status` | string | optional | Pending | Paid |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
 
 **Response**
 
 ```json
-[{
-  "id": "UNL-2026-0018", "voucherNumber": "UNL-2026-0018", "truckId": "IWT-2026-0021", "lr": "LR-88213",
-  "contractor": "Morbi Labour Contractors", "boxes": 640, "ratePerBox": 6, "chargeAmount": 3840,
-  "paymentMode": "Cash", "status": "Pending", "recordedAt": "2026-08-20", "recordedBy": "raj@pacific.example",
-  "paidBy": null, "paidAt": null, "paymentEntry": null, "remarks": null
-}]
+{
+  "items": [{
+    "id": "UNL-2026-0018", "voucherNumber": "UNL-2026-0018", "truckId": "IWT-2026-0021", "lr": "LR-88213",
+    "contractor": "Morbi Labour Contractors", "boxes": 640, "ratePerBox": 6, "chargeAmount": 3840,
+    "paymentMode": "Cash", "status": "Pending", "recordedAt": "2026-08-20", "recordedBy": "raj@pacific.example",
+    "paidBy": null, "paidAt": null, "paymentEntry": null, "remarks": null
+  }],
+  "total": 15, "limit": 20, "offset": 0
+}
 ```
 
 

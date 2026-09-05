@@ -20,10 +20,10 @@ from dms_erp.finance.claims_api import claim_summary
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase import po_api
 from dms_erp.purchase.reorder_api import reorder_suggestions
-from dms_erp.sales.picking_api import list_pick_tasks
+from dms_erp.sales.picking_api import list_all_pick_tasks
 from dms_erp.warehouse.bay_api import list_all_bays
-from dms_erp.warehouse.inward_api import list_trucks
-from dms_erp.warehouse.transfer_api import list_transfers
+from dms_erp.warehouse.inward_api import list_all_trucks
+from dms_erp.warehouse.transfer_api import list_all_transfers
 from dms_erp.warehouse.utils import default_company, list_stock_lots
 
 SALES_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -216,9 +216,9 @@ def warehouse_dashboard():
 	_assert_role(WAREHOUSE_READ_ROLES, "Only Warehouse or Management can view the warehouse dashboard.")
 
 	bays = list_all_bays()
-	trucks = list_trucks()
-	transfers = list_transfers()
-	pick_tasks = list_pick_tasks()
+	trucks = list_all_trucks()
+	transfers = list_all_transfers()
+	pick_tasks = list_all_pick_tasks()
 	lots = list_stock_lots()
 
 	total_capacity = sum(b["capacityBoxes"] or 0 for b in bays)

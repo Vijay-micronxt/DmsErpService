@@ -38,3 +38,16 @@ class TestInward(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=1)
+
+	def test_list_trucks_is_paginated(self):
+		before = inward_api.list_trucks()
+		baseline_total = before["total"]
+
+		for i in range(3):
+			inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number=f"LR-PAGE-{i}")
+
+		page = inward_api.list_trucks(limit=2, offset=0)
+		self.assertEqual(page["total"], baseline_total + 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)

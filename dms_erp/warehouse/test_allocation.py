@@ -92,7 +92,7 @@ class TestAllocation(FrappeTestCase):
 		placed = allocation_api.confirm_putaway(alloc["id"])
 		self.assertEqual(placed["status"], "Placed")
 
-		trucks = {t["id"]: t for t in inward_api.list_trucks()}
+		trucks = {t["id"]: t for t in inward_api.list_all_trucks()}
 		self.assertEqual(trucks[truck["id"]]["status"], "Put-away")
 
 	def test_resolve_scan_bay_code(self):
@@ -113,10 +113,27 @@ class TestAllocation(FrappeTestCase):
 		self.assertEqual(fetched, created)
 
 		listed = allocation_api.list_allocations(item=self.item)
-		self.assertIn(created["id"], [a["id"] for a in listed])
+		self.assertIn(created["id"], [a["id"] for a in listed["items"]])
 
 		by_status = allocation_api.list_allocations(status="Confirmed")
-		self.assertIn(created["id"], [a["id"] for a in by_status])
+		self.assertIn(created["id"], [a["id"] for a in by_status["items"]])
+
+	def test_list_allocations_is_paginated(self):
+		item = make_item("ALLOC-PAGE-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		for batch in ("ALLOC-PAGE-BATCH-1", "ALLOC-PAGE-BATCH-2", "ALLOC-PAGE-BATCH-3"):
+			allocation_api.create_allocation(
+				item=item, batch_no=batch, total_qty=10, lines=[{"bay": "ALLOC-A-01", "qty": 10}], supplier=self.supplier
+			)
+
+		page = allocation_api.list_allocations(item=item, limit=2, offset=0)
+		self.assertEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		next_page = allocation_api.list_allocations(item=item, limit=2, offset=2)
+		self.assertEqual(len(next_page["items"]), 1)
 
 	def test_get_allocation_qr_codes_one_per_bay_split_and_resolves_via_scan(self):
 		alloc = allocation_api.create_allocation(

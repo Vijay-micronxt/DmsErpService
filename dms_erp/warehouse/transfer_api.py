@@ -7,6 +7,7 @@ Custom Fields on Stock Entry (see warehouse/setup.py).
 import frappe
 from frappe import _
 
+from dms_erp.pagination import clamp
 from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
 from dms_erp.warehouse.utils import bay_occupancy, default_company, get_bay, list_stock_lots
 
@@ -36,12 +37,29 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_transfers():
-	names = frappe.get_all(
-		"Stock Entry", filters={"purpose": "Material Transfer", "docstatus": 1, "custom_transfer_type": ["!=", ""]}, pluck="name", order_by="creation desc"
-	)
+_TRANSFER_FILTERS = {"purpose": "Material Transfer", "docstatus": 1, "custom_transfer_type": ["!=", ""]}
+
+
+def list_all_transfers() -> list[dict]:
+	"""Unpaginated — for internal callers (dashboard) that need the full result set,
+	not a page of it. list_transfers (the whitelisted endpoint) is the paginated one."""
+	names = frappe.get_all("Stock Entry", filters=_TRANSFER_FILTERS, pluck="name", order_by="creation desc")
 	return [_serialize(frappe.get_doc("Stock Entry", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_transfers(limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("Stock Entry", filters=_TRANSFER_FILTERS)
+	names = frappe.get_all(
+		"Stock Entry", filters=_TRANSFER_FILTERS, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize(frappe.get_doc("Stock Entry", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -79,6 +97,7 @@ def transfer_stock(
 		{
 			"doctype": "Stock Entry",
 			"purpose": "Material Transfer",
+			"stock_entry_type": "Material Transfer",
 			"company": default_company(),
 			"custom_transfer_type": transfer_type,
 			"custom_transfer_reason": reason,

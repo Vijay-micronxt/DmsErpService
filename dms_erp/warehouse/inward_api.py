@@ -7,6 +7,8 @@ Receipt (see allocation_api.create_allocation).
 import frappe
 from frappe import _
 
+from dms_erp.pagination import clamp
+
 INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
 TRUCK_FLOW = ["Scheduled", "At Gate", "Unloading", "Put-away"]
 
@@ -35,10 +37,24 @@ def _serialize(doc) -> dict:
 	}
 
 
-@frappe.whitelist(methods=["GET"])
-def list_trucks():
+def list_all_trucks() -> list[dict]:
+	"""Unpaginated — for internal callers (dashboard) that need the full result set,
+	not a page of it. list_trucks (the whitelisted endpoint) is the paginated one."""
 	names = frappe.get_all("Inward Truck", pluck="name", order_by="creation desc")
 	return [_serialize(frappe.get_doc("Inward Truck", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_trucks(limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("Inward Truck")
+	names = frappe.get_all("Inward Truck", pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit)
+	return {
+		"items": [_serialize(frappe.get_doc("Inward Truck", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["POST"])

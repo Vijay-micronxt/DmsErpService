@@ -87,7 +87,7 @@ class TestOrderApi(FrappeTestCase):
 		order = self._make_order(qty=25)
 		order_api.advance_order_stage(order["id"], "Picking")
 
-		tasks = picking_api.list_pick_tasks(order["id"])
+		tasks = picking_api.list_pick_tasks(order["id"])["items"]
 		self.assertEqual(len(tasks), 1)
 		self.assertEqual(tasks[0]["itemCode"], self.item)
 		self.assertEqual(tasks[0]["qty"], 25)

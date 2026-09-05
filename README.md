@@ -199,7 +199,7 @@ everyone can read.
 | `dms_erp.catalog.dealer_catalog_api.set_product_visibility` | write-restricted |
 | `dms_erp.catalog.dealer_catalog_api.set_category_visibility` | write-restricted; bulk by Item Group |
 | `dms_erp.catalog.dealer_catalog_api.category_coverage` | `{total, visible}` for a dealer + Item Group |
-| `dms_erp.pricing.api.list_price_records` / `get_price_record` | landing cost + suggested price computed on the fly, never stored |
+| `dms_erp.pricing.api.list_price_records` / `get_price_record` | landing cost + suggested price computed on the fly, never stored; `list_price_records` is paginated (`limit`/`offset`, `{items, total}`) |
 | `dms_erp.pricing.api.save_cost_inputs` | write-restricted |
 | `dms_erp.pricing.api.approve_price` | write-restricted; publishes to the native `Item Price` (Dealer price list) and appends an audit-trail row; `approved_by` is always the authenticated caller, never client-supplied |
 
@@ -226,11 +226,12 @@ read.
 | `stock_api.list_stock` | optional `bay`/`item` filters; live aggregate over Stock Ledger Entry, not a stored table |
 | `stock_api.suggest_bays` | category/free-capacity scoring, ported from the frontend's `suggestBays` |
 | `stock_api.validate_allocation` | error/warning issues for a proposed bay+qty+category, ported from `validateAllocation` |
-| `inward_api.list_trucks` / `add_truck` / `advance_truck` | truck gate queue; write-restricted |
+| `inward_api.list_trucks` / `add_truck` / `advance_truck` | truck gate queue; write-restricted; `list_trucks` is paginated (`limit`/`offset`, `{items, total}`) |
+| `allocation_api.list_allocations` / `get_allocation` | paginated (`limit`/`offset`, `{items, total}`); optional `inward_truck`/`status`/`item` filters |
 | `allocation_api.create_allocation` | write-restricted; posts and submits a native Purchase Receipt — the actual stock-effecting event |
 | `allocation_api.mark_allocation_printed` / `confirm_putaway` | write-restricted; `confirm_putaway` does not move stock again |
 | `allocation_api.resolve_scan` | read-only; same `PI-BAY|`/`PI-ITEM|` code format as the frontend, plus bare-code lookup |
-| `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted |
+| `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted; `list_transfers` is paginated (`limit`/`offset`, `{items, total}`) |
 
 ## Purchase API (Phase 4)
 
@@ -241,11 +242,13 @@ can read.
 
 | Method | Notes |
 |---|---|
-| `po_api.list_purchase_orders` / `get_purchase_order` | native Purchase Order, submitted on creation |
+| `po_api.list_purchase_orders` / `get_purchase_order` | native Purchase Order, submitted on creation; `list_purchase_orders` is paginated (`limit`/`offset`, `{items, total}`) |
 | `po_api.create_purchase_order` | write-restricted; single item line, matching the frontend's "Raise PO" flow |
 | `po_api.set_line_ready` | write-restricted; clamps to `[0, orderedQty]` |
 | `po_api.line_progress` | `plannedQty` from linked Inward Trucks, `receivedQty` from ERPNext's native `received_qty` |
 | `reorder_api.reorder_suggestions` | read-only; real stock/safety-stock signal today, zeroed demand signals pending Phase 5 |
+| `pickup_run_api.list_vehicle_types` / `create_vehicle_type` | paginated (`limit`/`offset`, `{items, total}`); write-restricted |
+| `pickup_run_api.list_pickup_runs` / `create_pickup_run` / `add_pickup_run_line` / `advance_pickup_run_status` | `list_pickup_runs` paginated (`limit`/`offset`, `{items, total}`), optional `supplier`/`status` filters; writes restricted |
 
 ## Sales API (Phase 5)
 
@@ -266,7 +269,7 @@ Manager`). Everyone reads.
 | `order_api.list_orders` / `get_order` | native Sales Order; paginated, optional `dealer`/`stage`/`search` filters |
 | `order_api.create_order` | write-restricted; direct Inquiry→Order (no markup) — the only other path is `convert_to_order` |
 | `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks |
-| `picking_api.list_pick_tasks` | optional `order` filter |
+| `picking_api.list_pick_tasks` | paginated (`limit`/`offset`, `{items, total}`); optional `order` filter |
 | `picking_api.auto_allocate` | write-restricted; allocates `min(qty, available)` from live stock across non-blocked bays |
 | `picking_api.patch_task` | write-restricted; assign picker / adjust status / batch / bay |
 
@@ -278,11 +281,11 @@ Warehouse` / `DMS Management` (or `System Manager`); everyone reads.
 
 | Method | Notes |
 |---|---|
-| `claims_api.list_claims` / `get_claim` | optional `status` filter |
+| `claims_api.list_claims` / `get_claim` | paginated (`limit`/`offset`, `{items, total}`); optional `status` filter |
 | `claims_api.file_claim` | write-restricted; `stock_entry` must be a Damage→Insurance Claim transfer, one claim per transfer; writes back to that Stock Entry's `custom_claim_ref` |
 | `claims_api.update_claim_status` | write-restricted; `Settled` stamps `settledAmount`/`settledAt` |
 | `claims_api.claim_summary` | receivable (Filed+Approved) / settled / rejected-count totals |
-| `unloading_api.list_charges` | optional `status` filter |
+| `unloading_api.list_charges` | paginated (`limit`/`offset`, `{items, total}`); optional `status` filter |
 | `unloading_api.get_charge_for_truck` | `null` if none recorded yet |
 | `unloading_api.record_charge` | write-restricted; one per Inward Truck; `boxes` read from the truck, `chargeAmount` computed on read |
 | `unloading_api.mark_paid` | write-restricted; stamps `paidBy`/`paidAt` from the authenticated caller |
@@ -297,7 +300,7 @@ All under `/api/method/dms_erp.comms.api.<method>`. Most require
 
 | Method | Auth | Notes |
 |---|---|---|
-| `list_messages` | staff | full thread for a dealer, ascending by `sentAt` |
+| `list_messages` | staff | paginated (`limit`/`offset`, `{items, total}`); ascending by `sentAt` |
 | `last_message` | staff | most recent message, or `null` |
 | `unreplied_inbound_count` | staff | `0` or `1` — has staff replied since the dealer's last inbound message |
 | `list_templates` | staff | static canned quick-replies with `{placeholder}` slots |

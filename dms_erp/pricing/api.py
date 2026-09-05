@@ -16,6 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import now_datetime
 
+from dms_erp.pagination import clamp
 from dms_erp.pricing.setup import DEALER_PRICE_LIST
 
 PRICING_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
@@ -101,10 +102,24 @@ def ensure_price_record(item: str, supplier: str, purchase_cost: float, margin_p
 	return doc
 
 
-@frappe.whitelist(methods=["GET"])
-def list_price_records():
+def list_all_price_records() -> list[dict]:
+	"""Unpaginated — for internal callers (reports) that need the full result set,
+	not a page of it. list_price_records (the whitelisted endpoint) is the paginated one."""
 	names = frappe.get_all("Item Price Proposal", pluck="name")
 	return [_serialize(frappe.get_doc("Item Price Proposal", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_price_records(limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("Item Price Proposal")
+	names = frappe.get_all("Item Price Proposal", pluck="name", limit_start=offset, limit_page_length=limit)
+	return {
+		"items": [_serialize(frappe.get_doc("Item Price Proposal", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

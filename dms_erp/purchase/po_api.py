@@ -10,6 +10,7 @@ import frappe
 from frappe import _
 from frappe.utils import getdate, today
 
+from dms_erp.pagination import clamp
 from dms_erp.warehouse.utils import default_company
 
 PURCHASE_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
@@ -46,9 +47,16 @@ def _serialize(doc) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_purchase_orders():
-	names = frappe.get_all("Purchase Order", pluck="name", order_by="creation desc")
-	return [_serialize(frappe.get_doc("Purchase Order", name)) for name in names]
+def list_purchase_orders(limit: int = 20, offset: int = 0):
+	limit, offset = clamp(limit, offset)
+	total = frappe.db.count("Purchase Order")
+	names = frappe.get_all("Purchase Order", pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit)
+	return {
+		"items": [_serialize(frappe.get_doc("Purchase Order", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
 
 
 @frappe.whitelist(methods=["GET"])

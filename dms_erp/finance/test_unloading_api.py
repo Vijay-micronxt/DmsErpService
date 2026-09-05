@@ -99,3 +99,22 @@ class TestUnloadingApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			unloading_api.record_charge(inward_truck=truck["id"], contractor="Contractor C", rate_per_box=5, payment_mode="Cash")
+
+	def test_list_charges_is_paginated_and_filters_by_status(self):
+		truck1 = add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number="LR-UNL-PAGE-1")
+		truck2 = add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number="LR-UNL-PAGE-2")
+		truck3 = add_truck(supplier=self.supplier, item=self.item, boxes=100, lr_number="LR-UNL-PAGE-3")
+		c1 = unloading_api.record_charge(inward_truck=truck1["id"], contractor="Contractor Page 1", rate_per_box=5, payment_mode="Cash")
+		unloading_api.record_charge(inward_truck=truck2["id"], contractor="Contractor Page 2", rate_per_box=5, payment_mode="Cash")
+		unloading_api.record_charge(inward_truck=truck3["id"], contractor="Contractor Page 3", rate_per_box=5, payment_mode="Cash")
+		unloading_api.mark_paid(c1["id"])
+
+		page = unloading_api.list_charges(limit=2, offset=0)
+		self.assertGreaterEqual(page["total"], 3)
+		self.assertEqual(len(page["items"]), 2)
+		self.assertEqual(page["limit"], 2)
+		self.assertEqual(page["offset"], 0)
+
+		by_status = unloading_api.list_charges(status="Paid")
+		self.assertEqual(by_status["total"], 1)
+		self.assertEqual(by_status["items"][0]["id"], c1["id"])
