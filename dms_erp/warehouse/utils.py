@@ -108,7 +108,7 @@ def claim_ref_for_lot(bay_name: str, item_code: str, batch_no: str) -> str | Non
 			and sle.item_code = %(item_code)s
 			and coalesce(sbe.batch_no, sle.batch_no) = %(batch_no)s
 			and sle.voucher_type = 'Stock Entry'
-			and coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty) > 0
+			and coalesce(sbe.qty, sle.actual_qty) > 0
 		""",
 		{"warehouse": bay_name, "item_code": item_code, "batch_no": batch_no},
 		as_dict=True,
@@ -132,9 +132,10 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	`batch_no` is left blank on every such entry now, so filtering on it directly
 	silently returned nothing. This left-joins the bundle's per-batch rows and
 	falls back to the legacy column for any entry that still uses it directly —
-	`Serial and Batch Entry.qty` is always positive with a separate `is_outward`
-	flag, unlike `sle.actual_qty` which is signed, so the outward case is negated
-	to match."""
+	`Serial and Batch Entry.qty` is already signed the same way `sle.actual_qty`
+	is (negative for an outward leg, positive for inward); `is_outward` is not a
+	"flip this positive magnitude" flag, so it must not be applied on top of qty's
+	own sign — doing so double-flips outward legs back to positive."""
 	conditions = ["sle.is_cancelled = 0"]
 	values: dict = {}
 	if bay:
@@ -150,14 +151,14 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 			sle.warehouse as bay,
 			sle.item_code as item_code,
 			coalesce(sbe.batch_no, sle.batch_no) as batch_no,
-			sum(coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty)) as boxes,
+			sum(coalesce(sbe.qty, sle.actual_qty)) as boxes,
 			min(sle.posting_date) as stored_at
 		from `tabStock Ledger Entry` sle
 		left join `tabSerial and Batch Entry` sbe on sbe.parent = sle.serial_and_batch_bundle
 		where {' and '.join(conditions)}
 			and (sbe.batch_no is not null or (sle.batch_no is not null and sle.batch_no != ''))
 		group by sle.warehouse, sle.item_code, coalesce(sbe.batch_no, sle.batch_no)
-		having sum(coalesce(sbe.qty * if(sbe.is_outward, -1, 1), sle.actual_qty)) > 0
+		having sum(coalesce(sbe.qty, sle.actual_qty)) > 0
 		""",
 		values,
 		as_dict=True,

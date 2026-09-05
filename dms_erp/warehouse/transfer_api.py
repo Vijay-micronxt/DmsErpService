@@ -97,6 +97,7 @@ def transfer_stock(
 		{
 			"doctype": "Stock Entry",
 			"purpose": "Material Transfer",
+			"stock_entry_type": "Material Transfer",
 			"company": default_company(),
 			"custom_transfer_type": transfer_type,
 			"custom_transfer_reason": reason,
