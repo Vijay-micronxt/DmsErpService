@@ -158,19 +158,55 @@ class TestDashboardApi(FrappeTestCase):
 
 	# ---------------- Role-agnostic entry point ----------------
 
-	def test_get_dashboard_routes_by_the_caller_own_role(self):
+	def _make_user(self, email, role):
 		frappe.set_user("Administrator")
-		sales_user = "dashboard-get-sales@pacific.test"
-		if frappe.db.exists("User", sales_user):
-			frappe.delete_doc("User", sales_user, force=True, ignore_permissions=True)
+		if frappe.db.exists("User", email):
+			frappe.delete_doc("User", email, force=True, ignore_permissions=True)
 		frappe.get_doc(
-			{"doctype": "User", "email": sales_user, "first_name": "Sales", "send_welcome_email": 0, "roles": [{"role": "DMS Sales"}]}
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": role,
+				"send_welcome_email": 0,
+				"roles": [{"role": role}],
+			}
 		).insert(ignore_permissions=True)
 
-		frappe.set_user(sales_user)
+	def _dashboard_with_inquiry_count_card(self, dashboard_name, card_label):
+		"""Mirrors what a System Manager would build via the desk UI: a Number Card
+		counting Inquiry docs, added to a Dashboard named for one of the four roles."""
+		if frappe.db.exists("Number Card", card_label):
+			frappe.delete_doc("Number Card", card_label, force=True, ignore_permissions=True)
+		card = frappe.get_doc(
+			{
+				"doctype": "Number Card",
+				"label": card_label,
+				"type": "Document Type",
+				"document_type": "Inquiry",
+				"function": "Count",
+				"is_public": 1,
+			}
+		).insert(ignore_permissions=True)
+
+		if frappe.db.exists("Dashboard", dashboard_name):
+			frappe.delete_doc("Dashboard", dashboard_name, force=True, ignore_permissions=True)
+		frappe.get_doc(
+			{"doctype": "Dashboard", "dashboard_name": dashboard_name, "cards": [{"card": card.name}]}
+		).insert(ignore_permissions=True)
+		return card
+
+	def test_get_dashboard_routes_by_the_caller_own_role_and_returns_its_widgets(self):
+		card = self._dashboard_with_inquiry_count_card("Sales Dashboard", "Dashboard Test Inquiry Count")
+		self._make_user("dashboard-get-sales@pacific.test", "DMS Sales")
+
+		frappe.set_user("dashboard-get-sales@pacific.test")
 		result = dashboard_api.get_dashboard()
+
 		self.assertEqual(result["role"], "sales")
-		self.assertIn("todaysInquiries", result["data"])
+		widget = next((w for w in result["widgets"] if w["name"] == card.name), None)
+		self.assertIsNotNone(widget)
+		self.assertEqual(widget["type"], "number_card")
+		self.assertIsInstance(widget["value"], (int, float))
 
 	def test_get_dashboard_routes_system_manager_only_accounts_to_management(self):
 		# Administrator holds System Manager but no DMS-* role -- resolve_primary_role
@@ -178,9 +214,24 @@ class TestDashboardApi(FrappeTestCase):
 		# roles), so this is the fallback path, not the ordinary case above.
 		result = dashboard_api.get_dashboard()
 		self.assertEqual(result["role"], "management")
-		self.assertIn("totalSalesMtd", result["data"])
+		self.assertIsInstance(result["widgets"], list)
 
 	def test_get_dashboard_rejects_a_role_with_no_dashboard(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			dashboard_api.get_dashboard()
+
+	def test_get_dashboard_returns_empty_widgets_for_an_unconfigured_dashboard(self):
+		# No admin has built a "Purchase Dashboard" yet in this scenario -- get_dashboard
+		# should degrade to an empty list, not error, so the endpoint ships ahead of that
+		# setup being done.
+		frappe.set_user("Administrator")
+		if frappe.db.exists("Dashboard", "Purchase Dashboard"):
+			frappe.delete_doc("Dashboard", "Purchase Dashboard", force=True, ignore_permissions=True)
+		self._make_user("dashboard-get-purchase@pacific.test", "DMS Purchase")
+
+		frappe.set_user("dashboard-get-purchase@pacific.test")
+		result = dashboard_api.get_dashboard()
+
+		self.assertEqual(result["role"], "purchase")
+		self.assertEqual(result["widgets"], [])

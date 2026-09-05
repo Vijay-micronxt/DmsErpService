@@ -35,12 +35,22 @@ all four), plus one role-agnostic entry point in front of them:
 - `get_dashboard` — no role param, no `<method>` name for the frontend to hardcode:
   resolves the caller's own primary role via `auth.utils.resolve_primary_role` (the
   exact same precedence `auth.api.login`'s `user.primary_role` is computed from,
-  so the dashboard you get back always agrees with what login said you are) and
-  returns `{"role", "data"}` for that one dashboard. A System Manager-only account
-  (the admin escape-hatch `auth/api.py` documents — no `DMS *` role at all, so
-  `resolve_primary_role` alone would find nothing) is routed to `"management"`
-  instead of rejected, since every individual dashboard function below already
-  grants System Manager its own access.
+  so the dashboard you get back always agrees with what login said you are), then
+  reads that role's ERPNext-**native** `Dashboard` doc (`Sales Dashboard`/
+  `Purchase Dashboard`/`Warehouse Dashboard`/`Management Dashboard`) and returns
+  `{"role", "widgets"}` — the Number Card/Dashboard Chart widgets a System Manager
+  configured on it via the desk UI, permission-filtered per widget by Frappe's own
+  `Dashboard.get_permitted_cards`/`get_permitted_charts`. Unlike the four functions
+  below, this endpoint's content lives entirely in ERPNext config, not code: adding,
+  removing, or reordering a KPI needs no deploy, only editing that Dashboard doc.
+  A missing/unconfigured Dashboard doc returns an empty `widgets` list, not an
+  error — this endpoint ships ahead of that setup. It no longer calls the four
+  functions below at all; they remain independently callable but exist now mainly
+  as reference implementations of the same aggregations, in case a native Number
+  Card/Chart can't express one (e.g. `missedDemandValue`'s per-row price lookup).
+  A System Manager-only account (the admin escape-hatch `auth/api.py` documents —
+  no `DMS *` role at all, so `resolve_primary_role` alone would find nothing) is
+  routed to `"management"` instead of rejected.
 - `sales_dashboard` — today's inquiries, pending quotations, orders this month,
   missed-demand value, a real 30-day inquiry trend, actionable inquiries.
 - `warehouse_dashboard` — the ported `warehouseKpis`/`warehouseAlerts`, plus

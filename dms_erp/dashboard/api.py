@@ -14,6 +14,9 @@ invoicing phase this 8-phase plan never included (BRD flow stops at "Dispatched"
 from datetime import date
 
 import frappe
+from frappe.desk.doctype.dashboard.dashboard import get_permitted_cards, get_permitted_charts
+from frappe.desk.doctype.dashboard_chart.dashboard_chart import get as get_chart_data
+from frappe.desk.doctype.number_card.number_card import get_percentage_difference, get_result as get_card_result
 from frappe.utils import add_days
 
 from dms_erp.auth.utils import resolve_primary_role
@@ -382,11 +385,15 @@ def _credit_exposure_alerts() -> list[dict]:
 
 # ==================== Role-agnostic entry point ====================
 
-_DASHBOARD_BY_ROLE = {
-	"management": management_dashboard,
-	"purchase": purchase_dashboard,
-	"warehouse": warehouse_dashboard,
-	"sales": sales_dashboard,
+# One native ERPNext `Dashboard` doc per role, populated by a System Manager via the desk UI
+# (Dashboard List > New, then add Number Card / Dashboard Chart widgets there) -- not code. An
+# unconfigured or missing Dashboard just returns an empty widgets list below rather than erroring,
+# so this ships ahead of that setup being done.
+_DASHBOARD_DOC_BY_ROLE = {
+	"management": "Management Dashboard",
+	"purchase": "Purchase Dashboard",
+	"warehouse": "Warehouse Dashboard",
+	"sales": "Sales Dashboard",
 }
 
 
@@ -407,14 +414,87 @@ def _resolve_dashboard_role(user_roles) -> str | None:
 	return None
 
 
+def _number_card_widget(card_link) -> dict | None:
+	"""card_link is a Number Card Link row from Dashboard.cards, already permission-filtered by
+	get_permitted_cards. Value/trend come from the same functions the desk UI's own dashboard
+	view calls -- number_card.get_result / get_percentage_difference -- so a card renders here
+	exactly as it would in ERPNext itself."""
+	card = frappe.get_cached_doc("Number Card", card_link.card)
+	filters = card.filters_json
+	try:
+		value = get_card_result(card, filters)
+	except Exception:
+		frappe.log_error(title=f"Dashboard number card '{card.name}' failed to compute")
+		return None
+	trend = None
+	if card.show_percentage_stats:
+		try:
+			trend = get_percentage_difference(card, filters, value)
+		except Exception:
+			frappe.log_error(title=f"Dashboard number card '{card.name}' trend failed to compute")
+	return {
+		"type": "number_card",
+		"name": card.name,
+		"label": card.label,
+		"value": value,
+		"color": card.color,
+		"trend": trend,
+	}
+
+
+def _chart_widget(chart_link) -> dict | None:
+	"""chart_link is a Dashboard Chart Link row from Dashboard.charts, already permission-filtered
+	by get_permitted_charts. `chart.type` is the *visual* shape (Line/Bar/Percentage/Pie/Donut/
+	Heatmap) -- distinct from `chart.chart_type`, which is the aggregation (Count/Sum/Average/
+	Group By/Report). Data is {"labels", "datasets"} for every shape except Heatmap ({"labels": [],
+	"dataPoints": {...}}); a Group By chart with no matching data yet returns None."""
+	chart = frappe.get_cached_doc("Dashboard Chart", chart_link.chart)
+	try:
+		data = get_chart_data(chart_name=chart.name)
+	except Exception:
+		frappe.log_error(title=f"Dashboard chart '{chart.name}' failed to compute")
+		return None
+	if data is None:
+		return None
+	return {
+		"type": "chart",
+		"name": chart.name,
+		"label": chart.chart_name,
+		"chart_type": chart.type.lower(),
+		"color": chart.color,
+		**data,
+	}
+
+
+def _widgets_for_dashboard(dashboard_name: str) -> list[dict]:
+	if not frappe.db.exists("Dashboard", dashboard_name):
+		return []
+	widgets = [
+		widget for card_link in get_permitted_cards(dashboard_name) if (widget := _number_card_widget(card_link))
+	]
+	widgets += [
+		widget for chart_link in get_permitted_charts(dashboard_name) if (widget := _chart_widget(chart_link))
+	]
+	return widgets
+
+
 @frappe.whitelist(methods=["GET"])
 def get_dashboard():
 	"""One stable entry point instead of the frontend needing to know which of
-	sales_dashboard/purchase_dashboard/warehouse_dashboard/management_dashboard to
-	call for a given user -- resolves the caller's own primary role and returns
-	that dashboard's data under it, so adding a future role/dashboard never
-	requires a frontend change."""
+	sales_dashboard/purchase_dashboard/warehouse_dashboard/management_dashboard to call for a given
+	user. Resolves the caller's own primary role, then reads that role's ERPNext-native `Dashboard`
+	doc (_DASHBOARD_DOC_BY_ROLE) and returns its Number Card / Dashboard Chart widgets -- whatever an
+	admin configured in the desk UI, permission-checked per widget by Frappe's own
+	get_permitted_cards/get_permitted_charts (a widget scoped to a doctype/report the caller can't
+	read is silently dropped, not surfaced as an error).
+
+	Unlike the four hand-written aggregation functions above -- each a fixed response shape the
+	frontend has a matching TS interface for -- this endpoint's shape is generic ({"role",
+	"widgets": [...]}) and its *content* lives entirely in ERPNext config: adding, removing, or
+	reordering a KPI card or chart for a role needs no code change and no deploy, only editing that
+	role's Dashboard doc. A role whose Dashboard doc doesn't exist yet (or isn't named to match
+	_DASHBOARD_DOC_BY_ROLE) simply gets back an empty widgets list, not an error."""
 	role = _resolve_dashboard_role(frappe.get_roles(frappe.session.user))
-	if role not in _DASHBOARD_BY_ROLE:
+	if role not in _DASHBOARD_DOC_BY_ROLE:
 		frappe.throw("No dashboard available for your role.", frappe.PermissionError)
-	return {"role": role, "data": _DASHBOARD_BY_ROLE[role]()}
+	return {"role": role, "widgets": _widgets_for_dashboard(_DASHBOARD_DOC_BY_ROLE[role])}

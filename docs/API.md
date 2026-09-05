@@ -2098,7 +2098,18 @@ Pure read/aggregation over every other module — no doctype, nothing stored, no
 
 #### GET `dms_erp.dashboard.api.get_dashboard`
 
-**Role-agnostic entry point** — resolves the caller's own primary role (the same precedence `auth.api.login`'s `user.primary_role` uses) and returns that one dashboard, so the frontend never has to know which of `sales_dashboard`/`purchase_dashboard`/`warehouse_dashboard`/`management_dashboard` to call. A System Manager-only account (no `DMS *` role — the admin escape hatch documented in `auth/api.py`) resolves to `"management"`.
+**Role-agnostic entry point** — resolves the caller's own primary role (the same precedence `auth.api.login`'s `user.primary_role` uses) and returns that role's **ERPNext-native** `Dashboard` doc's widgets, so the frontend never has to know which of `sales_dashboard`/`purchase_dashboard`/`warehouse_dashboard`/`management_dashboard` to call, and an admin can add/remove/reorder a KPI card or chart from the desk UI with no code change or deploy. A System Manager-only account (no `DMS *` role — the admin escape hatch documented in `auth/api.py`) resolves to `"management"`.
+
+**Setup required**: a System Manager creates one `Dashboard` doc per role in the desk UI (Dashboard List → New), named exactly:
+
+| Role | Dashboard doc name |
+|---|---|
+| sales | `Sales Dashboard` |
+| purchase | `Purchase Dashboard` |
+| warehouse | `Warehouse Dashboard` |
+| management | `Management Dashboard` |
+
+...then adds `Number Card`/`Dashboard Chart` widgets to it the normal ERPNext way. Until that Dashboard doc exists, `get_dashboard` returns an empty `widgets` list for that role rather than erroring — this endpoint ships ahead of that configuration being done.
 
 **Params**
 
@@ -2107,8 +2118,17 @@ _No parameters._
 **Response**
 
 ```json
-{ "role": "sales", "data": (same shape as sales_dashboard's response) }
+{
+  "role": "sales",
+  "widgets": [
+    { "type": "number_card", "name": "Today's Inquiries", "label": "Today's Inquiries", "value": 7, "color": "#29CD42", "trend": null },
+    { "type": "chart", "name": "Inquiry Trend", "label": "Inquiry Trend", "chart_type": "line", "color": "#7C4DFF",
+      "labels": ["24-07-2026", "25-07-2026"], "datasets": [{ "name": "Inquiry Trend", "values": [12, 18] }] }
+  ]
+}
 ```
+
+Each widget's `type` is either `"number_card"` (with `value`, optional `trend` percentage) or `"chart"` (with `chart_type`: `line`/`bar`/`percentage`/`pie`/`donut`/`heatmap`, and either `labels`+`datasets`, or for heatmap charts `labels: []`+`dataPoints`). Widgets are permission-filtered individually by Frappe's own `Dashboard.get_permitted_cards`/`get_permitted_charts` — one scoped to a doctype/report the caller can't read is silently omitted, not surfaced as an error. The four `sales_dashboard`/`purchase_dashboard`/`warehouse_dashboard`/`management_dashboard` endpoints below are unaffected and still independently callable/whitelisted, but `get_dashboard` no longer routes through them.
 
 > ⚠️ throws `PermissionError` if the caller holds none of the four DMS roles (and isn't System Manager)
 
