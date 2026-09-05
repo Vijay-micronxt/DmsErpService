@@ -18,7 +18,11 @@ catalog visibility. Implemented.
   "offset"}` rather than a bare array (`dms_erp.pagination.clamp` caps `limit` at
   100) — `reports/catalog_reports.py` needs the whole result set, not a page of
   it, so it calls the unpaginated `list_all_products` instead of the whitelisted
-  endpoint.
+  endpoint. `list_products` also takes `category`/`status` (plain `Item` columns)
+  and `supplier` — the one filter that isn't a column on `Item` at all, since
+  supplier is only ever recorded on `Item Price Proposal` (autonamed `field:item`,
+  so its `name` already *is* the item code — no join needed, just a second
+  `get_all` intersected with any `dealer` restriction already in play).
 - **Dealer Catalog** (`dealer_catalog_api.py` + `doctype/dealer_catalog`) — a custom
   doctype (no ERPNext equivalent) mapping a dealer (`Customer`) to the set of items
   they're allowed to see. No assignment yet = full catalog visible, matching the

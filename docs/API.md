@@ -255,6 +255,7 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
 | `search` | string | optional | substring match on product name |
 | `category` | string | optional | exact match on Item Group, e.g. "Vitrified" |
 | `status` | string | optional | exact match on the 5-state discontinuation lifecycle |
+| `supplier` | string | optional | exact match on the item's current landing-cost supplier (Item Price Proposal.supplier) — items with no price proposal at all never match |
 | `limit` | int | optional, default 20, max 100 | page size |
 | `offset` | int | optional, default 0 | rows to skip |
 

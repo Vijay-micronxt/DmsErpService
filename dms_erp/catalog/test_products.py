@@ -160,6 +160,37 @@ class TestProducts(FrappeTestCase):
 		self.assertIn("PROD-TEST-B", codes)
 		self.assertNotIn("PROD-TEST-A", codes)
 
+	def test_list_products_filters_by_supplier(self):
+		other_supplier = make_supplier("Product Test Supplier Two")
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		catalog_api.create_product(
+			code="PROD-TEST-B",
+			name="Another Product",
+			category="Vitrified",
+			supplier=other_supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		by_first_supplier = catalog_api.list_products(supplier=self.supplier)
+		codes = {p["code"] for p in by_first_supplier["items"]}
+		self.assertIn("PROD-TEST-A", codes)
+		self.assertNotIn("PROD-TEST-B", codes)
+
+		by_second_supplier = catalog_api.list_products(supplier=other_supplier)
+		codes = {p["code"] for p in by_second_supplier["items"]}
+		self.assertIn("PROD-TEST-B", codes)
+		self.assertNotIn("PROD-TEST-A", codes)
+
 	def test_create_product_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

@@ -111,31 +111,51 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 	}
 
 
-def _product_filters(dealer: str | None, search: str | None, category: str | None = None, status: str | None = None) -> dict:
+def _product_filters(
+	dealer: str | None,
+	search: str | None,
+	category: str | None = None,
+	status: str | None = None,
+	supplier: str | None = None,
+) -> dict:
 	from dms_erp.catalog.dealer_catalog_api import catalog_for
 
 	filters = {}
-	if dealer:
-		# catalog_for() can only be expressed as an explicit id list, not a SQL
-		# condition -- an empty list is a real "nothing assigned" result, not "no
-		# filter", so it's given a sentinel that matches no real item code rather
-		# than an empty ["in", []] (Frappe doesn't guarantee that shape short-circuits).
-		filters["name"] = ["in", catalog_for(dealer) or [""]]
 	if search:
 		filters["item_name"] = ["like", f"%{search}%"]
 	if category:
 		filters["item_group"] = category
 	if status:
 		filters["custom_discontinuation_status"] = status
+
+	# dealer and supplier can only be expressed as explicit item-code lists (dealer
+	# via catalog_for; supplier via Item Price Proposal -- name==item, autoname
+	# "field:item", so plucking Item Price Proposal.name for that supplier already
+	# gives item codes directly, no join needed). Both given at once must intersect,
+	# not overwrite one another -- an empty result is a real "nothing matches", not
+	# "no filter", so it's given a sentinel that matches no real item code rather
+	# than an empty ["in", []] (Frappe doesn't guarantee that shape short-circuits).
+	id_restrictions = []
+	if dealer:
+		id_restrictions.append(set(catalog_for(dealer)))
+	if supplier:
+		id_restrictions.append(set(frappe.get_all("Item Price Proposal", filters={"supplier": supplier}, pluck="name")))
+	if id_restrictions:
+		filters["name"] = ["in", list(set.intersection(*id_restrictions)) or [""]]
+
 	return filters
 
 
 def list_all_products(
-	dealer: str | None = None, search: str | None = None, category: str | None = None, status: str | None = None
+	dealer: str | None = None,
+	search: str | None = None,
+	category: str | None = None,
+	status: str | None = None,
+	supplier: str | None = None,
 ) -> list[dict]:
 	"""Unpaginated -- for internal callers (reports) that need the full result set,
 	not a page of it. list_products (the whitelisted endpoint) is the paginated one."""
-	filters = _product_filters(dealer, search, category, status)
+	filters = _product_filters(dealer, search, category, status, supplier)
 	codes = frappe.get_all("Item", filters=filters, pluck="name", order_by="item_code asc")
 	return [_serialize(frappe.get_doc("Item", code)) for code in codes]
 
@@ -146,11 +166,12 @@ def list_products(
 	search: str | None = None,
 	category: str | None = None,
 	status: str | None = None,
+	supplier: str | None = None,
 	limit: int = 20,
 	offset: int = 0,
 ):
 	limit, offset = clamp(limit, offset)
-	filters = _product_filters(dealer, search, category, status)
+	filters = _product_filters(dealer, search, category, status, supplier)
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
 		"Item", filters=filters, pluck="name", order_by="item_code asc", limit_start=offset, limit_page_length=limit
