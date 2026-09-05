@@ -189,7 +189,7 @@ everyone can read.
 
 | Method | Notes |
 |---|---|
-| `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search`/`category`/`status` |
+| `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search`/`category`/`status`/`supplier` (supplier resolved via Item Price Proposal, not a field on Item itself) |
 | `dms_erp.catalog.api.get_product` | `item` (Item Code) |
 | `dms_erp.catalog.api.create_product` | write-restricted; also seeds a Pending `Item Price Proposal` |
 | `dms_erp.catalog.api.update_product` | write-restricted; `patch` is a partial `Product`-shaped dict |
