@@ -196,7 +196,7 @@ class TestDashboardApi(FrappeTestCase):
 		return card
 
 	def test_get_dashboard_routes_by_the_caller_own_role_and_returns_its_widgets(self):
-		card = self._dashboard_with_inquiry_count_card("Sales Dashboard", "Dashboard Test Inquiry Count")
+		card = self._dashboard_with_inquiry_count_card("DMS Sales", "Dashboard Test Inquiry Count")
 		self._make_user("dashboard-get-sales@pacific.test", "DMS Sales")
 
 		frappe.set_user("dashboard-get-sales@pacific.test")
@@ -222,12 +222,12 @@ class TestDashboardApi(FrappeTestCase):
 			dashboard_api.get_dashboard()
 
 	def test_get_dashboard_returns_empty_widgets_for_an_unconfigured_dashboard(self):
-		# No admin has built a "Purchase Dashboard" yet in this scenario -- get_dashboard
+		# No admin has built a "DMS Purchase" Dashboard yet in this scenario -- get_dashboard
 		# should degrade to an empty list, not error, so the endpoint ships ahead of that
 		# setup being done.
 		frappe.set_user("Administrator")
-		if frappe.db.exists("Dashboard", "Purchase Dashboard"):
-			frappe.delete_doc("Dashboard", "Purchase Dashboard", force=True, ignore_permissions=True)
+		if frappe.db.exists("Dashboard", "DMS Purchase"):
+			frappe.delete_doc("Dashboard", "DMS Purchase", force=True, ignore_permissions=True)
 		self._make_user("dashboard-get-purchase@pacific.test", "DMS Purchase")
 
 		frappe.set_user("dashboard-get-purchase@pacific.test")

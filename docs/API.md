@@ -2100,14 +2100,14 @@ Pure read/aggregation over every other module — no doctype, nothing stored, no
 
 **Role-agnostic entry point** — resolves the caller's own primary role (the same precedence `auth.api.login`'s `user.primary_role` uses) and returns that role's **ERPNext-native** `Dashboard` doc's widgets, so the frontend never has to know which of `sales_dashboard`/`purchase_dashboard`/`warehouse_dashboard`/`management_dashboard` to call, and an admin can add/remove/reorder a KPI card or chart from the desk UI with no code change or deploy. A System Manager-only account (no `DMS *` role — the admin escape hatch documented in `auth/api.py`) resolves to `"management"`.
 
-**Setup required**: a System Manager creates one `Dashboard` doc per role in the desk UI (Dashboard List → New), named exactly:
+**Setup required**: a System Manager creates one `Dashboard` doc per role in the desk UI (Dashboard List → New), named after that role's own DMS Role doc:
 
 | Role | Dashboard doc name |
 |---|---|
-| sales | `Sales Dashboard` |
-| purchase | `Purchase Dashboard` |
-| warehouse | `Warehouse Dashboard` |
-| management | `Management Dashboard` |
+| sales | `DMS Sales` |
+| purchase | `DMS Purchase` |
+| warehouse | `DMS Warehouse` |
+| management | `DMS Management` |
 
 ...then adds `Number Card`/`Dashboard Chart` widgets to it the normal ERPNext way. Until that Dashboard doc exists, `get_dashboard` returns an empty `widgets` list for that role rather than erroring — this endpoint ships ahead of that configuration being done.
 
