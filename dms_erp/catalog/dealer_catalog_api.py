@@ -91,7 +91,7 @@ def set_category_visibility(dealer: str, item_group: str, visible: bool):
 	current = {row.item for row in doc.items}
 
 	updated = (current | category_items) if visible else (current - category_items)
-	doc.items = [{"item": item} for item in updated]
+	doc.set("items", [{"item": item} for item in updated])
 	doc.save(ignore_permissions=True)
 
 	return {"success": True}
