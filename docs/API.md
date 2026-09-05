@@ -2096,6 +2096,23 @@ One voucher per Inward Truck. Same accounting-settings pattern as Claims.
 
 Pure read/aggregation over every other module — no doctype, nothing stored, nothing static.
 
+#### GET `dms_erp.dashboard.api.get_dashboard`
+
+**Role-agnostic entry point** — resolves the caller's own primary role (the same precedence `auth.api.login`'s `user.primary_role` uses) and returns that one dashboard, so the frontend never has to know which of `sales_dashboard`/`purchase_dashboard`/`warehouse_dashboard`/`management_dashboard` to call. A System Manager-only account (no `DMS *` role — the admin escape hatch documented in `auth/api.py`) resolves to `"management"`.
+
+**Params**
+
+_No parameters._
+
+**Response**
+
+```json
+{ "role": "sales", "data": (same shape as sales_dashboard's response) }
+```
+
+> ⚠️ throws `PermissionError` if the caller holds none of the four DMS roles (and isn't System Manager)
+
+
 #### GET `dms_erp.dashboard.api.sales_dashboard`
 
 **Sales dashboard** — Sales/Management.

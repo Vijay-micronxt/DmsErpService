@@ -30,8 +30,17 @@ produce:
   `custom_claim_ref` (Phase 6) is set.
 
 Four endpoints, one per role, each gated to that role (or Management, who sees
-all four):
+all four), plus one role-agnostic entry point in front of them:
 
+- `get_dashboard` — no role param, no `<method>` name for the frontend to hardcode:
+  resolves the caller's own primary role via `auth.utils.resolve_primary_role` (the
+  exact same precedence `auth.api.login`'s `user.primary_role` is computed from,
+  so the dashboard you get back always agrees with what login said you are) and
+  returns `{"role", "data"}` for that one dashboard. A System Manager-only account
+  (the admin escape-hatch `auth/api.py` documents — no `DMS *` role at all, so
+  `resolve_primary_role` alone would find nothing) is routed to `"management"`
+  instead of rejected, since every individual dashboard function below already
+  grants System Manager its own access.
 - `sales_dashboard` — today's inquiries, pending quotations, orders this month,
   missed-demand value, a real 30-day inquiry trend, actionable inquiries.
 - `warehouse_dashboard` — the ported `warehouseKpis`/`warehouseAlerts`, plus

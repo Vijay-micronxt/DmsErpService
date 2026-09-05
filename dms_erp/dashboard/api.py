@@ -16,6 +16,7 @@ from datetime import date
 import frappe
 from frappe.utils import add_days
 
+from dms_erp.auth.utils import resolve_primary_role
 from dms_erp.finance.claims_api import claim_summary
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase import po_api
@@ -377,3 +378,43 @@ def _credit_exposure_alerts() -> list[dict]:
 		}
 		for r in rows
 	]
+
+
+# ==================== Role-agnostic entry point ====================
+
+_DASHBOARD_BY_ROLE = {
+	"management": management_dashboard,
+	"purchase": purchase_dashboard,
+	"warehouse": warehouse_dashboard,
+	"sales": sales_dashboard,
+}
+
+
+def _resolve_dashboard_role(user_roles) -> str | None:
+	# Reuses auth.utils.resolve_primary_role -- the same precedence login's own
+	# `primary_role` is computed from, so whichever dashboard this returns always
+	# agrees with what the user just logged in as. That function only knows the
+	# four DMS roles, though, so the System Manager "admin escape hatch" login
+	# already documented in auth/api.py (an account with no DMS role at all)
+	# would otherwise get turned away here -- every individual dashboard function
+	# already grants System Manager its own access, so route that case to the
+	# highest tier (management) instead of throwing.
+	role = resolve_primary_role(user_roles)
+	if role:
+		return role
+	if "System Manager" in set(user_roles):
+		return "management"
+	return None
+
+
+@frappe.whitelist(methods=["GET"])
+def get_dashboard():
+	"""One stable entry point instead of the frontend needing to know which of
+	sales_dashboard/purchase_dashboard/warehouse_dashboard/management_dashboard to
+	call for a given user -- resolves the caller's own primary role and returns
+	that dashboard's data under it, so adding a future role/dashboard never
+	requires a frontend change."""
+	role = _resolve_dashboard_role(frappe.get_roles(frappe.session.user))
+	if role not in _DASHBOARD_BY_ROLE:
+		frappe.throw("No dashboard available for your role.", frappe.PermissionError)
+	return {"role": role, "data": _DASHBOARD_BY_ROLE[role]()}

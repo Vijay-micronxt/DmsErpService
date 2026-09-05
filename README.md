@@ -318,6 +318,7 @@ only reads.
 
 | Method | Role | Notes |
 |---|---|---|
+| `get_dashboard` | any of the four DMS roles, or System Manager | role-agnostic entry point — resolves the caller's own primary role (same precedence as `auth.api.login`'s `user.primary_role`) and returns `{"role", "data"}` for that one dashboard, so the frontend never hardcodes which of the four below to call |
 | `sales_dashboard` | Sales, Management | today's inquiries, pending quotations, orders this month, missed-demand value, 30-day inquiry trend, actionable inquiries |
 | `warehouse_dashboard` | Warehouse, Management | ported `warehouseKpis`/`warehouseAlerts` from the frontend, now over live data, plus today's incoming trucks |
 | `purchase_dashboard` | Purchase, Management | pending/delayed POs, this week's pickups, reorder-suggestion count, monthly purchase trend, materials ready for pickup |

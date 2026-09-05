@@ -155,3 +155,32 @@ class TestDashboardApi(FrappeTestCase):
 		frappe.set_user(other_user)
 		with self.assertRaises(frappe.PermissionError):
 			dashboard_api.management_dashboard()
+
+	# ---------------- Role-agnostic entry point ----------------
+
+	def test_get_dashboard_routes_by_the_caller_own_role(self):
+		frappe.set_user("Administrator")
+		sales_user = "dashboard-get-sales@pacific.test"
+		if frappe.db.exists("User", sales_user):
+			frappe.delete_doc("User", sales_user, force=True, ignore_permissions=True)
+		frappe.get_doc(
+			{"doctype": "User", "email": sales_user, "first_name": "Sales", "send_welcome_email": 0, "roles": [{"role": "DMS Sales"}]}
+		).insert(ignore_permissions=True)
+
+		frappe.set_user(sales_user)
+		result = dashboard_api.get_dashboard()
+		self.assertEqual(result["role"], "sales")
+		self.assertIn("todaysInquiries", result["data"])
+
+	def test_get_dashboard_routes_system_manager_only_accounts_to_management(self):
+		# Administrator holds System Manager but no DMS-* role -- resolve_primary_role
+		# alone would return None for that combination (it only knows the four DMS
+		# roles), so this is the fallback path, not the ordinary case above.
+		result = dashboard_api.get_dashboard()
+		self.assertEqual(result["role"], "management")
+		self.assertIn("totalSalesMtd", result["data"])
+
+	def test_get_dashboard_rejects_a_role_with_no_dashboard(self):
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			dashboard_api.get_dashboard()
