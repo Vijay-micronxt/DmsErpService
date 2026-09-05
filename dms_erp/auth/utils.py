@@ -21,18 +21,22 @@ def hash_token(token: str) -> str:
 	return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def resolve_primary_role(user_roles) -> str | None:
+def resolve_app_roles(user_roles) -> list[str]:
+	"""Every DMS role slug the user holds, highest-privilege first -- a user with both DMS
+	Management and DMS Sales gets ["management", "sales"], not just one."""
 	user_roles = set(user_roles)
-	for role in APP_ROLE_PRIORITY:
-		if role in user_roles:
-			return APP_ROLE_SLUGS[role]
-	return None
+	return [APP_ROLE_SLUGS[role] for role in APP_ROLE_PRIORITY if role in user_roles]
+
+
+def resolve_primary_role(user_roles) -> str | None:
+	app_roles = resolve_app_roles(user_roles)
+	return app_roles[0] if app_roles else None
 
 
 def build_user_profile(user: str) -> dict:
 	doc = frappe.get_cached_doc("User", user)
 	roles = frappe.get_roles(user)
-	app_roles = [APP_ROLE_SLUGS[r] for r in APP_ROLE_PRIORITY if r in roles]
+	app_roles = resolve_app_roles(roles)
 	return {
 		"name": doc.name,
 		"email": doc.email,

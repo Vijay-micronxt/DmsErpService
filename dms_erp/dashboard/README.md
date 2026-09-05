@@ -33,20 +33,23 @@ Four endpoints, one per role, each gated to that role (or Management, who sees
 all four), plus one role-agnostic entry point in front of them:
 
 - `get_dashboard` — no role param, no `<method>` name for the frontend to hardcode:
-  resolves the caller's own primary role via `auth.utils.resolve_primary_role` (the
-  exact same precedence `auth.api.login`'s `user.primary_role` is computed from,
-  so the dashboard you get back always agrees with what login said you are), then
-  reads that role's ERPNext-**native** `Dashboard` doc (`DMS Sales`/`DMS Purchase`/
-  `DMS Warehouse`/`DMS Management` — same name as the DMS Role doc itself) and returns
-  `{"role", "widgets"}` — the Number Card/Dashboard Chart widgets a System Manager
-  configured on it via the desk UI, permission-filtered per widget by Frappe's own
+  resolves *every* DMS role the caller holds via `auth.utils.resolve_app_roles` (the
+  exact same list, highest-privilege first, `auth.api.login`'s `user.app_roles` is
+  computed from -- a user holding both DMS Management and DMS Sales gets a dashboard
+  for each, not just the higher-priority one), then for each role reads that role's
+  ERPNext-**native** `Dashboard` doc (`DMS Sales`/`DMS Purchase`/`DMS Warehouse`/
+  `DMS Management` — same name as the DMS Role doc itself) and returns
+  `{"dashboards": [{"role", "widgets"}, ...]}` — one entry per role (a single-role
+  user still gets a one-entry array, so there's one response shape for everyone) —
+  the Number Card/Dashboard Chart widgets a System Manager configured on it via the
+  desk UI, permission-filtered per widget by Frappe's own
   `Dashboard.get_permitted_cards`/`get_permitted_charts`. Unlike the four functions
   below, this endpoint's content lives entirely in ERPNext config, not code: adding,
   removing, or reordering a KPI needs no deploy, only editing that Dashboard doc.
-  A missing/unconfigured Dashboard doc returns an empty `widgets` list, not an
-  error — this endpoint ships ahead of that setup. It no longer calls the four
-  functions below at all; they remain independently callable but exist now mainly
-  as reference implementations of the same aggregations, in case a native Number
+  A missing/unconfigured Dashboard doc returns an empty `widgets` list for that
+  entry, not an error — this endpoint ships ahead of that setup. It no longer calls
+  the four functions below at all; they remain independently callable but exist now
+  mainly as reference implementations of the same aggregations, in case a native Number
   Card/Chart can't express one (e.g. `missedDemandValue`'s per-row price lookup).
   A System Manager-only account (the admin escape-hatch `auth/api.py` documents —
   no `DMS *` role at all, so `resolve_primary_role` alone would find nothing) is

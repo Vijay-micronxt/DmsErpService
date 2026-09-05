@@ -19,7 +19,7 @@ from frappe.desk.doctype.dashboard_chart.dashboard_chart import get as get_chart
 from frappe.desk.doctype.number_card.number_card import get_percentage_difference, get_result as get_card_result
 from frappe.utils import add_days
 
-from dms_erp.auth.utils import resolve_primary_role
+from dms_erp.auth.utils import resolve_app_roles
 from dms_erp.finance.claims_api import claim_summary
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase import po_api
@@ -399,21 +399,22 @@ _DASHBOARD_DOC_BY_ROLE = {
 }
 
 
-def _resolve_dashboard_role(user_roles) -> str | None:
-	# Reuses auth.utils.resolve_primary_role -- the same precedence login's own
-	# `primary_role` is computed from, so whichever dashboard this returns always
-	# agrees with what the user just logged in as. That function only knows the
-	# four DMS roles, though, so the System Manager "admin escape hatch" login
-	# already documented in auth/api.py (an account with no DMS role at all)
-	# would otherwise get turned away here -- every individual dashboard function
-	# already grants System Manager its own access, so route that case to the
-	# highest tier (management) instead of throwing.
-	role = resolve_primary_role(user_roles)
-	if role:
-		return role
+def _resolve_dashboard_roles(user_roles) -> list[str]:
+	# Reuses auth.utils.resolve_app_roles -- the exact same list, in the same
+	# highest-privilege-first order, that login's own `user.app_roles` is computed
+	# from, so a user holding multiple DMS roles (e.g. DMS Management + DMS Sales)
+	# gets a dashboard for every one of them, not just the highest-priority one.
+	# That function only knows the four DMS roles, though, so the System Manager
+	# "admin escape hatch" login already documents (an account with no DMS role at
+	# all) would otherwise get turned away here -- every individual dashboard
+	# function already grants System Manager its own access, so route that case to
+	# the highest tier (management) instead of throwing.
+	app_roles = resolve_app_roles(user_roles)
+	if app_roles:
+		return app_roles
 	if "System Manager" in set(user_roles):
-		return "management"
-	return None
+		return ["management"]
+	return []
 
 
 def _number_card_widget(card_link) -> dict | None:
@@ -484,19 +485,31 @@ def _widgets_for_dashboard(dashboard_name: str) -> list[dict]:
 def get_dashboard():
 	"""One stable entry point instead of the frontend needing to know which of
 	sales_dashboard/purchase_dashboard/warehouse_dashboard/management_dashboard to call for a given
-	user. Resolves the caller's own primary role, then reads that role's ERPNext-native `Dashboard`
-	doc (_DASHBOARD_DOC_BY_ROLE) and returns its Number Card / Dashboard Chart widgets -- whatever an
+	user. Resolves every DMS role the caller holds (highest-privilege first -- see
+	_resolve_dashboard_roles), then for each one reads that role's ERPNext-native `Dashboard` doc
+	(_DASHBOARD_DOC_BY_ROLE) and returns its Number Card / Dashboard Chart widgets -- whatever an
 	admin configured in the desk UI, permission-checked per widget by Frappe's own
 	get_permitted_cards/get_permitted_charts (a widget scoped to a doctype/report the caller can't
 	read is silently dropped, not surfaced as an error).
 
+	A user holding only one DMS role gets back a single-entry list -- there's one response shape
+	for every caller, not a special case for "just one role". A user holding several (e.g. DMS
+	Management + DMS Sales) gets one entry per role, so the frontend can render a section for each
+	instead of only ever showing the highest-priority one.
+
 	Unlike the four hand-written aggregation functions above -- each a fixed response shape the
-	frontend has a matching TS interface for -- this endpoint's shape is generic ({"role",
-	"widgets": [...]}) and its *content* lives entirely in ERPNext config: adding, removing, or
-	reordering a KPI card or chart for a role needs no code change and no deploy, only editing that
-	role's Dashboard doc. A role whose Dashboard doc doesn't exist yet (or isn't named to match
-	_DASHBOARD_DOC_BY_ROLE) simply gets back an empty widgets list, not an error."""
-	role = _resolve_dashboard_role(frappe.get_roles(frappe.session.user))
-	if role not in _DASHBOARD_DOC_BY_ROLE:
+	frontend has a matching TS interface for -- this endpoint's shape is generic ({"dashboards":
+	[{"role", "widgets": [...]}, ...]}) and its *content* lives entirely in ERPNext config: adding,
+	removing, or reordering a KPI card or chart for a role needs no code change and no deploy, only
+	editing that role's Dashboard doc. A role whose Dashboard doc doesn't exist yet (or isn't named
+	to match _DASHBOARD_DOC_BY_ROLE) simply gets back an empty widgets list for that entry, not an
+	error."""
+	roles = _resolve_dashboard_roles(frappe.get_roles(frappe.session.user))
+	if not roles:
 		frappe.throw("No dashboard available for your role.", frappe.PermissionError)
-	return {"role": role, "widgets": _widgets_for_dashboard(_DASHBOARD_DOC_BY_ROLE[role])}
+	return {
+		"dashboards": [
+			{"role": role, "widgets": _widgets_for_dashboard(_DASHBOARD_DOC_BY_ROLE[role])}
+			for role in roles
+		]
+	}

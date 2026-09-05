@@ -158,7 +158,7 @@ class TestDashboardApi(FrappeTestCase):
 
 	# ---------------- Role-agnostic entry point ----------------
 
-	def _make_user(self, email, role):
+	def _make_user(self, email, *roles):
 		frappe.set_user("Administrator")
 		if frappe.db.exists("User", email):
 			frappe.delete_doc("User", email, force=True, ignore_permissions=True)
@@ -166,9 +166,9 @@ class TestDashboardApi(FrappeTestCase):
 			{
 				"doctype": "User",
 				"email": email,
-				"first_name": role,
+				"first_name": roles[0],
 				"send_welcome_email": 0,
-				"roles": [{"role": role}],
+				"roles": [{"role": role} for role in roles],
 			}
 		).insert(ignore_permissions=True)
 
@@ -202,19 +202,31 @@ class TestDashboardApi(FrappeTestCase):
 		frappe.set_user("dashboard-get-sales@pacific.test")
 		result = dashboard_api.get_dashboard()
 
-		self.assertEqual(result["role"], "sales")
-		widget = next((w for w in result["widgets"] if w["name"] == card.name), None)
+		self.assertEqual(len(result["dashboards"]), 1)
+		entry = result["dashboards"][0]
+		self.assertEqual(entry["role"], "sales")
+		widget = next((w for w in entry["widgets"] if w["name"] == card.name), None)
 		self.assertIsNotNone(widget)
 		self.assertEqual(widget["type"], "number_card")
 		self.assertIsInstance(widget["value"], (int, float))
 
+	def test_get_dashboard_returns_one_entry_per_role_a_multi_role_user_holds(self):
+		self._dashboard_with_inquiry_count_card("DMS Sales", "Dashboard Multi-Role Inquiry Count")
+		self._make_user("dashboard-get-multi@pacific.test", "DMS Management", "DMS Sales")
+
+		frappe.set_user("dashboard-get-multi@pacific.test")
+		result = dashboard_api.get_dashboard()
+
+		# Highest-privilege first, same order as login's own user.app_roles.
+		self.assertEqual([d["role"] for d in result["dashboards"]], ["management", "sales"])
+
 	def test_get_dashboard_routes_system_manager_only_accounts_to_management(self):
-		# Administrator holds System Manager but no DMS-* role -- resolve_primary_role
-		# alone would return None for that combination (it only knows the four DMS
+		# Administrator holds System Manager but no DMS-* role -- resolve_app_roles
+		# alone would return [] for that combination (it only knows the four DMS
 		# roles), so this is the fallback path, not the ordinary case above.
 		result = dashboard_api.get_dashboard()
-		self.assertEqual(result["role"], "management")
-		self.assertIsInstance(result["widgets"], list)
+		self.assertEqual(len(result["dashboards"]), 1)
+		self.assertEqual(result["dashboards"][0]["role"], "management")
 
 	def test_get_dashboard_rejects_a_role_with_no_dashboard(self):
 		frappe.set_user("Guest")
@@ -233,5 +245,6 @@ class TestDashboardApi(FrappeTestCase):
 		frappe.set_user("dashboard-get-purchase@pacific.test")
 		result = dashboard_api.get_dashboard()
 
-		self.assertEqual(result["role"], "purchase")
-		self.assertEqual(result["widgets"], [])
+		self.assertEqual(len(result["dashboards"]), 1)
+		self.assertEqual(result["dashboards"][0]["role"], "purchase")
+		self.assertEqual(result["dashboards"][0]["widgets"], [])
