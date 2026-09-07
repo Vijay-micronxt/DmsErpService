@@ -45,10 +45,15 @@ def list_all_trucks() -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_trucks(limit: int = 20, offset: int = 0):
+def list_trucks(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("Inward Truck")
-	names = frappe.get_all("Inward Truck", pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit)
+	# Inward Truck's own name is a random hash (autoname: hash), not something a user
+	# would ever type — the LR number is the human-facing identifier for a truck.
+	filters = {"lr_number": ["like", f"%{search}%"]} if search else {}
+	total = frappe.db.count("Inward Truck", filters=filters)
+	names = frappe.get_all(
+		"Inward Truck", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
 	return {
 		"items": [_serialize(frappe.get_doc("Inward Truck", name)) for name in names],
 		"total": total,

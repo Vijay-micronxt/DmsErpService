@@ -65,9 +65,11 @@ def list_all_charges(status: str | None = None) -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_charges(status: str | None = None, limit: int = 20, offset: int = 0):
+def list_charges(status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
 	filters = _charge_filters(status)
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
 	total = frappe.db.count("Unloading Charge", filters=filters)
 	names = frappe.get_all(
 		"Unloading Charge", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

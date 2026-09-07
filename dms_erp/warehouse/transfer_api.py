@@ -48,11 +48,14 @@ def list_all_transfers() -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_transfers(limit: int = 20, offset: int = 0):
+def list_transfers(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("Stock Entry", filters=_TRANSFER_FILTERS)
+	filters = dict(_TRANSFER_FILTERS)
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
+	total = frappe.db.count("Stock Entry", filters=filters)
 	names = frappe.get_all(
-		"Stock Entry", filters=_TRANSFER_FILTERS, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+		"Stock Entry", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
 	)
 	return {
 		"items": [_serialize(frappe.get_doc("Stock Entry", name)) for name in names],
