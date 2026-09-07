@@ -120,11 +120,12 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 
 
 @frappe.whitelist(methods=["GET"])
-def list_vehicle_types(limit: int = 20, offset: int = 0):
+def list_vehicle_types(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("Vehicle Type")
+	filters = {"name": ["like", f"%{search}%"]} if search else {}
+	total = frappe.db.count("Vehicle Type", filters=filters)
 	names = frappe.get_all(
-		"Vehicle Type", pluck="name", order_by="vehicle_type_name", limit_start=offset, limit_page_length=limit
+		"Vehicle Type", filters=filters, pluck="name", order_by="vehicle_type_name", limit_start=offset, limit_page_length=limit
 	)
 	return {
 		"items": [_serialize_vehicle_type(frappe.get_doc("Vehicle Type", name)) for name in names],
@@ -144,13 +145,17 @@ def create_vehicle_type(name: str, capacity_boxes: int):
 
 
 @frappe.whitelist(methods=["GET"])
-def list_pickup_runs(supplier: str | None = None, status: str | None = None, limit: int = 20, offset: int = 0):
+def list_pickup_runs(
+	supplier: str | None = None, status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+):
 	limit, offset = clamp(limit, offset)
 	filters = {}
 	if supplier:
 		filters["supplier"] = supplier
 	if status:
 		filters["status"] = status
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
 	total = frappe.db.count("Pickup Run", filters=filters)
 	names = frappe.get_all(
 		"Pickup Run", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

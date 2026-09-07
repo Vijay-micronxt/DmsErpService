@@ -110,10 +110,11 @@ def list_all_price_records() -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_price_records(limit: int = 20, offset: int = 0):
+def list_price_records(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("Item Price Proposal")
-	names = frappe.get_all("Item Price Proposal", pluck="name", limit_start=offset, limit_page_length=limit)
+	filters = {"name": ["like", f"%{search}%"]} if search else {}
+	total = frappe.db.count("Item Price Proposal", filters=filters)
+	names = frappe.get_all("Item Price Proposal", filters=filters, pluck="name", limit_start=offset, limit_page_length=limit)
 	return {
 		"items": [_serialize(frappe.get_doc("Item Price Proposal", name)) for name in names],
 		"total": total,

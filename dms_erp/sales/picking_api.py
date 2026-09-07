@@ -46,9 +46,13 @@ def list_all_pick_tasks(order: str | None = None) -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_pick_tasks(order: str | None = None, limit: int = 20, offset: int = 0):
+def list_pick_tasks(order: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
+	# Pick Task's own name is a random hash (autoname: hash), not something a user
+	# would ever type — item code is the human-facing identifier on this screen.
 	filters = {"sales_order": order} if order else {}
+	if search:
+		filters["item"] = ["like", f"%{search}%"]
 	total = frappe.db.count("Pick Task", filters=filters)
 	names = frappe.get_all(
 		"Pick Task", filters=filters, pluck="name", order_by="creation asc", limit_start=offset, limit_page_length=limit

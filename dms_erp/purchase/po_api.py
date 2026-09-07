@@ -47,10 +47,13 @@ def _serialize(doc) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_purchase_orders(limit: int = 20, offset: int = 0):
+def list_purchase_orders(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
-	total = frappe.db.count("Purchase Order")
-	names = frappe.get_all("Purchase Order", pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit)
+	filters = {"name": ["like", f"%{search}%"]} if search else {}
+	total = frappe.db.count("Purchase Order", filters=filters)
+	names = frappe.get_all(
+		"Purchase Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
 	return {
 		"items": [_serialize(frappe.get_doc("Purchase Order", name)) for name in names],
 		"total": total,

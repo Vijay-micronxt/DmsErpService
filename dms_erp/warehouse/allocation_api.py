@@ -61,7 +61,12 @@ def _serialize(doc) -> dict:
 
 @frappe.whitelist(methods=["GET"])
 def list_allocations(
-	inward_truck: str | None = None, status: str | None = None, item: str | None = None, limit: int = 20, offset: int = 0
+	inward_truck: str | None = None,
+	status: str | None = None,
+	item: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
 ):
 	limit, offset = clamp(limit, offset)
 	filters = {}
@@ -71,6 +76,8 @@ def list_allocations(
 		filters["status"] = status
 	if item:
 		filters["item"] = item
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
 	total = frappe.db.count("Bay Allocation", filters=filters)
 	names = frappe.get_all(
 		"Bay Allocation", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

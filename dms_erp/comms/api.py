@@ -59,9 +59,13 @@ def list_all_messages(dealer: str) -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_messages(dealer: str, limit: int = 20, offset: int = 0):
+def list_messages(dealer: str, search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
+	# WhatsApp Message's own name is a random hash (autoname: hash) — search matches
+	# the message text itself instead, since that's what a user would search for.
 	filters = _message_filters(dealer)
+	if search:
+		filters["text"] = ["like", f"%{search}%"]
 	total = frappe.db.count("WhatsApp Message", filters=filters)
 	names = frappe.get_all(
 		"WhatsApp Message", filters=filters, pluck="name", order_by="sent_at asc", limit_start=offset, limit_page_length=limit
