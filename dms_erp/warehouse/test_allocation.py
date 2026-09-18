@@ -75,6 +75,52 @@ class TestAllocation(FrappeTestCase):
 
 		self.assertEqual(result["weightPerBoxKg"], 31.5)
 
+	def test_get_box_sticker_data_includes_the_brd_c64_fields(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		frappe.db.set_value("Item", self.item, "custom_size", "600x600mm")
+		allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-STICKER",
+			total_qty=50,
+			lines=[{"bay": "ALLOC-A-01", "qty": 50}],
+			supplier=self.supplier,
+		)
+
+		rows = allocation_api.get_box_sticker_data(
+			frappe.get_all("Bay Allocation", filters={"batch_no": "ALLOC-BATCH-STICKER"}, pluck="name")[0]
+		)
+		self.assertEqual(len(rows), 1)
+		row = rows[0]
+		self.assertEqual(row["itemCode"], self.item)
+		self.assertEqual(row["size"], "600x600mm")
+		self.assertEqual(row["batchNumber"], "ALLOC-BATCH-STICKER")
+		self.assertEqual(row["weightPerBoxKg"], 28)
+		self.assertIn("qrCode", row)
+
+	def test_print_box_stickers_yields_one_entry_per_physical_box(self):
+		allocation = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-STICKER-PRINT",
+			total_qty=10,
+			lines=[{"bay": "ALLOC-A-01", "qty": 10}],
+			supplier=self.supplier,
+		)
+
+		result = allocation_api.print_box_stickers(allocation["id"], copies_per_box=2)
+		self.assertEqual(result["count"], 20)  # 10 boxes x 2 copies
+		self.assertEqual(len(result["stickers"]), 20)
+
+	def test_print_box_stickers_rejects_zero_copies(self):
+		allocation = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-STICKER-ZERO",
+			total_qty=5,
+			lines=[{"bay": "ALLOC-A-01", "qty": 5}],
+			supplier=self.supplier,
+		)
+		with self.assertRaises(frappe.ValidationError):
+			allocation_api.print_box_stickers(allocation["id"], copies_per_box=0)
+
 	def test_create_allocation_rejects_mismatched_line_total(self):
 		with self.assertRaises(frappe.ValidationError):
 			allocation_api.create_allocation(
@@ -99,6 +145,34 @@ class TestAllocation(FrappeTestCase):
 		suggestions = stock_api.suggest_bays(category="Vitrified", qty=50)
 		codes = [s["bay"]["code"] for s in suggestions["main"]]
 		self.assertIn("ALLOC-A-01", codes)
+
+	def test_top_batches_ranks_by_total_qty_across_bays(self):
+		item = make_item("ALLOC-TOP-BATCH-ITEM", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="TOP-BATCH-SMALL", total_qty=10, lines=[{"bay": "ALLOC-A-01", "qty": 10}], supplier=self.supplier
+		)
+		allocation_api.create_allocation(
+			item=item,
+			batch_no="TOP-BATCH-BIG",
+			total_qty=90,
+			lines=[{"bay": "ALLOC-A-01", "qty": 60}, {"bay": "ALLOC-A-02", "qty": 30}],
+			supplier=self.supplier,
+		)
+
+		top = stock_api.top_batches(item, n=3)
+		self.assertEqual([b["batchNumber"] for b in top], ["TOP-BATCH-BIG", "TOP-BATCH-SMALL"])
+		self.assertEqual(top[0]["boxes"], 90)  # summed across both bays it's split over
+
+	def test_top_batches_respects_n(self):
+		item = make_item("ALLOC-TOP-BATCH-N-ITEM", "Vitrified")
+		for i, qty in enumerate((10, 20, 30, 40)):
+			allocation_api.create_allocation(
+				item=item, batch_no=f"TOP-BATCH-N-{i}", total_qty=qty, lines=[{"bay": "ALLOC-A-01", "qty": qty}], supplier=self.supplier
+			)
+
+		top = stock_api.top_batches(item, n=2)
+		self.assertEqual(len(top), 2)
+		self.assertEqual([b["boxes"] for b in top], [40, 30])
 
 	def test_allocation_lifecycle_with_inward_truck(self):
 		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=20, lr_number="LR-ALLOC-1")

@@ -197,6 +197,22 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	return out
 
 
+def top_batches(item: str, n: int = 3) -> list[dict]:
+	"""BRD C.6.2: the top-N batches by on-hand qty for a dealer-facing view (and the
+	future WhatsApp batch-combination reply) — aggregated across every bay a batch
+	is split over, since list_stock_lots' rows are per-bay-per-batch, not per-batch."""
+	lots = list_stock_lots(item=item)
+	by_batch: dict[str, dict] = {}
+	for lot in lots:
+		row = by_batch.setdefault(
+			lot["batchNumber"],
+			{"batchNumber": lot["batchNumber"], "itemCode": lot["itemCode"], "itemName": lot["itemName"], "boxes": 0},
+		)
+		row["boxes"] += lot["boxes"]
+	ranked = sorted(by_batch.values(), key=lambda r: r["boxes"], reverse=True)
+	return ranked[:n]
+
+
 def ensure_batch(item_code: str, batch_no: str, weight_per_box_kg: float | None = None) -> str:
 	if frappe.db.exists("Batch", batch_no):
 		return batch_no

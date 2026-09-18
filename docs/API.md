@@ -51,6 +51,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Warehouse — Stock / Lots](#warehouse-stock-lots)
 - [Warehouse — Transfers](#warehouse-transfers)
 - [Warehouse — Scan](#warehouse-scan)
+- [Warehouse — Unallocated Stock](#warehouse-unallocated-stock)
 - [Inward](#inward)
 - [Picking](#picking)
 - [Purchase Orders](#purchase-orders)
@@ -1368,11 +1369,33 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
   "id": "Main Bay A-01 - PTC::PVT-6060::BATCH-2608-11", "bayId": "Main Bay A-01 - PTC",
   "itemCode": "PVT-6060", "productId": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
   "category": "Vitrified", "batchNumber": "BATCH-2608-11", "boxes": 640,
+  "weightPerBoxKg": 32, "totalWeightKg": 20480,
   "storedAt": "2026-08-20", "damageType": null, "claimRef": null
 }]
 ```
 
 > damageType/claimRef are only ever non-null for a lot sitting in a damage or insurance-claim bay
+
+
+#### GET `dms_erp.warehouse.stock_api.top_batches`
+
+**Top-N batches by on-hand qty for an item** (BRD C.6.2) — aggregated across every bay a batch is split over. Dealer-facing view; also the source the future WhatsApp batch-combination reply will read from.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `n` | int | default 3 |  |
+
+**Response**
+
+```json
+[
+  { "batchNumber": "BATCH-2608-11", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600", "boxes": 640 },
+  { "batchNumber": "BATCH-2607-04", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600", "boxes": 210 }
+]
+```
 
 
 #### GET `dms_erp.warehouse.stock_api.suggest_bays`
@@ -1519,6 +1542,49 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 ```
 
 
+#### GET `dms_erp.warehouse.allocation_api.get_box_sticker_data`
+
+**Box/inward sticker data** (BRD C.6.4) — one row per bay split, everything the sticker Print Format needs on top of the same QR payload get_allocation_qr_codes already generates. Data layer only — the sticker's actual visual layout is a Frappe Print Format (label size/printer hardware are a setup-time decision the BRD itself leaves open). The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample & Display Management module, which doesn't exist yet.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `allocation` | string | required |  |
+
+**Response**
+
+```json
+[{
+  "bayId": "Main Bay A-01 - PTC", "bayCode": "A-01", "qty": 640,
+  "payload": "PI-ITEM|PVT-6060|BATCH-2608-11|A-01", "qrCode": "data:image/png;base64,iVBORw0KG...",
+  "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
+  "size": "600x600mm", "finish": "Glossy", "series": "Marbella",
+  "batchNumber": "BATCH-2608-11", "dateOfManufacture": "2026-08-01",
+  "piecesPerBox": 4, "weightPerBoxKg": 32,
+  "purchaseReceipt": "MAT-PRE-2026-00042", "purchaseOrder": "PUR-ORD-2026-00019", "supplier": "Orient Ceramics"
+}]
+```
+
+
+#### POST `dms_erp.warehouse.allocation_api.print_box_stickers`
+
+**Per-box print run** (BRD C.6.4) — one sticker entry per physical box, not per bay split.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `allocation` | string | required |  |
+| `copies_per_box` | int | default 1 | e.g. 2 to reprint a damaged label without re-running the whole allocation |
+
+**Response**
+
+```json
+{ "allocation": "BAY-ALLOC-2026-00042", "count": 640, "stickers": [(same shape as one get_box_sticker_data row, repeated per box)] }
+```
+
+
 #### POST `dms_erp.warehouse.allocation_api.confirm_putaway`
 
 **Confirm put-away** — Floor confirmation only, after a scan — does not move stock again.
@@ -1619,6 +1685,90 @@ One read-only lookup backing inward placement, transfer, picking, and bay-audit 
 ```
 
 > kind is "bay", "item", or "unknown" (with ok:false and a human message) if nothing matches
+
+
+---
+
+## Warehouse — Unallocated Stock
+
+Loose stock scanned into an ad-hoc, non-bay location (BRD C.6.6). A pure log entry — recording one does not touch Stock Ledger. It resolves either by allocating it to a real bay (the actual stock-effecting event, via the same allocation_api.create_allocation every other inbound lot goes through) or by consolidating it into existing stock elsewhere by hand (status/remarks only, no new stock movement).
+
+#### GET `dms_erp.warehouse.unallocated_stock_api.list_unallocated_stock`
+
+**List / search** — paginated. Doubles as the BRD's "unallocated-stock check/report".
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | default "Pending" | Pending / Allocated / Consolidated. Pass `null`/omit-then-clear for every entry regardless of status. |
+| `search` | string | optional | substring match on the ad-hoc location text |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "a1b2c3d4e5", "item": "PVT-6060", "batchNumber": null, "qty": 5,
+    "location": "Near loading dock, left corner", "status": "Pending",
+    "scannedBy": "warehouse.staff@pacific.example", "scannedAt": "2026-09-18 10:02:00",
+    "resolvedAllocation": null, "remarks": null
+  }],
+  "total": 3, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.warehouse.unallocated_stock_api.get_unallocated_stock_entry`
+
+**Get single entry** — `entry` (string, required). Response: same shape as one row of list_unallocated_stock's "items".
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.record_unallocated_stock`
+
+**Record loose stock** — Warehouse/Management only.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `qty` | number | required |  |
+| `location` | string | required | ad-hoc, free-text description — not a real bay |
+| `batch_no` | string | optional |  |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Pending".
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.allocate_unallocated_stock`
+
+**Allocate to a real bay** — Only a Pending entry can be allocated. Posts a real Bay Allocation/Purchase Receipt exactly as any other inbound lot would.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `entry` | string | required |  |
+| `bay` | string | required | bay code |
+| `supplier` | string | required |  |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Allocated", `resolvedAllocation` set.
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.consolidate_unallocated_stock`
+
+**Consolidate into existing stock** — Only a Pending entry can be consolidated. No new stock movement — records the warehouse's manual merge decision.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `entry` | string | required |  |
+| `remarks` | string | required | what this was merged into |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Consolidated".
 
 
 ---

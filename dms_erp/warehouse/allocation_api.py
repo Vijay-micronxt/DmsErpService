@@ -240,6 +240,70 @@ def get_allocation_qr_codes(allocation: str):
 
 
 @frappe.whitelist(methods=["GET"])
+def get_box_sticker_data(allocation: str):
+	"""BRD C.6.4 box/inward sticker layout — one row per bay split, everything the
+	sticker Print Format needs (company item code, product name, size/finish/series,
+	batch + date of manufacture, bay, boxes, weight, PR + supplier references), on
+	top of the same QR payload get_allocation_qr_codes already generates. This is the
+	data layer only: the sticker's actual visual layout is a Frappe Print Format,
+	whose label size/printer hardware the BRD itself leaves for setup-time
+	confirmation with Pacific, not something this endpoint can decide.
+
+	The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample &
+	Display Management module, which doesn't exist yet — not built here."""
+	doc = frappe.get_doc("Bay Allocation", allocation)
+	item_doc = frappe.get_cached_doc("Item", doc.item)
+	batch = frappe.db.get_value("Batch", doc.batch_no, ["manufacturing_date", "custom_batch_weight_kg"], as_dict=True) or {}
+	weight_per_box_kg = batch.get("custom_batch_weight_kg")
+	if weight_per_box_kg is None:
+		weight_per_box_kg = item_doc.custom_weight_per_box_kg
+
+	po_supplier = None
+	if doc.purchase_order:
+		po_supplier = frappe.db.get_value("Purchase Order", doc.purchase_order, "supplier")
+
+	rows = []
+	for qr in get_allocation_qr_codes(allocation):
+		rows.append(
+			{
+				**qr,
+				"itemCode": doc.item,
+				"itemName": item_doc.item_name,
+				"size": item_doc.custom_size,
+				"finish": item_doc.custom_finish,
+				"series": item_doc.custom_series,
+				"batchNumber": doc.batch_no,
+				"dateOfManufacture": batch.get("manufacturing_date"),
+				"piecesPerBox": item_doc.custom_pieces_per_box,
+				"weightPerBoxKg": weight_per_box_kg,
+				"purchaseReceipt": doc.purchase_receipt,
+				"purchaseOrder": doc.purchase_order,
+				"supplier": po_supplier,
+			}
+		)
+	return rows
+
+
+@frappe.whitelist(methods=["POST"])
+def print_box_stickers(allocation: str, copies_per_box: int = 1):
+	"""BRD C.6.4 "per-box print run" — one sticker entry per physical box (not per
+	bay split), so a bay split of 60 boxes yields 60 (× copies_per_box) sticker
+	entries the Print Format renders one-per-page from. `copies_per_box` covers a
+	reprint (e.g. a damaged label) without re-running the whole allocation."""
+	_assert_can_allocate()
+
+	if copies_per_box < 1:
+		frappe.throw(_("copies_per_box must be at least 1."), frappe.ValidationError)
+
+	rows = get_box_sticker_data(allocation)
+	stickers = []
+	for row in rows:
+		box_count = int(row["qty"]) * int(copies_per_box)
+		stickers.extend([row] * box_count)
+	return {"allocation": allocation, "count": len(stickers), "stickers": stickers}
+
+
+@frappe.whitelist(methods=["GET"])
 def resolve_scan(code: str):
 	"""Read-only lookup mirroring the frontend's PI-BAY|/PI-ITEM|-prefixed codes, plus
 	bare bay-code / item-code / batch-number manual entry."""

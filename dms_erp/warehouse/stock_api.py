@@ -14,6 +14,11 @@ def list_stock(bay: str | None = None, item: str | None = None):
 
 
 @frappe.whitelist(methods=["GET"])
+def top_batches(item: str, n: int = 3):
+	return utils.top_batches(item, n)
+
+
+@frappe.whitelist(methods=["GET"])
 def suggest_bays(category: str, qty: float, kind: str = "normal"):
 	return utils.suggest_bays(category, qty, kind)
 
