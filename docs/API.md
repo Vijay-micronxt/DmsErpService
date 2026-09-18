@@ -991,7 +991,7 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 
 #### POST `dms_erp.sales.order_api.create_order`
 
-**Create order directly from inquiry** — No markup — the Quotation-sourced path is convert_to_order instead. `inquiry` is required (there's no third, source-less way to create one).
+**Create order directly from inquiry** — No markup — the Quotation-sourced path is convert_to_order instead. `inquiry` is required (there's no third, source-less way to create one). Every line's rate is computed server-side from the dealer's own price-tier (BRD C.1.4 — falls back to the flat Dealer price if that tier has no rate published for the item yet), same as create_quotation above — never client-supplied.
 
 **Params**
 
@@ -1028,7 +1028,7 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 (same shape as one list row)
 ```
 
-> total is server-computed (native grand_total) — every line's rate came from get_dealer_price at creation, never a client-supplied value
+> total is server-computed (native grand_total) — every line's rate came from get_price_for_dealer at creation, never a client-supplied value
 
 
 ---

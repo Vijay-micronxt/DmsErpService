@@ -1,8 +1,10 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
@@ -23,6 +25,8 @@ class TestOrderApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		if frappe.db.exists("Series", "Order Test Series"):
+			frappe.delete_doc("Series", "Order Test Series", force=True, ignore_permissions=True)
 
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
@@ -42,6 +46,27 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["stage"], "Confirmed")
 		self.assertEqual(order["channel"], "Retail")
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+
+	def test_create_order_uses_the_dealers_tiered_price_not_the_flat_dealer_list(self):
+		series_api.create_series(
+			series_name="Order Test Series",
+			price_list_rates=[{"price_list": DEALER_CLASSIFICATION_MASTER, "rate": 700}],
+		)
+		item = make_item("ORDER-TIER-ITEM", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_series_ref", "Order Test Series")
+		master_dealer = make_dealer("Order Tier Master Dealer")
+		frappe.db.set_value("Customer", master_dealer, "custom_dealer_classification", DEALER_CLASSIFICATION_MASTER)
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		inquiry = inquiry_api.create_inquiry(dealer=master_dealer, item=item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=master_dealer, lines=[{"item": item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+
+		# Flat "Dealer" list price is 500; this dealer's Master Dealer tier rate is
+		# 700 -- the order must be priced from the tier, not the flat list.
+		self.assertEqual(order["lines"][0]["rate"], 700)
 
 	def test_order_line_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
