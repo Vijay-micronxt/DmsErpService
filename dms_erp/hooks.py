@@ -25,9 +25,13 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 # the purchase team is the smallest fix that closes that gap (see reorder_api.py).
 # BRD C.1.4: dealer price-tier classification is recomputed nightly from confirmed
 # Sales Order value, not maintained by hand (see pricing/dealer_classification.py).
+# BRD C.10.5: opted-in Series get their items' discontinuation status advanced
+# automatically once idle/store/sales signals all breach that Series' thresholds
+# (see catalog/withdrawal_api.py) -- a no-op for every Series that hasn't opted in.
 scheduler_events = {
 	"daily": [
 		"dms_erp.purchase.reorder_api.notify_reorder_review",
 		"dms_erp.pricing.dealer_classification.recompute_dealer_classifications",
+		"dms_erp.catalog.withdrawal_api.evaluate_product_withdrawals",
 	],
 }

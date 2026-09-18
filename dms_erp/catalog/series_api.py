@@ -37,6 +37,10 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 		"weightPerBoxKg": doc.weight_per_box_kg,
 		"bulkQtyThreshold": doc.bulk_qty_threshold,
 		"retailQtyThreshold": doc.retail_qty_threshold,
+		"withdrawalAutomationEnabled": bool(doc.withdrawal_automation_enabled),
+		"withdrawalNoSaleDaysThreshold": doc.withdrawal_no_sale_days_threshold,
+		"withdrawalMinStoreCount": doc.withdrawal_min_store_count,
+		"withdrawalMinAnnualSalesBoxes": doc.withdrawal_min_annual_sales_boxes,
 		"priceListRates": [{"priceList": row.price_list, "rate": row.rate} for row in doc.price_list_rates],
 	}
 
@@ -72,6 +76,10 @@ def create_series(
 	weight_per_box_kg: float = 0,
 	bulk_qty_threshold: int = 0,
 	retail_qty_threshold: int = 0,
+	withdrawal_automation_enabled: bool = False,
+	withdrawal_no_sale_days_threshold: int = 0,
+	withdrawal_min_store_count: int = 0,
+	withdrawal_min_annual_sales_boxes: int = 0,
 	price_list_rates: list[dict] | None = None,
 ):
 	_assert_can_manage_series()
@@ -89,6 +97,10 @@ def create_series(
 			"weight_per_box_kg": weight_per_box_kg,
 			"bulk_qty_threshold": bulk_qty_threshold,
 			"retail_qty_threshold": retail_qty_threshold,
+			"withdrawal_automation_enabled": 1 if withdrawal_automation_enabled else 0,
+			"withdrawal_no_sale_days_threshold": withdrawal_no_sale_days_threshold,
+			"withdrawal_min_store_count": withdrawal_min_store_count,
+			"withdrawal_min_annual_sales_boxes": withdrawal_min_annual_sales_boxes,
 			"price_list_rates": price_list_rates or [],
 		}
 	)
@@ -110,6 +122,10 @@ def update_series(series: str, patch: dict):
 		"weightPerBoxKg": "weight_per_box_kg",
 		"bulkQtyThreshold": "bulk_qty_threshold",
 		"retailQtyThreshold": "retail_qty_threshold",
+		"withdrawalAutomationEnabled": "withdrawal_automation_enabled",
+		"withdrawalNoSaleDaysThreshold": "withdrawal_no_sale_days_threshold",
+		"withdrawalMinStoreCount": "withdrawal_min_store_count",
+		"withdrawalMinAnnualSalesBoxes": "withdrawal_min_annual_sales_boxes",
 		"priceListRates": "price_list_rates",
 	}
 

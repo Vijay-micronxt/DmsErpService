@@ -18,6 +18,11 @@
   "section_break_thresholds",
   "bulk_qty_threshold",
   "retail_qty_threshold",
+  "section_break_withdrawal",
+  "withdrawal_automation_enabled",
+  "withdrawal_no_sale_days_threshold",
+  "withdrawal_min_store_count",
+  "withdrawal_min_annual_sales_boxes",
   "section_break_prices",
   "price_list_rates"
  ],
@@ -92,6 +97,36 @@
    "fieldname": "retail_qty_threshold",
    "fieldtype": "Int",
    "label": "Retail Qty Threshold (Boxes)"
+  },
+  {
+   "fieldname": "section_break_withdrawal",
+   "fieldtype": "Section Break",
+   "label": "Product Withdrawal Automation"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.10.5 — opts this series into the daily withdrawal-automation job (catalog.withdrawal_api.evaluate_product_withdrawals). Left off by default: the job only ever touches a series where this is checked AND all three thresholds below are set to a positive value.",
+   "fieldname": "withdrawal_automation_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Withdrawal Automation"
+  },
+  {
+   "description": "Days since this item's last Delivered sale, at or beyond which it's considered idle (one of three signals — all must breach together).",
+   "fieldname": "withdrawal_no_sale_days_threshold",
+   "fieldtype": "Int",
+   "label": "No-Sale Days Threshold"
+  },
+  {
+   "description": "Minimum number of dealers currently carrying the item (by Dealer Catalog visibility) below which store presence counts as a withdrawal signal.",
+   "fieldname": "withdrawal_min_store_count",
+   "fieldtype": "Int",
+   "label": "Min Store Count"
+  },
+  {
+   "description": "Minimum trailing-12-month sales (boxes, Delivered orders only) below which annual sales counts as a withdrawal signal.",
+   "fieldname": "withdrawal_min_annual_sales_boxes",
+   "fieldtype": "Int",
+   "label": "Min Annual Sales (Boxes)"
   },
   {
    "fieldname": "section_break_prices",
