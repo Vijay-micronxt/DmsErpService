@@ -56,6 +56,22 @@ class TestQuotationApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10, channel="Wholesale")
 
+	def test_create_quotation_auto_classifies_bulk_from_the_dealers_type(self):
+		bulk_dealer = make_dealer("Quotation Bulk-Type Dealer")
+		dealer_catalog_api.set_product_visibility(bulk_dealer, self.priced_item, True)
+		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Bulk")
+
+		quotation = quotation_api.create_quotation(dealer=bulk_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		self.assertEqual(quotation["channel"], "Bulk")
+
+	def test_create_quotation_auto_classifies_bulk_from_the_items_series_threshold(self):
+		frappe.db.set_value("Item", self.priced_item, "custom_bulk_qty_threshold", 50)
+		try:
+			quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=10)
+			self.assertEqual(quotation["channel"], "Bulk")
+		finally:
+			frappe.db.set_value("Item", self.priced_item, "custom_bulk_qty_threshold", 0)
+
 	def test_create_quotation_rejects_item_outside_dealer_catalog(self):
 		other_dealer = make_dealer("Quotation Test Dealer 2")
 		with self.assertRaises(frappe.PermissionError):

@@ -57,6 +57,16 @@ class TestOrderApi(FrappeTestCase):
 				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Wholesale"
 			)
 
+	def test_create_order_auto_classifies_bulk_from_the_dealers_type(self):
+		bulk_dealer = make_dealer("Order Bulk-Type Dealer")
+		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Project")
+		inquiry = inquiry_api.create_inquiry(dealer=bulk_dealer, item=self.item, qty=10, source="Phone")
+
+		order = order_api.create_order(
+			dealer=bulk_dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+		self.assertEqual(order["channel"], "Project")
+
 	def test_advance_order_stage_follows_forward_flow(self):
 		order = self._make_order()
 

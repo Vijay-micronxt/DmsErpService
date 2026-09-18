@@ -21,6 +21,9 @@ equivalent for become Custom Fields:
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATIONS
+from dms_erp.sales.order_channel import DEALER_TYPES
+
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
 ORDER_SOURCE_TYPES = ["Inquiry", "Quotation"]
@@ -87,6 +90,34 @@ CUSTOM_FIELDS = {
 			"in_list_view": 1,
 			"in_standard_filter": 1,
 			"insert_after": "custom_stage_history",
+		},
+	],
+	"Customer": [
+		{
+			"fieldname": "dms_classification_section",
+			"fieldtype": "Section Break",
+			"label": "DMS Dealer Classification",
+			"insert_after": "customer_details",
+		},
+		{
+			"fieldname": "custom_dealer_classification",
+			"fieldtype": "Select",
+			"label": "Dealer Classification",
+			"options": "\n".join(DEALER_CLASSIFICATIONS),
+			"default": DEALER_CLASSIFICATION_STANDARD,
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": "BRD C.1.4 — sales-volume price tier, recomputed nightly by recompute_dealer_classifications(). Manual edits are overwritten on the next run.",
+			"insert_after": "dms_classification_section",
+		},
+		{
+			"fieldname": "custom_dealer_type",
+			"fieldtype": "Select",
+			"label": "Dealer Type",
+			"options": "\n".join(DEALER_TYPES),
+			"default": "Retail",
+			"description": "BRD C.4.3 — drives the default order channel for this dealer's quotations/orders when the caller doesn't pass one explicitly. Manually set, never recomputed.",
+			"insert_after": "custom_dealer_classification",
 		},
 	],
 }

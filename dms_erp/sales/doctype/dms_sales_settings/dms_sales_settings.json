@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "creation": "2026-09-18 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dealer_classification_window_days"
+ ],
+ "fields": [
+  {
+   "default": "365",
+   "description": "BRD C.1.4 leaves the dealer-classification measurement period/rolling window an open point (bands themselves are confirmed) — this is the configurable placeholder recompute_dealer_classifications() reads until Pacific confirms the real window.",
+   "fieldname": "dealer_classification_window_days",
+   "fieldtype": "Int",
+   "label": "Dealer Classification Window (Days)"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sales",
+ "name": "DMS Sales Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

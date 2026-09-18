@@ -19,6 +19,7 @@ from frappe.utils import now_datetime, today
 
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_dealer_price
+from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
 
@@ -105,17 +106,23 @@ def get_order(order: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str = "Retail"):
+def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str | None = None):
 	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
 	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
 	plain approved dealer-price rates). The Quotation-sourced path is
 	quotation_api.convert_to_order; there is no third, source-less way to create an
 	Order, mirroring the frontend's Order.sourceType being strictly "Inquiry" or
-	"Quotation"."""
+	"Quotation".
+
+	`channel` left unset auto-classifies from the dealer's type / item Series
+	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
+	audit-locked manual override."""
 	_assert_can_manage_orders()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if channel is None:
+		channel = auto_classify_channel(dealer, lines)
 
 	items = []
 	for line in lines:

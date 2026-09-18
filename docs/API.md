@@ -194,7 +194,7 @@ _No parameters._
 
 ## Dealers
 
-Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id with no custom fields.
+Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id. `classification` (BRD C.1.4) and `dealerType` (BRD C.4.3) are the only two custom fields on Customer (sales/setup.py).
 
 #### GET `dms_erp.sales.dealer_api.list_dealers`
 
@@ -212,13 +212,16 @@ Thin read layer over native Customer — every other module already treats a dea
 ```json
 [
   { "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
-    "territory": "Saurashtra", "creditLimit": 500000, "disabled": false },
+    "territory": "Saurashtra", "creditLimit": 500000, "disabled": false,
+    "classification": "Dealer", "dealerType": "Retail" },
   { "id": "CUST-0007", "name": "Om Sanitary & Tiles", "group": "Retail Dealer",
-    "territory": "Kutch", "creditLimit": 250000, "disabled": false }
+    "territory": "Kutch", "creditLimit": 250000, "disabled": false,
+    "classification": "Standard Dealer", "dealerType": "Retail" }
 ]
 ```
 
-> ⚠️ no city/phone/dealer-code fields — Customer has zero custom fields added anywhere in this app
+> ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType` are the only two custom fields on Customer
+> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` is a plain manual field.
 
 
 #### GET `dms_erp.sales.dealer_api.get_dealer`
@@ -541,7 +544,7 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 
 #### POST `dms_erp.pricing.api.approve_price`
 
-**Approve price** — Publishes `final_price` to the native Dealer price list (→ Product.dealerPrice everywhere) and appends a history row.
+**Approve price** — Publishes `final_price` to the native Dealer price list (→ Product.dealerPrice everywhere) and appends a history row. If the item has a Series (`custom_series_ref`) with Standard Dealer/Master Dealer rates in its `priceListRates` (BRD C.1.4/C.7.1), those are published in the same call.
 
 **Params**
 
@@ -788,7 +791,7 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 
 #### POST `dms_erp.sales.quotation_api.create_quotation`
 
-**Create quotation from inquiry** — Sales/Management only. Every line's rate is computed server-side from the approved dealer price + markup — never client-supplied.
+**Create quotation from inquiry** — Sales/Management only. Every line's rate is computed server-side from the dealer's own price-tier (BRD C.1.4 — falls back to the flat Dealer price if that tier has no rate published for the item yet) + markup — never client-supplied.
 
 **Params**
 
@@ -800,6 +803,7 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 | `freight` | number | default 0 |  |
 | `validity_days` | int | default 7 |  |
 | `inquiry` | string | optional | links back, and flips that Inquiry to "Quoted" |
+| `channel` | string | optional | Retail / Bulk / Project. Left unset, auto-classifies (BRD C.4.3) from the dealer's `dealerType` or any line's qty vs. its item's Series bulk_qty_threshold. Passing one explicitly — including "Retail" — is the audit-locked manual override and always wins. |
 
 **Response**
 
@@ -977,6 +981,7 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 | `lines` | array | required | [{ item, qty }] |
 | `expected_dispatch` | date | required |  |
 | `inquiry` | string | required |  |
+| `channel` | string | optional | same auto-classification/manual-override rule as create_quotation above (BRD C.4.3) |
 
 **Response**
 
