@@ -197,7 +197,7 @@ _No parameters._
 
 ## Dealers
 
-Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id. `classification` (BRD C.1.4) and `dealerType` (BRD C.4.3) are the only two custom fields on Customer (sales/setup.py).
+Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id. `classification` (BRD C.1.4), `dealerType` (BRD C.4.3), and `salesperson` (BRD C.12.3) are the three custom fields on Customer (sales/setup.py).
 
 #### GET `dms_erp.sales.dealer_api.list_dealers`
 
@@ -216,15 +216,15 @@ Thin read layer over native Customer — every other module already treats a dea
 [
   { "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
     "territory": "Saurashtra", "creditLimit": 500000, "disabled": false,
-    "classification": "Dealer", "dealerType": "Retail" },
+    "classification": "Dealer", "dealerType": "Retail", "salesperson": "priya@pacific.example" },
   { "id": "CUST-0007", "name": "Om Sanitary & Tiles", "group": "Retail Dealer",
     "territory": "Kutch", "creditLimit": 250000, "disabled": false,
-    "classification": "Standard Dealer", "dealerType": "Retail" }
+    "classification": "Standard Dealer", "dealerType": "Retail", "salesperson": null }
 ]
 ```
 
-> ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType` are the only two custom fields on Customer
-> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` is a plain manual field.
+> ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType`/`salesperson` are the only three custom fields on Customer
+> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` has no write endpoint yet (set directly on the Customer). `salesperson` is written through `set_dealer_salesperson` below.
 
 
 #### GET `dms_erp.sales.dealer_api.get_dealer`
@@ -240,8 +240,25 @@ Thin read layer over native Customer — every other module already treats a dea
 **Response**
 
 ```json
-{ "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
-  "territory": "Saurashtra", "creditLimit": 500000, "disabled": false }
+(same shape as one row of list_dealers)
+```
+
+
+#### POST `dms_erp.sales.dealer_api.set_dealer_salesperson`
+
+**Assign (or clear) a dealer's salesperson** (BRD C.12.3) — Sales/Management only. Ownership of the dealer relationship only; targets/performance-vs-target reporting is a deliberate follow-up, not built here.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required |  |
+| `salesperson` | string | optional | a User id; pass null/omit to clear the assignment |
+
+**Response**
+
+```json
+(same shape as one row of list_dealers)
 ```
 
 
@@ -2710,6 +2727,32 @@ BRD "Reports and Dashboards" — the report half. Filterable, dealer/date-range/
 ```
 
 > sorted by orderValue descending
+
+
+#### GET `dms_erp.reports.sales_reports.salesperson_assignment_report`
+
+**Salesperson assignment report** (BRD C.12.3) — every salesperson with their assigned dealers and each dealer's order count/value. Dealers with no salesperson assigned are grouped under `salesperson: null` so nothing silently drops off the report. Ownership only — targets/performance-vs-target is a deliberate follow-up, not built here.
+
+**Params**
+
+_No parameters._
+
+**Response**
+
+```json
+[
+  {
+    "salesperson": "priya@pacific.example", "dealerCount": 3, "totalOrderValue": 1240000,
+    "dealers": [{ "dealerId": "CUST-0004", "dealerName": "Shree Ganesh Tiles", "orderCount": 4, "orderValue": 620000 }]
+  },
+  {
+    "salesperson": null, "dealerCount": 2, "totalOrderValue": 0,
+    "dealers": [{ "dealerId": "CUST-0011", "dealerName": "New Dealer Co", "orderCount": 0, "orderValue": 0 }]
+  }
+]
+```
+
+> sorted by totalOrderValue descending; each salesperson's own `dealers` list sorted by orderValue descending
 
 
 #### GET `dms_erp.reports.sales_reports.duplicate_inquiry_report`

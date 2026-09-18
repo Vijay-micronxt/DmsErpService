@@ -119,6 +119,14 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.4.3 — drives the default order channel for this dealer's quotations/orders when the caller doesn't pass one explicitly. Manually set, never recomputed.",
 			"insert_after": "custom_dealer_classification",
 		},
+		{
+			"fieldname": "custom_salesperson",
+			"fieldtype": "Link",
+			"label": "Salesperson",
+			"options": "User",
+			"description": "BRD C.12.3 — ownership of the dealer relationship. Targets/performance-vs-target reporting is a separate follow-up once the team decides whether that needs its own doctype or just a number field; this is the field-only version.",
+			"insert_after": "custom_dealer_type",
+		},
 	],
 }
 

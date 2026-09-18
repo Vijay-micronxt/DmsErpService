@@ -10,15 +10,28 @@ for why. Resolved here against this app's own default_company(), same as everywh
 else that needs "which company does this app's data belong to".
 
 `classification` (Standard Dealer/Dealer/Master Dealer, BRD C.1.4) and `dealerType`
-(Retail/Bulk/Project, BRD C.4.3) are the two Customer custom fields sales/setup.py
+(Retail/Bulk/Project, BRD C.4.3) are two of the Customer custom fields sales/setup.py
 adds — see pricing.dealer_classification and sales.order_channel for what reads
 and writes them. Both are read-only here; classification is recomputed nightly and
-dealerType is edited directly on the Customer, not through this module.
+dealerType has no write endpoint of its own yet.
+
+`salesperson` (BRD C.12.3 — ownership of the dealer relationship) is the one field
+this module does write: `set_dealer_salesperson`. Targets/performance-vs-target
+reporting is a deliberate follow-up, not built here — see sales/setup.py's
+custom_salesperson field description for why.
 """
 
 import frappe
+from frappe import _
 
 from dms_erp.warehouse.utils import default_company
+
+SALES_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
+
+
+def _assert_can_manage_dealers():
+	if not set(frappe.get_roles(frappe.session.user)) & SALES_WRITE_ROLES:
+		frappe.throw(_("Only Sales or Management can update dealer assignment."), frappe.PermissionError)
 
 
 def _serialize(
@@ -30,6 +43,7 @@ def _serialize(
 	disabled: int,
 	classification: str | None = None,
 	dealer_type: str | None = None,
+	salesperson: str | None = None,
 ) -> dict:
 	return {
 		"id": name,
@@ -40,6 +54,7 @@ def _serialize(
 		"disabled": bool(disabled),
 		"classification": classification,
 		"dealerType": dealer_type,
+		"salesperson": salesperson,
 	}
 
 
@@ -62,7 +77,16 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 	rows = frappe.get_all(
 		"Customer",
 		filters=filters,
-		fields=["name", "customer_name", "customer_group", "territory", "disabled", "custom_dealer_classification", "custom_dealer_type"],
+		fields=[
+			"name",
+			"customer_name",
+			"customer_group",
+			"territory",
+			"disabled",
+			"custom_dealer_classification",
+			"custom_dealer_type",
+			"custom_salesperson",
+		],
 		order_by="customer_name asc",
 	)
 	credit_limits = _credit_limits_for([r.name for r in rows], default_company())
@@ -76,6 +100,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.disabled,
 			r.custom_dealer_classification,
 			r.custom_dealer_type,
+			r.custom_salesperson,
 		)
 		for r in rows
 	]
@@ -94,4 +119,15 @@ def get_dealer(dealer: str):
 		doc.disabled,
 		doc.custom_dealer_classification,
 		doc.custom_dealer_type,
+		doc.custom_salesperson,
 	)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def set_dealer_salesperson(dealer: str, salesperson: str | None):
+	"""BRD C.12.3 — assign (or clear, with salesperson=None) ownership of a dealer
+	relationship."""
+	_assert_can_manage_dealers()
+
+	frappe.db.set_value("Customer", dealer, "custom_salesperson", salesperson)
+	return get_dealer(dealer)

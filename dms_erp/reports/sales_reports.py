@@ -134,6 +134,43 @@ def dealer_activity_report(dealer: str | None = None):
 
 
 @frappe.whitelist(methods=["GET"])
+def salesperson_assignment_report():
+	"""BRD C.12.3 — every salesperson (a User holding custom_salesperson on at
+	least one Customer) with their assigned dealers and each dealer's order count/
+	value, same rollup shape as dealer_activity_report. Targets/performance-vs-
+	target is a deliberate follow-up, not built here (see sales/setup.py's
+	custom_salesperson field description) — this is dealer ownership only.
+	Dealers with no salesperson assigned are grouped under salesperson=None so
+	nothing silently drops off the report."""
+	dealers = dealer_api.list_dealers()
+
+	by_salesperson: dict[str | None, list[dict]] = {}
+	for d in dealers:
+		order_agg = frappe.db.sql(
+			"select count(name) as cnt, coalesce(sum(grand_total), 0) as value from `tabSales Order` where customer=%s and docstatus=1",
+			(d["id"],),
+			as_dict=True,
+		)[0]
+		by_salesperson.setdefault(d["salesperson"], []).append(
+			{"dealerId": d["id"], "dealerName": d["name"], "orderCount": order_agg.cnt, "orderValue": order_agg.value}
+		)
+
+	rows = []
+	for salesperson, dealer_rows in by_salesperson.items():
+		dealer_rows.sort(key=lambda r: r["orderValue"], reverse=True)
+		rows.append(
+			{
+				"salesperson": salesperson,
+				"dealerCount": len(dealer_rows),
+				"totalOrderValue": sum(r["orderValue"] for r in dealer_rows),
+				"dealers": dealer_rows,
+			}
+		)
+	rows.sort(key=lambda r: r["totalOrderValue"], reverse=True)
+	return rows
+
+
+@frappe.whitelist(methods=["GET"])
 def duplicate_inquiry_report(window_days: int = DUPLICATE_INQUIRY_WINDOW_DAYS):
 	"""The BRD's "Duplicate inquiry report". No duplicate rule was specified in
 	the BRD text, so this is a proposed one, easy to retune via `window_days`:

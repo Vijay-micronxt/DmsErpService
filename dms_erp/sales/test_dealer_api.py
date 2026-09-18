@@ -13,6 +13,9 @@ class TestDealerApi(FrappeTestCase):
 		ensure_company()
 		cls.dealer = make_dealer("Dealer Api Test Co")
 
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
 	def test_get_dealer_returns_native_customer_fields(self):
 		result = dealer_api.get_dealer(self.dealer)
 		self.assertEqual(result["id"], self.dealer)
@@ -51,3 +54,8 @@ class TestDealerApi(FrappeTestCase):
 			self.assertIn(self.dealer, [r["id"] for r in disabled_only])
 		finally:
 			frappe.db.set_value("Customer", self.dealer, "disabled", 0)
+
+	def test_set_dealer_salesperson_requires_sales_or_management_role(self):
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			dealer_api.set_dealer_salesperson(self.dealer, "priya@pacific.example")
