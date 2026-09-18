@@ -67,3 +67,34 @@ class TestPricingApi(FrappeTestCase):
 		self.assertEqual(pricing_api.get_dealer_price(item), 500)
 		self.assertEqual(pricing_api.get_dealer_price(item, price_list=DEALER_CLASSIFICATION_MASTER), 700)
 		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 700)
+
+	def test_get_dealer_tier_prices_returns_all_three_lists_with_none_for_unpublished(self):
+		item = make_item("PRICE-TIER-READ", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		prices = pricing_api.get_dealer_tier_prices(item)
+
+		self.assertEqual(prices, {"Standard Dealer": None, "Dealer": 500, "Master Dealer": None})
+
+	def test_set_dealer_tier_price_writes_a_single_list_without_disturbing_the_others(self):
+		item = make_item("PRICE-TIER-WRITE", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		result = pricing_api.set_dealer_tier_price(item=item, price_list=DEALER_CLASSIFICATION_MASTER, rate=650)
+
+		self.assertEqual(result, {"Standard Dealer": None, "Dealer": 500, "Master Dealer": 650})
+
+	def test_set_dealer_tier_price_rejects_an_unknown_price_list(self):
+		item = make_item("PRICE-TIER-INVALID", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		with self.assertRaises(frappe.ValidationError):
+			pricing_api.set_dealer_tier_price(item=item, price_list="Wholesale", rate=650)
+
+	def test_set_dealer_tier_price_requires_purchase_or_management_role(self):
+		item = make_item("PRICE-TIER-PERM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			pricing_api.set_dealer_tier_price(item=item, price_list=DEALER_CLASSIFICATION_MASTER, rate=650)

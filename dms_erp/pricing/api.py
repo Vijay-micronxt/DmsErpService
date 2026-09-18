@@ -17,6 +17,13 @@ Series (catalog.api create_product's series_ref), any Standard Dealer/Master Dea
 rates that Series carries in its price_list_rates are published alongside it in the
 same call — an item with no Series, or a Series with no rates for those two lists,
 simply doesn't get them yet, same as before this existed.
+
+get_dealer_tier_prices/set_dealer_tier_price are the whitelisted read/write pair for
+a price-list management screen — get_price_for_dealer/set_price_for_list already did
+the underlying work (used by quotation_api/order_api's rate lookup and
+_publish_series_tier_rates) but neither was itself callable from the frontend, so
+there was no way to view or hand-set a tier rate for an item whose Series doesn't
+carry pre-configured price_list_rates.
 """
 
 import frappe
@@ -25,7 +32,7 @@ from frappe.utils import now_datetime
 
 from dms_erp.pagination import clamp
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER, DEALER_CLASSIFICATION_STANDARD
-from dms_erp.pricing.setup import DEALER_PRICE_LIST
+from dms_erp.pricing.setup import DEALER_PRICE_LIST, PRICE_LISTS
 
 PRICING_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
@@ -104,6 +111,22 @@ def set_price_for_list(item: str, price_list: str, rate: float):
 
 def set_dealer_price(item: str, rate: float):
 	set_price_for_list(item, DEALER_PRICE_LIST, rate)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_dealer_tier_prices(item: str) -> dict:
+	"""BRD C.1.4/C.7.1 — the three tier price-list rates for an item, for a price-list
+	management screen. None for a list that has no rate published yet."""
+	return {price_list: get_dealer_price(item, price_list=price_list) for price_list in PRICE_LISTS}
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def set_dealer_tier_price(item: str, price_list: str, rate: float):
+	_assert_can_manage_pricing()
+	if price_list not in PRICE_LISTS:
+		frappe.throw(_("Invalid price_list: {0}").format(price_list), frappe.ValidationError)
+	set_price_for_list(item, price_list, rate)
+	return get_dealer_tier_prices(item)
 
 
 def _publish_series_tier_rates(item: str):

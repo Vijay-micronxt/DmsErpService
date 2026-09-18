@@ -581,6 +581,42 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 ```
 
 
+#### GET `dms_erp.pricing.api.get_dealer_tier_prices`
+
+**Get an item's three tier price-list rates** — BRD C.1.4/C.7.1. For a price-list management screen — `null` for a list that has no rate published yet (the common case for Standard Dealer/Master Dealer until a Series with tiered rates exists, or someone hand-sets one via `set_dealer_tier_price`).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+
+**Response**
+
+```json
+{ "Standard Dealer": null, "Dealer": 500, "Master Dealer": 700 }
+```
+
+
+#### POST `dms_erp.pricing.api.set_dealer_tier_price`
+
+**Hand-set one tier's rate for an item** — Purchase/Management only. For items whose Series doesn't carry pre-configured `priceListRates` (`approve_price`'s automatic publish), or to override one. Does not touch the other two lists.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `price_list` | string | required | one of "Standard Dealer", "Dealer", "Master Dealer" |
+| `rate` | number | required |  |
+
+**Response**
+
+```json
+(same shape as get_dealer_tier_prices)
+```
+
+
 ---
 
 ## Dealer Catalog Visibility
