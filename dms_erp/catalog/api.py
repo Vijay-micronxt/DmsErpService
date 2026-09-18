@@ -74,6 +74,33 @@ def _set_alt_item(item_code: str, alt_item_code: str | None):
 		).insert(ignore_permissions=True)
 
 
+def _apply_series_defaults(series_ref, finish, series_label, pieces_per_box, sqft_per_box, weight_per_box_kg):
+	"""BRD C.1.1: a Series is the central master an Item can be created against.
+	Explicit values passed to create_product always win — a Series only fills in
+	what the caller left unset (falsy). Thresholds have no caller-supplied
+	equivalent at all, so they always come straight from the Series."""
+	bulk_qty_threshold = 0
+	retail_qty_threshold = 0
+	if series_ref:
+		series_doc = frappe.get_doc("Series", series_ref)
+		finish = finish or series_doc.finish
+		series_label = series_label or series_doc.series_name
+		pieces_per_box = pieces_per_box or series_doc.pieces_per_box
+		sqft_per_box = sqft_per_box or series_doc.sqft_per_box
+		weight_per_box_kg = weight_per_box_kg or series_doc.weight_per_box_kg
+		bulk_qty_threshold = series_doc.bulk_qty_threshold
+		retail_qty_threshold = series_doc.retail_qty_threshold
+	return finish, series_label, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold
+
+
+def _serialize_dealer_code(row) -> dict:
+	return {"dealer": row.dealer, "customerItemCode": row.customer_item_code, "sampleIssued": bool(row.sample_issued)}
+
+
+def _serialize_image(row) -> dict:
+	return {"image": row.image, "imageType": row.image_type, "isPrimary": bool(row.is_primary)}
+
+
 def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 	status = item_doc.custom_discontinuation_status or "Active"
 	return {
@@ -84,6 +111,9 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"finish": item_doc.custom_finish,
 		"color": item_doc.custom_color,
 		"series": item_doc.custom_series,
+		"seriesRef": item_doc.custom_series_ref,
+		"bulkQtyThreshold": item_doc.custom_bulk_qty_threshold,
+		"retailQtyThreshold": item_doc.custom_retail_qty_threshold,
 		"category": item_doc.item_group,
 		"swatch": item_doc.custom_swatch_color,
 		# Total on-hand qty across every bay, now that Phase 3 (Warehouse) exists. `bay`
@@ -103,6 +133,8 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
 		"leadTimeDays": item_doc.lead_time_days,
 		"altItemId": _get_alt_item(item_doc.name),
+		"dealerCodes": [_serialize_dealer_code(row) for row in item_doc.custom_dealer_codes],
+		"images": [_serialize_image(row) for row in item_doc.custom_images],
 		# gst_hsn_code isn't a dms_erp field at all -- it's added to Item by the
 		# india_compliance app when installed (mandatory there for GST invoicing
 		# on Indian sites). getattr() rather than direct access since the field
@@ -202,6 +234,7 @@ def create_product(
 	finish: str | None = None,
 	color: str | None = None,
 	series: str | None = None,
+	series_ref: str | None = None,
 	swatch: str | None = None,
 	status: str = "Active",
 	pieces_per_box: float = 0,
@@ -216,6 +249,10 @@ def create_product(
 	if status not in DISCONTINUATION_STATUSES:
 		frappe.throw(_("Invalid status: {0}").format(status), frappe.ValidationError)
 
+	finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold = _apply_series_defaults(
+		series_ref, finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg
+	)
+
 	item = frappe.get_doc(
 		{
 			"doctype": "Item",
@@ -228,6 +265,9 @@ def create_product(
 			"custom_finish": finish,
 			"custom_color": color,
 			"custom_series": series,
+			"custom_series_ref": series_ref,
+			"custom_bulk_qty_threshold": bulk_qty_threshold,
+			"custom_retail_qty_threshold": retail_qty_threshold,
 			"custom_swatch_color": swatch,
 			"custom_discontinuation_status": status,
 			"custom_pieces_per_box": pieces_per_box,
@@ -275,6 +315,11 @@ def update_product(item: str, patch: dict):
 		"weightPerBoxKg": "custom_weight_per_box_kg",
 		"leadTimeDays": "lead_time_days",
 		"hsnCode": "gst_hsn_code",
+		"dealerCodes": "custom_dealer_codes",
+		"images": "custom_images",
+		"seriesRef": "custom_series_ref",
+		"bulkQtyThreshold": "custom_bulk_qty_threshold",
+		"retailQtyThreshold": "custom_retail_qty_threshold",
 	}
 
 	doc = frappe.get_doc("Item", item)
@@ -288,6 +333,20 @@ def update_product(item: str, patch: dict):
 	doc.save(ignore_permissions=True)
 
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["GET"])
+def resolve_dealer_code(dealer: str, code: str) -> dict | None:
+	"""BRD C.1.5/D.4: resolve a dealer's own customer_item_code back to the Item it
+	refers to. The hard prerequisite for the WhatsApp flow and for dealer-app catalog
+	gating to mean what the BRD says — a dealer only ever types/scans their own code,
+	never the internal item_code. Returns None (not a throw) when the code doesn't
+	resolve for that dealer, since "not found" is an expected, routine outcome here
+	(a mistyped code), not an error condition."""
+	item_code = frappe.db.get_value("Item Dealer Code", {"dealer": dealer, "customer_item_code": code}, "parent")
+	if not item_code:
+		return None
+	return _serialize(frappe.get_doc("Item", item_code))
 
 
 @frappe.whitelist(methods=["GET"])

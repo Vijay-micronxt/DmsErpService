@@ -17,8 +17,10 @@ import frappe
 from frappe import _
 from frappe.utils import now_datetime, today
 
+from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_dealer_price
+from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
 
@@ -40,7 +42,7 @@ def _serialize(doc) -> dict:
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,
 		"channel": doc.custom_order_channel,
-		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
+		"lines": [_serialize_line(row) for row in doc.items],
 		# Server-computed only — every line's rate came from get_dealer_price at
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
@@ -52,6 +54,17 @@ def _serialize(doc) -> dict:
 			{"stage": row.stage, "at": row.at, "by": row.by, "note": row.note}
 			for row in sorted(doc.custom_stage_history, key=lambda r: r.idx)
 		],
+	}
+
+
+def _serialize_line(row) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
+	return {
+		"itemCode": row.item_code,
+		"qty": row.qty,
+		"rate": row.rate,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
 
 
@@ -105,17 +118,23 @@ def get_order(order: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str = "Retail"):
+def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str | None = None):
 	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
 	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
 	plain approved dealer-price rates). The Quotation-sourced path is
 	quotation_api.convert_to_order; there is no third, source-less way to create an
 	Order, mirroring the frontend's Order.sourceType being strictly "Inquiry" or
-	"Quotation"."""
+	"Quotation".
+
+	`channel` left unset auto-classifies from the dealer's type / item Series
+	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
+	audit-locked manual override."""
 	_assert_can_manage_orders()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if channel is None:
+		channel = auto_classify_channel(dealer, lines)
 
 	items = []
 	for line in lines:

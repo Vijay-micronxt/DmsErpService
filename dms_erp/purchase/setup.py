@@ -32,6 +32,28 @@ CUSTOM_FIELDS = {
 			"allow_on_submit": 1,
 		},
 	],
+	"Supplier": [
+		{
+			"fieldname": "custom_gps_section",
+			"fieldtype": "Section Break",
+			"label": "GPS Coordinates",
+			"insert_after": "supplier_details",
+		},
+		{
+			"fieldname": "custom_latitude",
+			"fieldtype": "Float",
+			"label": "Latitude",
+			"precision": "6",
+			"insert_after": "custom_gps_section",
+		},
+		{
+			"fieldname": "custom_longitude",
+			"fieldtype": "Float",
+			"label": "Longitude",
+			"precision": "6",
+			"insert_after": "custom_latitude",
+		},
+	],
 }
 
 

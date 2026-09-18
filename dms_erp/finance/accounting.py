@@ -106,3 +106,35 @@ def post_unloading_payment(amount: float, charge_ref: str) -> str | None:
 	pe.insert(ignore_permissions=True)
 	pe.submit()
 	return pe.name
+
+
+def post_labour_payment(amount: float, record_ref: str) -> str | None:
+	"""Payment Entry for a Labour Attendance And Payment record. Reuses the same
+	unloading_expense_account DMS Accounting Settings already has rather than
+	adding a second configurable account for what BRD C.9.2 itself groups with
+	unloading as "labour/vendor" charges -- same pattern, account, and posting
+	shape as post_unloading_payment, just a different voucher reference."""
+	settings = get_settings()
+	if not settings.post_accounting_entries:
+		return None
+
+	_require(settings, "default_company", "default_bank_account", "unloading_expense_account")
+
+	pe = frappe.get_doc(
+		{
+			"doctype": "Payment Entry",
+			"payment_type": "Internal Transfer",
+			"company": settings.default_company,
+			"posting_date": today(),
+			"paid_from": settings.default_bank_account,
+			"paid_to": settings.unloading_expense_account,
+			"paid_amount": amount,
+			"received_amount": amount,
+			"reference_no": record_ref,
+			"reference_date": today(),
+			"remarks": f"Labour payment — {record_ref}",
+		}
+	)
+	pe.insert(ignore_permissions=True)
+	pe.submit()
+	return pe.name

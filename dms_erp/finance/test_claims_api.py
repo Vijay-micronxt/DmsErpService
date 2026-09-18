@@ -182,6 +182,58 @@ class TestClaimsApi(FrappeTestCase):
 		self.assertEqual(by_status["total"], 1)
 		self.assertEqual(by_status["items"][0]["id"], c1["id"])
 
+	def test_file_claim_defaults_to_insurance_type_and_derives_supplier(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-TYPE-1")
+		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
+		self.assertEqual(claim["claimType"], "Insurance")
+		self.assertEqual(claim["supplier"], self.supplier)
+
+	def test_shortage_claim_with_no_stock_entry_requires_supplier(self):
+		with self.assertRaises(frappe.ValidationError):
+			claims_api.file_claim(claim_type="Shortage", claim_amount=500)
+
+	def test_shortage_claim_with_no_stock_entry_and_explicit_supplier(self):
+		claim = claims_api.file_claim(claim_type="Shortage", claim_amount=500, supplier=self.supplier, remarks="Short by 5 boxes at receipt")
+		self.assertEqual(claim["claimType"], "Shortage")
+		self.assertEqual(claim["supplier"], self.supplier)
+		self.assertIsNone(claim["stockEntry"])
+		self.assertIsNone(claim["itemCode"])
+
+	def test_update_claim_status_records_approved_amount_and_settlement_mode(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-TYPE-2")
+		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
+
+		claims_api.update_claim_status(claim["id"], "Approved", approved_amount=900)
+		settled = claims_api.update_claim_status(claim["id"], "Settled", settled_amount=900, settlement_mode="Vendor Credit Note")
+
+		self.assertEqual(settled["approvedAmount"], 900)
+		self.assertEqual(settled["settlementMode"], "Vendor Credit Note")
+		self.assertEqual(settled["netLoss"], 100)
+
+	def test_accumulated_claims_by_supplier_groups_open_claims(self):
+		se1 = self._make_damage_transfer("CLAIM-BATCH-ACCUM-1")
+		se2 = self._make_damage_transfer("CLAIM-BATCH-ACCUM-2")
+		claims_api.file_claim(stock_entry=se1, insurer="HDFC Ergo", claim_amount=1000)
+		claims_api.file_claim(stock_entry=se2, insurer="HDFC Ergo", claim_amount=500)
+
+		grouped = claims_api.accumulated_claims_by_supplier()
+		row = next(r for r in grouped if r["supplier"] == self.supplier)
+		self.assertGreaterEqual(row["claimCount"], 2)
+		self.assertGreaterEqual(row["totalClaimed"], 1500)
+
+	def test_claims_pending_year_end_reconciliation_lists_only_open_claims(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-YEAREND")
+		open_claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
+
+		se2 = self._make_damage_transfer("CLAIM-BATCH-YEAREND-2")
+		settled_claim = claims_api.file_claim(stock_entry=se2, insurer="HDFC Ergo", claim_amount=1000)
+		claims_api.update_claim_status(settled_claim["id"], "Settled", settled_amount=1000)
+
+		pending = claims_api.claims_pending_year_end_reconciliation()
+		ids = [c["id"] for c in pending]
+		self.assertIn(open_claim["id"], ids)
+		self.assertNotIn(settled_claim["id"], ids)
+
 	def test_write_requires_warehouse_or_management_role(self):
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-7")
 		frappe.set_user("Guest")

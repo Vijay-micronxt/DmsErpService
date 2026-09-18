@@ -20,3 +20,14 @@ before_request = ["dms_erp.auth.middleware.authenticate_request"]
 
 after_install = "dms_erp.setup.install.after_install"
 after_migrate = "dms_erp.setup.install.after_migrate"
+
+# BRD C.4.1: nobody is told a draft reorder plan needs review -- a daily digest to
+# the purchase team is the smallest fix that closes that gap (see reorder_api.py).
+# BRD C.1.4: dealer price-tier classification is recomputed nightly from confirmed
+# Sales Order value, not maintained by hand (see pricing/dealer_classification.py).
+scheduler_events = {
+	"daily": [
+		"dms_erp.purchase.reorder_api.notify_reorder_review",
+		"dms_erp.pricing.dealer_classification.recompute_dealer_classifications",
+	],
+}

@@ -7,6 +7,8 @@ Back" blocks a sale outright; the others sell down existing stock while cutting 
 future purchase.
 """
 
+import frappe
+
 DISCONTINUATION_STATUSES = [
 	"Active",
 	"Partially Discontinued",
@@ -25,3 +27,10 @@ def is_reorderable(status: str) -> bool:
 
 def is_sellable(status: str) -> bool:
 	return status not in _NOT_SELLABLE
+
+
+def item_weight_per_box_kg(item_code: str) -> float | None:
+	"""BRD C.1.3: an item's standard weight — the fallback every transaction
+	document uses before a real batch (with its own possibly-different
+	custom_batch_weight_kg, see warehouse.utils.ensure_batch) is known."""
+	return frappe.get_cached_value("Item", item_code, "custom_weight_per_box_kg")

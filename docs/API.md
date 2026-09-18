@@ -33,12 +33,14 @@ POST /api/method/dms_erp.auth.api.refresh_token
 
 1. **Inquiry + Quotation persistence** — the backend leads on both. `Inquiry` is a real custom doctype with full CRUD; `Quotation` is native ERPNext with create, line-edit, and status control.
 2. **No GL account is ever hardcoded or guessed.** Claim settlement and unloading payment both route through **DMS Accounting Settings** — a single on/off flag plus five nullable Account links. While it's off (the default), both actions are pure status/amount updates with zero accounting side effect.
+3. **`weightPerBoxKg`/`totalWeightKg` (BRD C.1.3, per-line where a document has lines)** appear on every transaction-document endpoint this app builds: Inquiries, Quotations, Orders, Purchase Orders, Pickup Run, Inward, Bay Allocation, and Stock/Lots. Before a Bay Allocation exists (Inquiry/Quotation/Order/PO/Pickup Run/an un-allocated Inward Truck), the value is the Item's own standard weight (`custom_weight_per_box_kg`). From Bay Allocation onward, it's the confirmed Batch's own weight (`custom_batch_weight_kg`, can differ from the Item's standard weight when the manufacturer's material changed batch to batch) — Inward/Stock-Lots prefer the Batch weight once one is linked, falling back to the Item's own weight before that. Both fields are `null` when the Item has no standard weight set at all. Delivery Note and Sales Invoice have no dms_erp-specific endpoint at all (pure native ERPNext), so weight isn't surfaced there.
 
 ## Modules
 
 - [Auth](#auth)
 - [Dealers](#dealers)
 - [Products / Item Master](#products-item-master)
+- [Series Master](#series-master)
 - [Pricing](#pricing)
 - [Dealer Catalog Visibility](#dealer-catalog-visibility)
 - [Inquiries](#inquiries)
@@ -49,6 +51,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Warehouse — Stock / Lots](#warehouse-stock-lots)
 - [Warehouse — Transfers](#warehouse-transfers)
 - [Warehouse — Scan](#warehouse-scan)
+- [Warehouse — Unallocated Stock](#warehouse-unallocated-stock)
 - [Inward](#inward)
 - [Picking](#picking)
 - [Purchase Orders](#purchase-orders)
@@ -56,6 +59,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Purchase Requirements / Reorder Planning](#purchase-requirements-reorder-planning)
 - [Damage & Insurance Claims](#damage-insurance-claims)
 - [Unloading Payment](#unloading-payment)
+- [Labour Attendance & Payment](#labour-attendance-payment)
 - [Dashboard](#dashboard)
 - [Reports — Sales](#reports-sales)
 - [Reports — Warehouse](#reports-warehouse)
@@ -193,7 +197,7 @@ _No parameters._
 
 ## Dealers
 
-Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id with no custom fields.
+Thin read layer over native Customer — every other module already treats a dealer as a bare Customer id. `classification` (BRD C.1.4), `dealerType` (BRD C.4.3), and `salesperson` (BRD C.12.3) are the three custom fields on Customer (sales/setup.py).
 
 #### GET `dms_erp.sales.dealer_api.list_dealers`
 
@@ -211,13 +215,16 @@ Thin read layer over native Customer — every other module already treats a dea
 ```json
 [
   { "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
-    "territory": "Saurashtra", "creditLimit": 500000, "disabled": false },
+    "territory": "Saurashtra", "creditLimit": 500000, "disabled": false,
+    "classification": "Dealer", "dealerType": "Retail", "salesperson": "priya@pacific.example" },
   { "id": "CUST-0007", "name": "Om Sanitary & Tiles", "group": "Retail Dealer",
-    "territory": "Kutch", "creditLimit": 250000, "disabled": false }
+    "territory": "Kutch", "creditLimit": 250000, "disabled": false,
+    "classification": "Standard Dealer", "dealerType": "Retail", "salesperson": null }
 ]
 ```
 
-> ⚠️ no city/phone/dealer-code fields — Customer has zero custom fields added anywhere in this app
+> ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType`/`salesperson` are the only three custom fields on Customer
+> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` has no write endpoint yet (set directly on the Customer). `salesperson` is written through `set_dealer_salesperson` below.
 
 
 #### GET `dms_erp.sales.dealer_api.get_dealer`
@@ -233,8 +240,25 @@ Thin read layer over native Customer — every other module already treats a dea
 **Response**
 
 ```json
-{ "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
-  "territory": "Saurashtra", "creditLimit": 500000, "disabled": false }
+(same shape as one row of list_dealers)
+```
+
+
+#### POST `dms_erp.sales.dealer_api.set_dealer_salesperson`
+
+**Assign (or clear) a dealer's salesperson** (BRD C.12.3) — Sales/Management only. Ownership of the dealer relationship only; targets/performance-vs-target reporting is a deliberate follow-up, not built here.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required |  |
+| `salesperson` | string | optional | a User id; pass null/omit to clear the assignment |
+
+**Response**
+
+```json
+(same shape as one row of list_dealers)
 ```
 
 
@@ -267,11 +291,14 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
   "items": [{
     "id": "PVT-6060", "code": "PVT-6060", "name": "Marbella Beige Vitrified 600x600",
     "size": "600x600mm", "finish": "Glossy", "color": "Beige", "series": "Marbella",
+    "seriesRef": "Marbella", "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
     "category": "Vitrified", "swatch": "#D8C7A8",
     "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
     "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
     "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
-    "leadTimeDays": 21, "altItemId": null
+    "leadTimeDays": 21, "altItemId": null,
+    "dealerCodes": [{"dealer": "Anand Tiles", "customerItemCode": "AT-PVT-6060", "sampleIssued": true}],
+    "images": [{"image": "/files/pvt-6060.jpg", "imageType": "Product", "isPrimary": true}]
   }],
   "total": 214, "limit": 20, "offset": 0
 }
@@ -341,10 +368,12 @@ its name and parent worth a second call for.
 | `margin_pct` | number | required |  |
 | `effective_date` | date | required |  |
 | `size, finish, color, series, swatch` | string | optional |  |
+| `series_ref` | string | optional | Series master name (BRD C.1.1) — when set, `finish`/`pieces_per_box`/`sqft_per_box`/`weight_per_box_kg`/`series` fall back to the Series' own values for any of those left unset here (explicit params always win); `bulkQtyThreshold`/`retailQtyThreshold` always come from the Series |
 | `status` | string | default "Active" | one of the 5 lifecycle states |
 | `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
 | `lead_time_days` | int | default 0 |  |
 | `alt_item` | string | optional | substitute Item code |
+| `hsn_code` | string | optional | only meaningful when india_compliance is installed |
 
 **Response**
 
@@ -362,7 +391,7 @@ its name and parent worth a second call for.
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `item` | string | required | Item code |
-| `patch` | object | required | keys: name, category, size, finish, color, series, swatch, status, piecesPerBox, sqftPerBox, weightPerBoxKg, leadTimeDays, altItemId |
+| `patch` | object | required | keys: name, category, size, finish, color, series, swatch, status, piecesPerBox, sqftPerBox, weightPerBoxKg, leadTimeDays, altItemId, hsnCode, seriesRef, bulkQtyThreshold, retailQtyThreshold, dealerCodes, images |
 
 **Response**
 
@@ -371,6 +400,91 @@ its name and parent worth a second call for.
 ```
 
 > status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back.
+
+> `dealerCodes` / `images` replace the entire child table each call (same convention as Pickup Run's `lines`), with rows shaped `{dealer, customer_item_code, sample_issued}` / `{image, image_type, is_primary}` — not the camelCase `_serialize` output shape.
+
+
+#### GET `dms_erp.catalog.api.resolve_dealer_code`
+
+**Resolve a dealer's own item code** (BRD C.1.5/D.4) — the prerequisite for the WhatsApp flow and dealer-app catalog gating: a dealer only ever types/scans their own code, never the internal item_code.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required | Customer name |
+| `code` | string | required | the dealer's own customer_item_code |
+
+**Response**
+
+```json
+(same shape as get_product, or null if the code doesn't resolve for that dealer)
+```
+
+
+---
+
+
+## Series Master
+
+BRD C.1.1's central master concept: a Series carries a supplier, tile attributes (size/thickness/finish), UOM conversions and retail/bulk qty thresholds. `create_product`/`update_product`'s `series_ref` param propagates these onto an Item at creation (see Products / Item Master above). Doesn't publish prices directly — `priceListRates` is a source for future per-Series pricing work, not yet wired to any live Item Price.
+
+#### GET `dms_erp.catalog.series_api.list_series`
+
+**List / search series** — paginated.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on series name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "Marbella", "seriesName": "Marbella", "supplier": "Orient Ceramics",
+    "size": "600x600mm", "thickness": "9mm", "finish": "Glossy",
+    "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
+    "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
+    "priceListRates": [{"priceList": "Standard Selling", "rate": 560}]
+  }],
+  "total": 12, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.catalog.series_api.get_series`
+
+**Get single series** — `series` (string, required) is the Series name. Response: same shape as one row of `list_series`' "items".
+
+
+#### POST `dms_erp.catalog.series_api.create_series`
+
+**Create series** — Purchase/Management only.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `series_name` | string | required | also the doc name |
+| `supplier, size, thickness, finish` | string | optional |  |
+| `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
+| `bulk_qty_threshold, retail_qty_threshold` | int | default 0 |  |
+| `price_list_rates` | array | optional | `[{price_list, rate}, ...]` |
+
+**Response**: same shape as `get_series`.
+
+
+#### POST `dms_erp.catalog.series_api.update_series`
+
+**Update series** — Patch-style, Purchase/Management only.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `series` | string | required | Series name |
+| `patch` | object | required | keys: supplier, size, thickness, finish, piecesPerBox, sqftPerBox, weightPerBoxKg, bulkQtyThreshold, retailQtyThreshold, priceListRates |
+
+**Response**: same shape as `get_series`.
 
 
 ---
@@ -450,7 +564,7 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 
 #### POST `dms_erp.pricing.api.approve_price`
 
-**Approve price** — Publishes `final_price` to the native Dealer price list (→ Product.dealerPrice everywhere) and appends a history row.
+**Approve price** — Publishes `final_price` to the native Dealer price list (→ Product.dealerPrice everywhere) and appends a history row. If the item has a Series (`custom_series_ref`) with Standard Dealer/Master Dealer rates in its `priceListRates` (BRD C.1.4/C.7.1), those are published in the same call.
 
 **Params**
 
@@ -697,7 +811,7 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 
 #### POST `dms_erp.sales.quotation_api.create_quotation`
 
-**Create quotation from inquiry** — Sales/Management only. Every line's rate is computed server-side from the approved dealer price + markup — never client-supplied.
+**Create quotation from inquiry** — Sales/Management only. Every line's rate is computed server-side from the dealer's own price-tier (BRD C.1.4 — falls back to the flat Dealer price if that tier has no rate published for the item yet) + markup — never client-supplied.
 
 **Params**
 
@@ -709,6 +823,7 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 | `freight` | number | default 0 |  |
 | `validity_days` | int | default 7 |  |
 | `inquiry` | string | optional | links back, and flips that Inquiry to "Quoted" |
+| `channel` | string | optional | Retail / Bulk / Project. Left unset, auto-classifies (BRD C.4.3) from the dealer's `dealerType` or any line's qty vs. its item's Series bulk_qty_threshold. Passing one explicitly — including "Retail" — is the audit-locked manual override and always wins. |
 
 **Response**
 
@@ -886,6 +1001,7 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 | `lines` | array | required | [{ item, qty }] |
 | `expected_dispatch` | date | required |  |
 | `inquiry` | string | required |  |
+| `channel` | string | optional | same auto-classification/manual-override rule as create_quotation above (BRD C.4.3) |
 
 **Response**
 
@@ -1271,11 +1387,33 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
   "id": "Main Bay A-01 - PTC::PVT-6060::BATCH-2608-11", "bayId": "Main Bay A-01 - PTC",
   "itemCode": "PVT-6060", "productId": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
   "category": "Vitrified", "batchNumber": "BATCH-2608-11", "boxes": 640,
+  "weightPerBoxKg": 32, "totalWeightKg": 20480,
   "storedAt": "2026-08-20", "damageType": null, "claimRef": null
 }]
 ```
 
 > damageType/claimRef are only ever non-null for a lot sitting in a damage or insurance-claim bay
+
+
+#### GET `dms_erp.warehouse.stock_api.top_batches`
+
+**Top-N batches by on-hand qty for an item** (BRD C.6.2) — aggregated across every bay a batch is split over. Dealer-facing view; also the source the future WhatsApp batch-combination reply will read from.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `n` | int | default 3 |  |
+
+**Response**
+
+```json
+[
+  { "batchNumber": "BATCH-2608-11", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600", "boxes": 640 },
+  { "batchNumber": "BATCH-2607-04", "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600", "boxes": 210 }
+]
+```
 
 
 #### GET `dms_erp.warehouse.stock_api.suggest_bays`
@@ -1378,6 +1516,7 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 | `lines` | array | required | [{ bay: bay code, qty }], must sum to total_qty |
 | `inward_truck` | string | optional |  |
 | `supplier` | string | optional, required if no inward_truck |  |
+| `weight_per_box_kg` | number | optional | this Batch's actual weight (BRD C.1.3/C.6.1) — defaults to the Item's own standard weight when omitted. Only meaningful the first time this `batch_no` is created; a repeat call with an existing batch_no is a no-op on this field. |
 
 **Response**
 
@@ -1418,6 +1557,49 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 ```json
 [{ "bayId": "Main Bay A-01 - PTC", "bayCode": "A-01", "qty": 640,
   "payload": "PI-ITEM|PVT-6060|BATCH-2608-11|A-01", "qrCode": "data:image/png;base64,iVBORw0KG..." }]
+```
+
+
+#### GET `dms_erp.warehouse.allocation_api.get_box_sticker_data`
+
+**Box/inward sticker data** (BRD C.6.4) — one row per bay split, everything the sticker Print Format needs on top of the same QR payload get_allocation_qr_codes already generates. Data layer only — the sticker's actual visual layout is a Frappe Print Format (label size/printer hardware are a setup-time decision the BRD itself leaves open). The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample & Display Management module, which doesn't exist yet.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `allocation` | string | required |  |
+
+**Response**
+
+```json
+[{
+  "bayId": "Main Bay A-01 - PTC", "bayCode": "A-01", "qty": 640,
+  "payload": "PI-ITEM|PVT-6060|BATCH-2608-11|A-01", "qrCode": "data:image/png;base64,iVBORw0KG...",
+  "itemCode": "PVT-6060", "itemName": "Marbella Beige Vitrified 600x600",
+  "size": "600x600mm", "finish": "Glossy", "series": "Marbella",
+  "batchNumber": "BATCH-2608-11", "dateOfManufacture": "2026-08-01",
+  "piecesPerBox": 4, "weightPerBoxKg": 32,
+  "purchaseReceipt": "MAT-PRE-2026-00042", "purchaseOrder": "PUR-ORD-2026-00019", "supplier": "Orient Ceramics"
+}]
+```
+
+
+#### POST `dms_erp.warehouse.allocation_api.print_box_stickers`
+
+**Per-box print run** (BRD C.6.4) — one sticker entry per physical box, not per bay split.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `allocation` | string | required |  |
+| `copies_per_box` | int | default 1 | e.g. 2 to reprint a damaged label without re-running the whole allocation |
+
+**Response**
+
+```json
+{ "allocation": "BAY-ALLOC-2026-00042", "count": 640, "stickers": [(same shape as one get_box_sticker_data row, repeated per box)] }
 ```
 
 
@@ -1521,6 +1703,90 @@ One read-only lookup backing inward placement, transfer, picking, and bay-audit 
 ```
 
 > kind is "bay", "item", or "unknown" (with ok:false and a human message) if nothing matches
+
+
+---
+
+## Warehouse — Unallocated Stock
+
+Loose stock scanned into an ad-hoc, non-bay location (BRD C.6.6). A pure log entry — recording one does not touch Stock Ledger. It resolves either by allocating it to a real bay (the actual stock-effecting event, via the same allocation_api.create_allocation every other inbound lot goes through) or by consolidating it into existing stock elsewhere by hand (status/remarks only, no new stock movement).
+
+#### GET `dms_erp.warehouse.unallocated_stock_api.list_unallocated_stock`
+
+**List / search** — paginated. Doubles as the BRD's "unallocated-stock check/report".
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | default "Pending" | Pending / Allocated / Consolidated. Pass `null`/omit-then-clear for every entry regardless of status. |
+| `search` | string | optional | substring match on the ad-hoc location text |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "a1b2c3d4e5", "item": "PVT-6060", "batchNumber": null, "qty": 5,
+    "location": "Near loading dock, left corner", "status": "Pending",
+    "scannedBy": "warehouse.staff@pacific.example", "scannedAt": "2026-09-18 10:02:00",
+    "resolvedAllocation": null, "remarks": null
+  }],
+  "total": 3, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.warehouse.unallocated_stock_api.get_unallocated_stock_entry`
+
+**Get single entry** — `entry` (string, required). Response: same shape as one row of list_unallocated_stock's "items".
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.record_unallocated_stock`
+
+**Record loose stock** — Warehouse/Management only.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `qty` | number | required |  |
+| `location` | string | required | ad-hoc, free-text description — not a real bay |
+| `batch_no` | string | optional |  |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Pending".
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.allocate_unallocated_stock`
+
+**Allocate to a real bay** — Only a Pending entry can be allocated. Posts a real Bay Allocation/Purchase Receipt exactly as any other inbound lot would.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `entry` | string | required |  |
+| `bay` | string | required | bay code |
+| `supplier` | string | required |  |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Allocated", `resolvedAllocation` set.
+
+
+#### POST `dms_erp.warehouse.unallocated_stock_api.consolidate_unallocated_stock`
+
+**Consolidate into existing stock** — Only a Pending entry can be consolidated. No new stock movement — records the warehouse's manual merge decision.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `entry` | string | required |  |
+| `remarks` | string | required | what this was merged into |
+
+**Response**: same shape as one row of list_unallocated_stock's "items", status "Consolidated".
 
 
 ---
@@ -1840,6 +2106,8 @@ Capacity-aware planning layer in front of supplier-ready PO lines — groups the
 
 Fully real formula as of Phase 10+13: current stock, missed demand, pending inquiries, retail sales velocity, and open-PO coverage.
 
+> `suggestedQty` rounds to the nearest **5** boxes (BRD C.4.1/C.4.2, not 10), then is raised up to the item's `custom_moq` (falling back to `DMS Purchase Settings.default_moq` when the item has none set) — never applied to an already-zero suggestion. A daily scheduled job (`dms_erp.purchase.reorder_api.notify_reorder_review`) sends a Notification Log entry to every enabled DMS Purchase/DMS Management user whenever at least one item has a positive `suggestedQty`.
+
 #### GET `dms_erp.purchase.reorder_api.reorder_suggestions`
 
 **Reorder suggestions** — Retail/sub-dealer channel only, urgency-ranked (Critical → High → Watch → Healthy).
@@ -1893,7 +2161,9 @@ _No parameters._
 
 ## Damage & Insurance Claims
 
-One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is fully config-gated — see the accounting box below.
+One claim per Damage→Insurance Claim Stock Entry for `claimType` Insurance/Transit; a Shortage claim (BRD C.8.3, identified at receipt) has no Stock Entry at all and carries `supplier` directly instead. Settlement GL posting is fully config-gated — see the accounting box below.
+
+> ⚠️ **BRD C.8.2's year-end (31 Mar removal / 1 Apr reinstatement) journal cycle is not automated.** This app has never posted to the GL at *filing* time (only at settlement), so there's no open receivable balance in the books yet for such a job to reverse — building one now would post a journal against a balance that doesn't exist. `claims_pending_year_end_reconciliation` below is the honest, read-only stand-in until a filing-time GL posting decision is made with Pacific/the accountant.
 
 > **DMS Accounting Settings (Single doctype)**
 > post_accounting_entries (Check, default unchecked), default_company, default_bank_account, insurance_claim_receivable_account, insurance_settlement_variance_account (nullable — only needed if a settlement's amount differs from the claimed amount), unloading_expense_account. While the flag is off, update_claim_status is a pure status/amount write. When it's on, the accounts a settlement needs are verified first — a missing one raises ValidationError naming exactly what's missing, never a guessed account — then a Journal Entry posts (debit bank for what was received, credit the receivable account for the full claimed amount, route any delta through the variance account) and links back via the new settlementJournalEntry field.
@@ -1907,6 +2177,7 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `status` | string | optional | Filed | Approved | Settled | Rejected |
+| `claim_type` | string | optional | Insurance | Transit | Shortage |
 | `limit` | int | optional, default 20, max 100 | page size |
 | `offset` | int | optional, default 0 | rows to skip |
 
@@ -1915,15 +2186,18 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 ```json
 {
   "items": [{
-    "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "stockEntry": "MAT-STE-2026-00081",
-    "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
-    "insurer": "HDFC Ergo", "claimAmount": 25600, "status": "Filed",
+    "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "claimType": "Insurance", "supplier": "Orient Ceramics",
+    "stockEntry": "MAT-STE-2026-00081", "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
+    "insurer": "HDFC Ergo", "claimAmount": 25600, "approvedAmount": null, "status": "Filed",
     "filedAt": "2026-08-29", "filedBy": "raj@pacific.example",
-    "settledAmount": null, "settledAt": null, "settlementJournalEntry": null, "remarks": "Transit damage"
+    "settlementMode": null, "settledAmount": null, "settledAt": null, "settlementJournalEntry": null,
+    "netLoss": null, "responsibility": null, "remarks": "Transit damage"
   }],
   "total": 11, "limit": 20, "offset": 0
 }
 ```
+
+> `supplier` is derived from the originating Bay Allocation for an Insurance/Transit claim (traced by item+batch — Stock Entry itself carries no supplier field); required directly when there's no stock_entry (a Shortage claim). `netLoss` (claimAmount − settledAmount) is only computed once status is "Settled".
 
 
 #### GET `dms_erp.finance.claims_api.get_claim`
@@ -1945,15 +2219,17 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 
 #### POST `dms_erp.finance.claims_api.file_claim`
 
-**File claim** — Warehouse/Management only. One claim per damage transfer — writes back to that transfer's claimRef.
+**File claim** — Warehouse/Management only. `claim_type` Insurance/Transit needs `stock_entry` (a Damage→Insurance Claim transfer, one claim per transfer, writes back to that transfer's claimRef); `Shortage` (BRD C.8.3) has no stock_entry and needs `supplier` passed directly instead.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
-| `stock_entry` | string | required | must be a Damage→Insurance Claim transfer |
-| `insurer` | string | required |  |
 | `claim_amount` | number | required |  |
+| `claim_type` | string | default "Insurance" | Insurance / Transit / Shortage |
+| `stock_entry` | string | optional | required in practice for Insurance/Transit (must be a Damage→Insurance Claim transfer) |
+| `supplier` | string | optional | required when no stock_entry is given |
+| `insurer` | string | optional |  |
 | `remarks` | string | optional |  |
 
 **Response**
@@ -1974,11 +2250,48 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 | `claim` | string | required |  |
 | `status` | string | required |  |
 | `settled_amount` | number | optional, defaults to claimAmount when status="Settled" |  |
+| `approved_amount` | number | optional |  |
+| `settlement_mode` | string | optional | Insurance / Vendor Credit Note / Partial Settlement / Non-Settlement (Write-off) — only meaningful when status="Settled" |
+| `responsibility` | string | optional | Factory / Driver / Absorbed — BRD C.8.3, Shortage claims |
 
 **Response**
 
 ```json
 (same shape as one list row, with settlementJournalEntry set only if DMS Accounting Settings has posting on)
+```
+
+
+#### GET `dms_erp.finance.claims_api.accumulated_claims_by_supplier`
+
+**Accumulated open claims, grouped by supplier** (BRD C.8) — "small values are accumulated — always grouped by supplier/company — before a claim voucher is raised." Sums Filed/Approved claims; filing/approval itself is unaffected, still per-claim.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `claim_type` | string | optional | Insurance / Transit / Shortage |
+
+**Response**
+
+```json
+[{ "supplier": "Orient Ceramics", "claimCount": 3, "totalClaimed": 4200 }]
+```
+
+
+#### GET `dms_erp.finance.claims_api.claims_pending_year_end_reconciliation`
+
+**Claims still open as of a date** — the read-only stand-in for BRD C.8.2's not-yet-automated year-end journal cycle (see the warning box above).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `as_of` | date | optional, default today |  |
+
+**Response**
+
+```json
+[(same shape as one list row from list_claims, every entry still Filed or Approved)]
 ```
 
 
@@ -2088,6 +2401,102 @@ One voucher per Inward Truck. Same accounting-settings pattern as Claims.
 ```
 
 > ⚠️ always stamps paidBy as the calling user and paidAt as today — no caller-supplied override for either
+
+
+---
+
+## Labour Attendance & Payment
+
+Beyond consignment-linked Unloading Charge above: labourers tracked directly (BRD C.9.2) — a running attendance+dues record per labourer over a period, not per-truck. `amountDue` is always computed (dailyRate × Present days), never hand-entered. GL posting on `record_payment` is optional and config-gated, same DMS Accounting Settings box as Damage & Insurance Claims (reuses `unloading_expense_account` rather than adding a second configurable account for what the BRD itself groups with unloading as "labour/vendor" charges).
+
+#### GET `dms_erp.finance.labour_api.list_labour_records`
+
+**List / search** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | optional | Pending / Partially Paid / Paid |
+| `search` | string | optional | substring match on labourer name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "LAB-2026-0004", "labourerName": "Ramesh Bhai", "contractor": "Morbi Labour Contractors",
+    "dailyRate": 500, "periodStart": "2026-09-01", "periodEnd": "2026-09-15", "status": "Partially Paid",
+    "attendance": [
+      { "date": "2026-09-01", "present": true, "workDone": "Unloading", "linkedUnloadingVoucher": "UNL-2026-0001" },
+      { "date": "2026-09-02", "present": true, "workDone": "Movement", "linkedUnloadingVoucher": null }
+    ],
+    "amountDue": 1000, "amountPaid": 400, "paymentMode": "Cash", "paymentReference": null,
+    "paidBy": "warehouse.staff@pacific.example", "paidAt": "2026-09-16", "paymentEntry": null, "remarks": null
+  }],
+  "total": 6, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.finance.labour_api.get_labour_record`
+
+**Get single record** — `record` (string, required). Response: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.create_labour_record`
+
+**Create record** — Warehouse/Management only. Starts with an empty attendance table, amountDue 0.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `labourer_name` | string | required |  |
+| `daily_rate` | number | required |  |
+| `contractor` | string | optional |  |
+| `period_start, period_end` | date | optional |  |
+
+**Response**: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.add_attendance_day`
+
+**Add an attendance day** — Recomputes amountDue from every Present day in the table.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `record` | string | required |  |
+| `date` | date | required |  |
+| `present` | bool | default true |  |
+| `work_done` | string | optional | e.g. "Unloading", "Movement" |
+| `linked_unloading_voucher` | string | optional | BRD C.9.2 — links this day's work back to the Unloading Charge it was part of, when consignment-related |
+
+**Response**: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.record_payment`
+
+**Record a payment** — Can be called more than once; amountPaid accumulates. Status becomes Partially Paid or Paid depending on amountPaid vs. amountDue.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `record` | string | required |  |
+| `amount_paid` | number | required | this payment's amount, added to any prior amountPaid |
+| `payment_mode` | string | required | Cash / Bank Transfer / UPI / Cheque |
+| `payment_reference` | string | optional |  |
+
+**Response**
+
+```json
+(same shape as one list row; paymentEntry set only if DMS Accounting Settings has posting on — and only holds the most recent payment's posting, same single-voucher simplification Unloading Charge already makes)
+```
 
 
 ---
@@ -2318,6 +2727,32 @@ BRD "Reports and Dashboards" — the report half. Filterable, dealer/date-range/
 ```
 
 > sorted by orderValue descending
+
+
+#### GET `dms_erp.reports.sales_reports.salesperson_assignment_report`
+
+**Salesperson assignment report** (BRD C.12.3) — every salesperson with their assigned dealers and each dealer's order count/value. Dealers with no salesperson assigned are grouped under `salesperson: null` so nothing silently drops off the report. Ownership only — targets/performance-vs-target is a deliberate follow-up, not built here.
+
+**Params**
+
+_No parameters._
+
+**Response**
+
+```json
+[
+  {
+    "salesperson": "priya@pacific.example", "dealerCount": 3, "totalOrderValue": 1240000,
+    "dealers": [{ "dealerId": "CUST-0004", "dealerName": "Shree Ganesh Tiles", "orderCount": 4, "orderValue": 620000 }]
+  },
+  {
+    "salesperson": null, "dealerCount": 2, "totalOrderValue": 0,
+    "dealers": [{ "dealerId": "CUST-0011", "dealerName": "New Dealer Co", "orderCount": 0, "orderValue": 0 }]
+  }
+]
+```
+
+> sorted by totalOrderValue descending; each salesperson's own `dealers` list sorted by orderValue descending
 
 
 #### GET `dms_erp.reports.sales_reports.duplicate_inquiry_report`

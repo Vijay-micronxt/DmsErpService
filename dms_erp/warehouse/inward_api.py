@@ -8,6 +8,7 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime
 
+from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 
 INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
@@ -19,7 +20,19 @@ def _assert_can_manage_inward():
 		frappe.throw(_("Only Warehouse or Purchase can manage inward trucks."), frappe.PermissionError)
 
 
+def _weight_per_box_kg(item: str, batch_no: str | None) -> float | None:
+	# A confirmed batch's own weight (which can differ from the Item's standard
+	# weight, BRD C.1.3/C.6.1) is preferred once allocation has assigned one;
+	# before that, the Item's standard weight is the best available estimate.
+	if batch_no:
+		batch_weight = frappe.db.get_value("Batch", batch_no, "custom_batch_weight_kg")
+		if batch_weight is not None:
+			return batch_weight
+	return item_weight_per_box_kg(item)
+
+
 def _serialize(doc) -> dict:
+	weight_per_box_kg = _weight_per_box_kg(doc.item, doc.batch_no)
 	return {
 		"id": doc.name,
 		"lr": doc.lr_number,
@@ -27,6 +40,8 @@ def _serialize(doc) -> dict:
 		"vehicle": doc.vehicle_number,
 		"eta": doc.eta,
 		"boxes": doc.boxes,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * doc.boxes if weight_per_box_kg is not None else None,
 		"status": doc.status,
 		"item": doc.item,
 		"batchNumber": doc.batch_no,

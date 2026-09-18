@@ -1,0 +1,49 @@
+{
+ "actions": [],
+ "creation": "2026-09-18 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "dealer",
+  "customer_item_code",
+  "sample_issued"
+ ],
+ "fields": [
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer_item_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Item Code",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Catalog visibility for this dealer is driven by this flag, not a manual assignment (BRD C.1.5) — the dealer sees this item once a sample has been issued to them.",
+   "fieldname": "sample_issued",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Sample Issued"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "Item Dealer Code",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

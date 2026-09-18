@@ -16,6 +16,7 @@ unaffected and untouched.
 import frappe
 from frappe import _
 
+from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.purchase.po_api import remaining_ready_qty_for_line
 from dms_erp.warehouse import inward_api
@@ -37,11 +38,14 @@ def _serialize_vehicle_type(doc) -> dict:
 
 
 def _serialize_line(row) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(row.item)
 	return {
 		"purchaseOrder": row.purchase_order,
 		"purchaseOrderItem": row.purchase_order_item,
 		"item": row.item,
 		"qty": row.qty,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
 
 

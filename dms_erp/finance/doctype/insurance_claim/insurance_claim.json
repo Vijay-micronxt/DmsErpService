@@ -6,6 +6,8 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "claim_type",
+  "supplier",
   "stock_entry",
   "insurer",
   "claim_amount",
@@ -14,28 +16,48 @@
   "filed_at",
   "filed_by",
   "section_break_1",
+  "settlement_mode",
+  "approved_amount",
   "settled_amount",
   "settled_at",
   "settlement_journal_entry",
+  "responsibility",
   "remarks"
  ],
  "fields": [
+  {
+   "default": "Insurance",
+   "description": "BRD C.8: Transit/Shortage/Insurance unified on one voucher rather than three parallel doctypes.",
+   "fieldname": "claim_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Claim Type",
+   "options": "Insurance\nTransit\nShortage",
+   "reqd": 1
+  },
+  {
+   "description": "Required for accumulation — small claim values are grouped by supplier/company before a voucher is raised (BRD C.8). Derived from stock_entry's originating Purchase Receipt when available; required directly for a Shortage/Transit claim with no stock_entry.",
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Supplier",
+   "options": "Supplier"
+  },
   {
    "fieldname": "stock_entry",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Stock Entry",
    "options": "Stock Entry",
-   "reqd": 1,
    "unique": 1,
-   "description": "The Damage → Insurance Claim bay transfer this claim is the financial companion record for."
+   "description": "The Damage → Insurance Claim bay transfer this claim is the financial companion record for. Only set for claim_type Insurance/Transit — a Shortage claim (identified at receipt, BRD C.4.4/C.8.3) has none."
   },
   {
    "fieldname": "insurer",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Insurer",
-   "reqd": 1
+   "label": "Insurer"
   },
   {
    "fieldname": "claim_amount",
@@ -77,6 +99,18 @@
    "label": "Settlement"
   },
   {
+   "description": "BRD C.8.1: one of Insurance / Vendor Credit Note / Partial Settlement / Non-Settlement (Write-off).",
+   "fieldname": "settlement_mode",
+   "fieldtype": "Select",
+   "label": "Settlement Mode",
+   "options": "\nInsurance\nVendor Credit Note\nPartial Settlement\nNon-Settlement (Write-off)"
+  },
+  {
+   "fieldname": "approved_amount",
+   "fieldtype": "Currency",
+   "label": "Approved Amount"
+  },
+  {
    "fieldname": "settled_amount",
    "fieldtype": "Currency",
    "label": "Settled Amount"
@@ -93,6 +127,13 @@
    "label": "Settlement Journal Entry",
    "options": "Journal Entry",
    "read_only": 1
+  },
+  {
+   "description": "BRD C.8.3 — only meaningful for claim_type Shortage.",
+   "fieldname": "responsibility",
+   "fieldtype": "Select",
+   "label": "Responsibility",
+   "options": "\nFactory\nDriver\nAbsorbed"
   },
   {
    "fieldname": "remarks",

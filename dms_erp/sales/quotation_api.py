@@ -29,9 +29,10 @@ from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable
+from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
-from dms_erp.pricing.api import get_dealer_price
+from dms_erp.pricing.api import get_price_for_dealer
+from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.warehouse.utils import default_company
 
@@ -55,9 +56,20 @@ def _serialize(doc) -> dict:
 		"freight": doc.custom_freight,
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
-		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
+		"lines": [_serialize_line(row) for row in doc.items],
 		"total": doc.grand_total,
 		"status": doc.status,
+	}
+
+
+def _serialize_line(row) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
+	return {
+		"itemCode": row.item_code,
+		"qty": row.qty,
+		"rate": row.rate,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
 
 
@@ -70,7 +82,7 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
 		if not is_sellable(status):
 			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
-		dealer_price = get_dealer_price(item)
+		dealer_price = get_price_for_dealer(item, dealer)
 		if dealer_price is None:
 			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
 		rate = round(dealer_price * (1 + float(markup_pct) / 100))
@@ -139,13 +151,17 @@ def create_quotation(
 	freight: float = 0,
 	validity_days: int = 7,
 	inquiry: str | None = None,
-	channel: str = "Retail",
+	channel: str | None = None,
 ):
 	_assert_can_manage_quotations()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
-	if channel not in ORDER_CHANNELS:
+	# BRD C.4.3: an explicit channel (including "Retail") is the audit-locked manual
+	# override and always wins; only an unset channel triggers auto-classification.
+	if channel is None:
+		channel = auto_classify_channel(dealer, lines)
+	elif channel not in ORDER_CHANNELS:
 		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
 
 	items = _priced_items(dealer, markup_pct, lines)

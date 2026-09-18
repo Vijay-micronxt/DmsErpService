@@ -6,7 +6,7 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.comms import api as comms_api
 from dms_erp.reports import sales_reports
-from dms_erp.sales import inquiry_api, order_api
+from dms_erp.sales import dealer_api, inquiry_api, order_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
@@ -90,6 +90,36 @@ class TestSalesReports(FrappeTestCase):
 		self.assertEqual(row["orderValue"], 20 * 400)
 		self.assertEqual(row["messageCount"], 1)
 		self.assertIsNotNone(row["lastContact"])
+
+	def test_salesperson_assignment_report_groups_dealers_by_assigned_salesperson(self):
+		assigned_dealer = make_dealer("Sales Reports Assigned Dealer")
+		dealer_api.set_dealer_salesperson(assigned_dealer, "priya@pacific.example")
+		order_inquiry = inquiry_api.create_inquiry(dealer=assigned_dealer, item=self.item, qty=15, source="Phone")
+		order_api.create_order(
+			dealer=assigned_dealer, lines=[{"item": self.item, "qty": 15}], expected_dispatch="2026-09-01", inquiry=order_inquiry["id"]
+		)
+
+		unassigned_dealer = make_dealer("Sales Reports Unassigned Dealer")
+
+		result = sales_reports.salesperson_assignment_report()
+		by_salesperson = {r["salesperson"]: r for r in result}
+
+		assigned_row = by_salesperson["priya@pacific.example"]
+		dealer_ids = [d["dealerId"] for d in assigned_row["dealers"]]
+		self.assertIn(assigned_dealer, dealer_ids)
+		assigned_dealer_row = next(d for d in assigned_row["dealers"] if d["dealerId"] == assigned_dealer)
+		self.assertEqual(assigned_dealer_row["orderValue"], 15 * 400)
+
+		unassigned_row = by_salesperson[None]
+		self.assertIn(unassigned_dealer, [d["dealerId"] for d in unassigned_row["dealers"]])
+
+	def test_set_dealer_salesperson_assigns_and_clears(self):
+		dealer = make_dealer("Sales Reports Set Salesperson Dealer")
+		updated = dealer_api.set_dealer_salesperson(dealer, "priya@pacific.example")
+		self.assertEqual(updated["salesperson"], "priya@pacific.example")
+
+		cleared = dealer_api.set_dealer_salesperson(dealer, None)
+		self.assertIsNone(cleared["salesperson"])
 
 	def test_duplicate_inquiry_report_flags_repeated_open_inquiries(self):
 		dup_dealer = make_dealer("Sales Reports Duplicate Dealer")

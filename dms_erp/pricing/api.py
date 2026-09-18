@@ -10,6 +10,13 @@ Only Purchase/Management (or System Manager) can create proposals or approve pri
 Sales/Warehouse can read them. `approved_by` is always the authenticated caller
 (frappe.session.user), never a client-supplied value, now that Phase 0 gives us a
 real identity to trust.
+
+BRD C.1.4/C.7.1 dealer price-tier classification: approve_price still always
+publishes the approved price onto the "Dealer" list (unchanged). If the item has a
+Series (catalog.api create_product's series_ref), any Standard Dealer/Master Dealer
+rates that Series carries in its price_list_rates are published alongside it in the
+same call — an item with no Series, or a Series with no rates for those two lists,
+simply doesn't get them yet, same as before this existed.
 """
 
 import frappe
@@ -17,6 +24,7 @@ from frappe import _
 from frappe.utils import now_datetime
 
 from dms_erp.pagination import clamp
+from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER, DEALER_CLASSIFICATION_STANDARD
 from dms_erp.pricing.setup import DEALER_PRICE_LIST
 
 PRICING_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
@@ -59,12 +67,27 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 	}
 
 
-def get_dealer_price(item: str) -> float | None:
-	return frappe.db.get_value("Item Price", {"item_code": item, "price_list": DEALER_PRICE_LIST}, "price_list_rate")
+def get_dealer_price(item: str, price_list: str = DEALER_PRICE_LIST) -> float | None:
+	return frappe.db.get_value("Item Price", {"item_code": item, "price_list": price_list}, "price_list_rate")
 
 
-def set_dealer_price(item: str, rate: float):
-	name = frappe.db.get_value("Item Price", {"item_code": item, "price_list": DEALER_PRICE_LIST}, "name")
+def get_price_for_dealer(item: str, dealer: str) -> float | None:
+	"""BRD C.1.4/C.7.1: rate keyed by the dealer's current classification tier
+	(quotation_api's rate lookup) rather than always the flat "Dealer" list. Falls
+	back to the plain "Dealer" price when the dealer's own tier has no published
+	rate yet for this item — the common case until a Series with tiered
+	price_list_rates exists for it — so this is a drop-in, backward-compatible
+	replacement for get_dealer_price(item) everywhere it was called with a dealer
+	already in hand."""
+	classification = frappe.db.get_value("Customer", dealer, "custom_dealer_classification") or DEALER_CLASSIFICATION_STANDARD
+	rate = get_dealer_price(item, price_list=classification)
+	if rate is not None:
+		return rate
+	return get_dealer_price(item)
+
+
+def set_price_for_list(item: str, price_list: str, rate: float):
+	name = frappe.db.get_value("Item Price", {"item_code": item, "price_list": price_list}, "name")
 	if name:
 		frappe.db.set_value("Item Price", name, "price_list_rate", rate)
 		return
@@ -72,11 +95,27 @@ def set_dealer_price(item: str, rate: float):
 		{
 			"doctype": "Item Price",
 			"item_code": item,
-			"price_list": DEALER_PRICE_LIST,
+			"price_list": price_list,
 			"selling": 1,
 			"price_list_rate": rate,
 		}
 	).insert(ignore_permissions=True)
+
+
+def set_dealer_price(item: str, rate: float):
+	set_price_for_list(item, DEALER_PRICE_LIST, rate)
+
+
+def _publish_series_tier_rates(item: str):
+	series_ref = frappe.db.get_value("Item", item, "custom_series_ref")
+	if not series_ref:
+		return
+	other_tiers = [DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATION_MASTER]
+	rows = frappe.get_all(
+		"Series Price List Rate", filters={"parent": series_ref, "price_list": ["in", other_tiers]}, fields=["price_list", "rate"]
+	)
+	for row in rows:
+		set_price_for_list(item, row.price_list, row.rate)
 
 
 def ensure_price_record(item: str, supplier: str, purchase_cost: float, margin_pct: float, effective_date, remarks: str | None = None):
@@ -183,5 +222,6 @@ def approve_price(item: str, final_price: float, reason: str | None = None):
 
 	# Approved price becomes the live catalog price everywhere Item Price is read.
 	set_dealer_price(item, final_price)
+	_publish_series_tier_rates(item)
 
 	return _serialize(doc)

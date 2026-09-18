@@ -76,6 +76,15 @@ class TestPickupRunApi(FrappeTestCase):
 		self.assertEqual(run["totalBoxes"], 200)
 		self.assertEqual(run["lines"][0]["item"], self.item)
 
+	def test_pickup_run_line_carries_the_items_weight(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		line = self._ready_line(ready_qty=400)
+		run = pickup_run_api.create_pickup_run(
+			supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line, "qty": 200}]
+		)
+		self.assertEqual(run["lines"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(run["lines"][0]["totalWeightKg"], 5600)
+
 	def test_create_pickup_run_rejects_over_vehicle_capacity(self):
 		line = self._ready_line(ready_qty=500)
 		with self.assertRaises(frappe.ValidationError):

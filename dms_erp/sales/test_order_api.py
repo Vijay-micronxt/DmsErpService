@@ -43,6 +43,12 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["channel"], "Retail")
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
 
+	def test_order_line_carries_the_items_weight(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		order = self._make_order(qty=10)
+		self.assertEqual(order["lines"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(order["lines"][0]["totalWeightKg"], 280)
+
 	def test_create_order_accepts_bulk_channel(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")
 		order = order_api.create_order(
@@ -56,6 +62,16 @@ class TestOrderApi(FrappeTestCase):
 			order_api.create_order(
 				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Wholesale"
 			)
+
+	def test_create_order_auto_classifies_bulk_from_the_dealers_type(self):
+		bulk_dealer = make_dealer("Order Bulk-Type Dealer")
+		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Project")
+		inquiry = inquiry_api.create_inquiry(dealer=bulk_dealer, item=self.item, qty=10, source="Phone")
+
+		order = order_api.create_order(
+			dealer=bulk_dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+		self.assertEqual(order["channel"], "Project")
 
 	def test_advance_order_stage_follows_forward_flow(self):
 		order = self._make_order()

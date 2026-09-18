@@ -1,10 +1,12 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
 class TestPricingApi(FrappeTestCase):
@@ -18,6 +20,8 @@ class TestPricingApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		if frappe.db.exists("Series", "Pricing Test Series"):
+			frappe.delete_doc("Series", "Pricing Test Series", force=True, ignore_permissions=True)
 
 	def test_list_price_records_is_paginated(self):
 		before = pricing_api.list_price_records()
@@ -36,3 +40,30 @@ class TestPricingApi(FrappeTestCase):
 		all_records = pricing_api.list_all_price_records()
 		self.assertEqual(len(all_records), baseline_total + 3)
 		self.assertTrue({r["productId"] for r in all_records}.issuperset(set(items)))
+
+	def test_get_price_for_dealer_falls_back_to_the_dealer_list_when_no_tier_rate_exists(self):
+		item = make_item("PRICE-TIER-FALLBACK", "Vitrified")
+		dealer = make_dealer("Pricing Tier Fallback Dealer")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		# The dealer defaults to Standard Dealer, which has no rate published for this
+		# item (no Series at all here) -- falls back to the flat "Dealer" list price.
+		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 500)
+
+	def test_approve_price_publishes_series_tier_rates_onto_the_item(self):
+		series_api.create_series(
+			series_name="Pricing Test Series",
+			price_list_rates=[{"price_list": DEALER_CLASSIFICATION_MASTER, "rate": 700}],
+		)
+		item = make_item("PRICE-TIER-SERIES", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_series_ref", "Pricing Test Series")
+		dealer = make_dealer("Pricing Tier Series Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_dealer_classification", DEALER_CLASSIFICATION_MASTER)
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		self.assertEqual(pricing_api.get_dealer_price(item), 500)
+		self.assertEqual(pricing_api.get_dealer_price(item, price_list=DEALER_CLASSIFICATION_MASTER), 700)
+		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 700)

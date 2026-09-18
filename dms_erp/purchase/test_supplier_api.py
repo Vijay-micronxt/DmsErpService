@@ -11,6 +11,9 @@ class TestSupplierApi(FrappeTestCase):
 		super().setUpClass()
 		cls.supplier = make_supplier("Supplier Api Test Co")
 
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
 	def test_get_supplier_returns_native_supplier_fields(self):
 		result = supplier_api.get_supplier(self.supplier)
 		self.assertEqual(result["id"], self.supplier)
@@ -31,3 +34,22 @@ class TestSupplierApi(FrappeTestCase):
 			self.assertIn(self.supplier, [r["id"] for r in disabled_only])
 		finally:
 			frappe.db.set_value("Supplier", self.supplier, "disabled", 0)
+
+	def test_get_supplier_defaults_gps_coordinates_to_none(self):
+		result = supplier_api.get_supplier(self.supplier)
+		self.assertIsNone(result["latitude"])
+		self.assertIsNone(result["longitude"])
+
+	def test_set_supplier_location_updates_gps_coordinates(self):
+		updated = supplier_api.set_supplier_location(self.supplier, latitude=23.216, longitude=71.184)
+		self.assertEqual(updated["latitude"], 23.216)
+		self.assertEqual(updated["longitude"], 71.184)
+
+		fetched = supplier_api.get_supplier(self.supplier)
+		self.assertEqual(fetched["latitude"], 23.216)
+		self.assertEqual(fetched["longitude"], 71.184)
+
+	def test_set_supplier_location_requires_purchase_warehouse_or_management_role(self):
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			supplier_api.set_supplier_location(self.supplier, latitude=23.216, longitude=71.184)

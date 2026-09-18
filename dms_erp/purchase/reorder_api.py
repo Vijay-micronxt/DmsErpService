@@ -32,6 +32,7 @@ flag to keep in sync.
 """
 
 import frappe
+from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.utils import is_reorderable
@@ -44,6 +45,8 @@ PENDING_INQUIRY_STATUSES = ["Open", "Available", "Partially Available", "Quoted"
 MISSED_DEMAND_STATUSES = ["Out of Stock", "Pre-order Required"]
 
 URGENCY_STYLES_ORDER = ["Critical", "High", "Watch", "Healthy"]
+
+REORDER_REVIEW_NOTIFY_ROLES = ["DMS Purchase", "DMS Management"]
 
 
 def _grouped_inquiry_qty(statuses: list[str]) -> dict[str, float]:
@@ -112,11 +115,12 @@ def _grouped_open_purchase_orders() -> dict[str, list[dict]]:
 
 @frappe.whitelist(methods=["GET"])
 def reorder_suggestions():
-	items = frappe.get_all("Item", fields=["name", "custom_discontinuation_status", "lead_time_days"])
+	items = frappe.get_all("Item", fields=["name", "custom_discontinuation_status", "lead_time_days", "custom_moq"])
 	missed_by_item = _grouped_inquiry_qty(MISSED_DEMAND_STATUSES)
 	pending_by_item = _grouped_inquiry_qty(PENDING_INQUIRY_STATUSES)
 	sales_by_item = _grouped_recent_sales_qty()
 	open_po_by_item = _grouped_open_purchase_orders()
+	default_moq = frappe.db.get_single_value("DMS Purchase Settings", "default_moq") or 0
 
 	suggestions = [
 		_suggestion_for(
@@ -126,6 +130,7 @@ def reorder_suggestions():
 			pending_by_item.get(item.name, 0),
 			sales_by_item.get(item.name, 0),
 			open_po_by_item.get(item.name, []),
+			item.custom_moq or default_moq,
 		)
 		for item in items
 	]
@@ -141,6 +146,7 @@ def _suggestion_for(
 	pending_inquiry_qty: float,
 	recent_retail_sales_qty: float,
 	open_purchase_orders: list[dict],
+	moq: float = 0,
 ) -> dict:
 	status = item.custom_discontinuation_status or "Active"
 	non_reorderable = not is_reorderable(status)
@@ -167,7 +173,10 @@ def _suggestion_for(
 		reasons.append(f"{open_po_qty} boxes already on order across {len(open_purchase_orders)} open PO(s)")
 
 	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + SAFETY_STOCK_BOXES - current_stock - open_po_qty
-	suggested_qty = 0 if non_reorderable else max(0, round(raw_need / 10) * 10)
+	suggested_qty = 0 if non_reorderable else max(0, round(raw_need / 5) * 5)
+	if suggested_qty and moq and suggested_qty < moq:
+		suggested_qty = moq
+		reasons.append(f"Raised to the {moq}-box MOQ")
 
 	urgency = "Healthy"
 	if not non_reorderable:
@@ -193,3 +202,48 @@ def _suggestion_for(
 		"reasons": reasons,
 		"nonReorderable": non_reorderable,
 	}
+
+
+def _users_with_any_role(roles: list[str]) -> list[str]:
+	rows = frappe.get_all(
+		"Has Role",
+		filters={"role": ["in", roles], "parenttype": "User"},
+		pluck="parent",
+		distinct=True,
+	)
+	if not rows:
+		return []
+	return frappe.get_all("User", filters={"name": ["in", rows], "enabled": 1}, pluck="name")
+
+
+def notify_reorder_review(suggestions: list[dict] | None = None) -> int:
+	"""Daily digest (BRD C.4.1) telling Purchase/Management a draft reorder plan is
+	waiting on review — reorder_suggestions() is a live read with no persisted plan
+	of its own to flag as "pending", so the notification is the review prompt itself
+	rather than a status on a stored record. Returns the number of users notified,
+	so callers (and tests) don't have to re-query Notification Log to check it ran.
+	`suggestions` is accepted so tests/callers who already computed them once don't
+	pay for a second reorder_suggestions() run; the daily scheduler hook always
+	passes None and lets this compute them itself."""
+	if suggestions is None:
+		suggestions = reorder_suggestions()
+
+	pending = [s for s in suggestions if s["suggestedQty"] > 0]
+	if not pending:
+		return 0
+
+	users = _users_with_any_role(REORDER_REVIEW_NOTIFY_ROLES)
+	if not users:
+		return 0
+
+	subject = _("{0} item(s) need reorder plan review").format(len(pending))
+	for user in users:
+		frappe.get_doc(
+			{
+				"doctype": "Notification Log",
+				"for_user": user,
+				"type": "Alert",
+				"subject": subject,
+			}
+		).insert(ignore_permissions=True)
+	return len(users)

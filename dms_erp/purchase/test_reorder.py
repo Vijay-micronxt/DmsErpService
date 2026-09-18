@@ -6,12 +6,33 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.purchase import po_api
-from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, SALES_VELOCITY_WINDOW_DAYS, reorder_suggestions
+from dms_erp.purchase.reorder_api import (
+	SAFETY_STOCK_BOXES,
+	SALES_VELOCITY_WINDOW_DAYS,
+	notify_reorder_review,
+	reorder_suggestions,
+)
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
 from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+
+
+def _make_role_user(email, role):
+	if frappe.db.exists("User", email):
+		return email
+	user = frappe.get_doc(
+		{
+			"doctype": "User",
+			"email": email,
+			"first_name": email.split("@")[0],
+			"send_welcome_email": 0,
+			"roles": [{"role": role}],
+		}
+	)
+	user.insert(ignore_permissions=True)
+	return user.name
 
 
 class TestReorder(FrappeTestCase):
@@ -26,9 +47,11 @@ class TestReorder(FrappeTestCase):
 		cls.supplier = make_supplier("Reorder Test Supplier")
 		cls.dealer = make_dealer("Reorder Test Dealer")
 		cls.bay = make_bay("REORDER-A-01", categories=["Vitrified"])
+		cls.purchase_user = _make_role_user("reorder.purchase.tester@pacific.test", "DMS Purchase")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		frappe.db.delete("Notification Log", {"for_user": self.purchase_user})
 
 	def _suggestion_for(self, item_code):
 		return next(s for s in reorder_suggestions() if s["productId"] == item_code)
@@ -130,3 +153,65 @@ class TestReorder(FrappeTestCase):
 		self.assertEqual(after["openPurchaseOrders"], [{"po": po["id"], "pendingQty": before["suggestedQty"]}])
 		self.assertEqual(after["suggestedQty"], 0)
 		self.assertTrue(any("already on order" in r for r in after["reasons"]))
+
+	def test_suggested_qty_rounds_to_the_nearest_5_not_10(self):
+		# BRD says round to the nearest 5; raw_need=107 (100 safety stock + 7 missed
+		# demand, zero stock) rounds to 105 at /5 but would have rounded to 110 at /10 --
+		# this distinguishes the two so a regression back to /10 is caught.
+		item = make_item("REORDER-ROUND5", "Vitrified")
+		out_of_stock_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=7, source="Phone")
+		inquiry_api.update_inquiry(out_of_stock_inquiry["id"], {"status": "Out of Stock"})
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["suggestedQty"], 105)
+
+	def test_suggested_qty_is_raised_to_the_items_own_moq(self):
+		item = make_item("REORDER-MOQ-ITEM", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="REORDER-MOQ-ITEM-B1", total_qty=90, lines=[{"bay": "REORDER-A-01", "qty": 90}], supplier=self.supplier
+		)
+		frappe.db.set_value("Item", item, "custom_moq", 150)
+
+		suggestion = self._suggestion_for(item)
+		# Without the MOQ, this item's raw need (100 safety stock - 90 in stock = 10,
+		# rounds to 10) is well under the 150-box MOQ that should clamp it up.
+		self.assertEqual(suggestion["suggestedQty"], 150)
+		self.assertIn("Raised to the 150-box MOQ", suggestion["reasons"])
+
+	def test_suggested_qty_falls_back_to_the_site_wide_default_moq(self):
+		item = make_item("REORDER-MOQ-DEFAULT", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="REORDER-MOQ-DEFAULT-B1", total_qty=90, lines=[{"bay": "REORDER-A-01", "qty": 90}], supplier=self.supplier
+		)
+		frappe.db.set_single_value("DMS Purchase Settings", "default_moq", 50)
+		try:
+			suggestion = self._suggestion_for(item)
+		finally:
+			frappe.db.set_single_value("DMS Purchase Settings", "default_moq", 0)
+
+		self.assertEqual(suggestion["suggestedQty"], 50)
+		self.assertIn("Raised to the 50-box MOQ", suggestion["reasons"])
+
+	def test_zero_suggested_qty_is_never_raised_to_the_moq(self):
+		# A well-stocked item that needs nothing shouldn't be forced into a reorder
+		# just because a site-wide or item MOQ exists.
+		item = make_item("REORDER-MOQ-ZERO", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="REORDER-MOQ-ZERO-B1", total_qty=500, lines=[{"bay": "REORDER-A-01", "qty": 500}], supplier=self.supplier
+		)
+		frappe.db.set_value("Item", item, "custom_moq", 150)
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["suggestedQty"], 0)
+
+	def test_notify_reorder_review_notifies_purchase_and_management_when_items_are_pending(self):
+		notified = notify_reorder_review(suggestions=[{"suggestedQty": 40}, {"suggestedQty": 0}])
+		self.assertEqual(notified, 1)  # only the DMS Purchase test user is seeded in this suite
+
+		logs = frappe.get_all("Notification Log", filters={"for_user": self.purchase_user}, pluck="subject")
+		self.assertEqual(logs, ["1 item(s) need reorder plan review"])
+
+	def test_notify_reorder_review_is_a_no_op_when_nothing_is_pending(self):
+		notified = notify_reorder_review(suggestions=[{"suggestedQty": 0}])
+		self.assertEqual(notified, 0)
+		self.assertFalse(frappe.get_all("Notification Log", filters={"for_user": self.purchase_user}))
