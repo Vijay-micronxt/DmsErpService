@@ -467,6 +467,8 @@ its name and parent worth a second call for.
 
 BRD C.1.1's central master concept: a Series carries a supplier, tile attributes (size/thickness/finish), UOM conversions and retail/bulk qty thresholds. `create_product`/`update_product`'s `series_ref` param propagates these onto an Item at creation (see Products / Item Master above). Doesn't publish prices directly — `priceListRates` is a source for future per-Series pricing work, not yet wired to any live Item Price.
 
+> **Withdrawal automation** (BRD C.10.5) — a daily scheduled job, `dms_erp.catalog.withdrawal_api.evaluate_product_withdrawals`, steps an Item's `custom_discontinuation_status` forward one stage (Active → Partially Discontinued → Factory Discontinued → Display Removal Pending — never as far as Pulled Back, which stays a human call) once all three signals below breach a Series' thresholds at once: days since the item's last Delivered sale, dealer-catalog store count, and trailing-12-month Delivered sales (boxes). A Series only opts in by setting `withdrawalAutomationEnabled` AND all three thresholds to a positive value — any Series left at the defaults is never touched.
+
 #### GET `dms_erp.catalog.series_api.list_series`
 
 **List / search series** — paginated.
@@ -486,6 +488,8 @@ BRD C.1.1's central master concept: a Series carries a supplier, tile attributes
     "size": "600x600mm", "thickness": "9mm", "finish": "Glossy",
     "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
     "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
+    "withdrawalAutomationEnabled": false, "withdrawalNoSaleDaysThreshold": null,
+    "withdrawalMinStoreCount": null, "withdrawalMinAnnualSalesBoxes": null,
     "priceListRates": [{"priceList": "Standard Selling", "rate": 560}]
   }],
   "total": 12, "limit": 20, "offset": 0
@@ -508,6 +512,8 @@ BRD C.1.1's central master concept: a Series carries a supplier, tile attributes
 | `supplier, size, thickness, finish` | string | optional |  |
 | `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
 | `bulk_qty_threshold, retail_qty_threshold` | int | default 0 |  |
+| `withdrawal_automation_enabled` | bool | default false | opt this series into the withdrawal-automation job — see the note above |
+| `withdrawal_no_sale_days_threshold, withdrawal_min_store_count, withdrawal_min_annual_sales_boxes` | int | default 0 | all three must be positive for the job to act on this series |
 | `price_list_rates` | array | optional | `[{price_list, rate}, ...]` |
 
 **Response**: same shape as `get_series`.
@@ -520,7 +526,7 @@ BRD C.1.1's central master concept: a Series carries a supplier, tile attributes
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `series` | string | required | Series name |
-| `patch` | object | required | keys: supplier, size, thickness, finish, piecesPerBox, sqftPerBox, weightPerBoxKg, bulkQtyThreshold, retailQtyThreshold, priceListRates |
+| `patch` | object | required | keys: supplier, size, thickness, finish, piecesPerBox, sqftPerBox, weightPerBoxKg, bulkQtyThreshold, retailQtyThreshold, withdrawalAutomationEnabled, withdrawalNoSaleDaysThreshold, withdrawalMinStoreCount, withdrawalMinAnnualSalesBoxes, priceListRates |
 
 **Response**: same shape as `get_series`.
 
@@ -1638,7 +1644,7 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 
 #### GET `dms_erp.warehouse.allocation_api.get_box_sticker_data`
 
-**Box/inward sticker data** (BRD C.6.4) — one row per bay split, everything the sticker Print Format needs on top of the same QR payload get_allocation_qr_codes already generates. Data layer only — the sticker's actual visual layout is a Frappe Print Format (label size/printer hardware are a setup-time decision the BRD itself leaves open). The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample & Display Management module, which doesn't exist yet.
+**Box/inward sticker data** (BRD C.6.4) — one row per bay split, everything the sticker layout needs on top of the same QR payload get_allocation_qr_codes already generates. Data layer only — the actual visual layout is rendered by `render_box_stickers_html` below. The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample & Display Management module, which doesn't exist yet.
 
 **Params**
 
@@ -1677,6 +1683,22 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 ```json
 { "allocation": "BAY-ALLOC-2026-00042", "count": 640, "stickers": [(same shape as one get_box_sticker_data row, repeated per box)] }
 ```
+
+
+#### GET/POST `dms_erp.warehouse.allocation_api.render_box_stickers_html`
+
+**Printable sticker sheet** (BRD C.6.4) — `print_box_stickers`' data rendered as an actual HTML sheet, one `<div class="sticker">` per physical box, sized to a 4x2in label via `@page` CSS. Not a Desk Print Format (this app never redirects into `/app` — see hooks.py): the frontend opens the returned HTML in a new tab/window and hands off to the browser's own Print / Save-as-PDF. Label size/printer hardware stay a setup-time decision with Pacific, same as before.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `allocation` | string | required |  |
+| `copies_per_box` | int | default 1 | same as `print_box_stickers` |
+
+**Response**
+
+A JSON string (the usual `{"message": "..."}` envelope) containing the full HTML document.
 
 
 #### POST `dms_erp.warehouse.allocation_api.confirm_putaway`
