@@ -156,6 +156,22 @@ class TestPickupRunApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			pickup_run_api.advance_pickup_run_status(run["id"], "Completed")
 
+	def test_create_pickup_run_rejects_a_line_missing_purchase_order_item(self):
+		# Real production mistake: a caller sent {"purchase_order": po_name, "qty": ...} --
+		# the PO's own name, not a specific line's -- and a bare dict lookup crashed with
+		# an unhandled KeyError instead of a clean validation message.
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_pickup_run(
+				supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order": "PUR-ORD-2026-00003", "qty": 20}]
+			)
+
+	def test_create_pickup_run_rejects_a_line_missing_qty(self):
+		line = self._ready_line(ready_qty=200)
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_pickup_run(
+				supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line}]
+			)
+
 	def test_write_requires_purchase_warehouse_or_management_role(self):
 		line = self._ready_line(ready_qty=200)
 		frappe.set_user("Guest")

@@ -6,6 +6,7 @@ Receipt (see allocation_api.create_allocation).
 
 import frappe
 from frappe import _
+from frappe.utils import get_datetime
 
 from dms_erp.pagination import clamp
 
@@ -76,6 +77,15 @@ def add_truck(
 	pickup_run: str | None = None,
 ):
 	_assert_can_manage_inward()
+
+	if eta:
+		try:
+			eta = get_datetime(eta)
+		except Exception:
+			frappe.throw(
+				_('eta must be a valid date/time (e.g. "2026-09-05 10:00:00"), not "{0}".').format(eta),
+				frappe.ValidationError,
+			)
 
 	truck = frappe.get_doc(
 		{
