@@ -34,6 +34,27 @@ class TestInward(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			inward_api.advance_truck(truck["id"], "Delivered")
 
+	def test_add_truck_accepts_a_full_eta_string(self):
+		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50, eta="2026-09-05 10:00:00")
+		self.assertIsNotNone(truck["eta"])
+
+	def test_add_truck_leniently_parses_a_time_only_eta(self):
+		# Real production input: a caller sent bare "10:00" for a Datetime field. That
+		# previously reached MariaDB raw and failed with an unhandled OperationalError
+		# ("Incorrect datetime value"). get_datetime() parses this leniently (dateutil
+		# fills in today's date) rather than rejecting it -- better UX than an error for
+		# a value this unambiguous, and it's the same parser Frappe uses everywhere else
+		# a user types a date/time by hand.
+		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50, eta="10:00")
+		self.assertIsNotNone(truck["eta"])
+
+	def test_add_truck_rejects_an_unparseable_eta(self):
+		# Real production input: a caller sent "Tomorrow 10:00" -- a relative expression
+		# no date/time parser resolves -- which previously reached MariaDB raw and failed
+		# with an unhandled OperationalError instead of a clean validation message.
+		with self.assertRaises(frappe.ValidationError):
+			inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50, eta="Tomorrow 10:00")
+
 	def test_write_requires_warehouse_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

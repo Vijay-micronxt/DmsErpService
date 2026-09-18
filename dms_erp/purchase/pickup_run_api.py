@@ -69,6 +69,18 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 	already-saved reservation isn't double-counted against itself."""
 	vt = frappe.get_doc("Vehicle Type", vehicle_type)
 
+	for line in lines:
+		if not line.get("purchase_order_item"):
+			frappe.throw(
+				_(
+					"Each pickup run line needs a purchase_order_item (the specific Purchase Order line, "
+					"not the Purchase Order's own name)."
+				),
+				frappe.ValidationError,
+			)
+		if not line.get("qty"):
+			frappe.throw(_("Each pickup run line needs a qty."), frappe.ValidationError)
+
 	# Two lines in the same request can name the same PO line item (e.g. a
 	# duplicate submission) -- validating each in isolation would let both pass
 	# against the same unreduced "remaining" figure and together over-book the
