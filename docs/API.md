@@ -59,6 +59,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Purchase Requirements / Reorder Planning](#purchase-requirements-reorder-planning)
 - [Damage & Insurance Claims](#damage-insurance-claims)
 - [Unloading Payment](#unloading-payment)
+- [Labour Attendance & Payment](#labour-attendance-payment)
 - [Dashboard](#dashboard)
 - [Reports — Sales](#reports-sales)
 - [Reports — Warehouse](#reports-warehouse)
@@ -2143,7 +2144,9 @@ _No parameters._
 
 ## Damage & Insurance Claims
 
-One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is fully config-gated — see the accounting box below.
+One claim per Damage→Insurance Claim Stock Entry for `claimType` Insurance/Transit; a Shortage claim (BRD C.8.3, identified at receipt) has no Stock Entry at all and carries `supplier` directly instead. Settlement GL posting is fully config-gated — see the accounting box below.
+
+> ⚠️ **BRD C.8.2's year-end (31 Mar removal / 1 Apr reinstatement) journal cycle is not automated.** This app has never posted to the GL at *filing* time (only at settlement), so there's no open receivable balance in the books yet for such a job to reverse — building one now would post a journal against a balance that doesn't exist. `claims_pending_year_end_reconciliation` below is the honest, read-only stand-in until a filing-time GL posting decision is made with Pacific/the accountant.
 
 > **DMS Accounting Settings (Single doctype)**
 > post_accounting_entries (Check, default unchecked), default_company, default_bank_account, insurance_claim_receivable_account, insurance_settlement_variance_account (nullable — only needed if a settlement's amount differs from the claimed amount), unloading_expense_account. While the flag is off, update_claim_status is a pure status/amount write. When it's on, the accounts a settlement needs are verified first — a missing one raises ValidationError naming exactly what's missing, never a guessed account — then a Journal Entry posts (debit bank for what was received, credit the receivable account for the full claimed amount, route any delta through the variance account) and links back via the new settlementJournalEntry field.
@@ -2157,6 +2160,7 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `status` | string | optional | Filed | Approved | Settled | Rejected |
+| `claim_type` | string | optional | Insurance | Transit | Shortage |
 | `limit` | int | optional, default 20, max 100 | page size |
 | `offset` | int | optional, default 0 | rows to skip |
 
@@ -2165,15 +2169,18 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 ```json
 {
   "items": [{
-    "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "stockEntry": "MAT-STE-2026-00081",
-    "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
-    "insurer": "HDFC Ergo", "claimAmount": 25600, "status": "Filed",
+    "id": "CLM-2026-0009", "claimRef": "CLM-2026-0009", "claimType": "Insurance", "supplier": "Orient Ceramics",
+    "stockEntry": "MAT-STE-2026-00081", "itemCode": "PVT-6060", "batchNumber": "BATCH-2608-11", "qty": 12,
+    "insurer": "HDFC Ergo", "claimAmount": 25600, "approvedAmount": null, "status": "Filed",
     "filedAt": "2026-08-29", "filedBy": "raj@pacific.example",
-    "settledAmount": null, "settledAt": null, "settlementJournalEntry": null, "remarks": "Transit damage"
+    "settlementMode": null, "settledAmount": null, "settledAt": null, "settlementJournalEntry": null,
+    "netLoss": null, "responsibility": null, "remarks": "Transit damage"
   }],
   "total": 11, "limit": 20, "offset": 0
 }
 ```
+
+> `supplier` is derived from the originating Bay Allocation for an Insurance/Transit claim (traced by item+batch — Stock Entry itself carries no supplier field); required directly when there's no stock_entry (a Shortage claim). `netLoss` (claimAmount − settledAmount) is only computed once status is "Settled".
 
 
 #### GET `dms_erp.finance.claims_api.get_claim`
@@ -2195,15 +2202,17 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 
 #### POST `dms_erp.finance.claims_api.file_claim`
 
-**File claim** — Warehouse/Management only. One claim per damage transfer — writes back to that transfer's claimRef.
+**File claim** — Warehouse/Management only. `claim_type` Insurance/Transit needs `stock_entry` (a Damage→Insurance Claim transfer, one claim per transfer, writes back to that transfer's claimRef); `Shortage` (BRD C.8.3) has no stock_entry and needs `supplier` passed directly instead.
 
 **Params**
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
-| `stock_entry` | string | required | must be a Damage→Insurance Claim transfer |
-| `insurer` | string | required |  |
 | `claim_amount` | number | required |  |
+| `claim_type` | string | default "Insurance" | Insurance / Transit / Shortage |
+| `stock_entry` | string | optional | required in practice for Insurance/Transit (must be a Damage→Insurance Claim transfer) |
+| `supplier` | string | optional | required when no stock_entry is given |
+| `insurer` | string | optional |  |
 | `remarks` | string | optional |  |
 
 **Response**
@@ -2224,11 +2233,48 @@ One claim per Damage→Insurance Claim Stock Entry. Settlement GL posting is ful
 | `claim` | string | required |  |
 | `status` | string | required |  |
 | `settled_amount` | number | optional, defaults to claimAmount when status="Settled" |  |
+| `approved_amount` | number | optional |  |
+| `settlement_mode` | string | optional | Insurance / Vendor Credit Note / Partial Settlement / Non-Settlement (Write-off) — only meaningful when status="Settled" |
+| `responsibility` | string | optional | Factory / Driver / Absorbed — BRD C.8.3, Shortage claims |
 
 **Response**
 
 ```json
 (same shape as one list row, with settlementJournalEntry set only if DMS Accounting Settings has posting on)
+```
+
+
+#### GET `dms_erp.finance.claims_api.accumulated_claims_by_supplier`
+
+**Accumulated open claims, grouped by supplier** (BRD C.8) — "small values are accumulated — always grouped by supplier/company — before a claim voucher is raised." Sums Filed/Approved claims; filing/approval itself is unaffected, still per-claim.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `claim_type` | string | optional | Insurance / Transit / Shortage |
+
+**Response**
+
+```json
+[{ "supplier": "Orient Ceramics", "claimCount": 3, "totalClaimed": 4200 }]
+```
+
+
+#### GET `dms_erp.finance.claims_api.claims_pending_year_end_reconciliation`
+
+**Claims still open as of a date** — the read-only stand-in for BRD C.8.2's not-yet-automated year-end journal cycle (see the warning box above).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `as_of` | date | optional, default today |  |
+
+**Response**
+
+```json
+[(same shape as one list row from list_claims, every entry still Filed or Approved)]
 ```
 
 
@@ -2338,6 +2384,102 @@ One voucher per Inward Truck. Same accounting-settings pattern as Claims.
 ```
 
 > ⚠️ always stamps paidBy as the calling user and paidAt as today — no caller-supplied override for either
+
+
+---
+
+## Labour Attendance & Payment
+
+Beyond consignment-linked Unloading Charge above: labourers tracked directly (BRD C.9.2) — a running attendance+dues record per labourer over a period, not per-truck. `amountDue` is always computed (dailyRate × Present days), never hand-entered. GL posting on `record_payment` is optional and config-gated, same DMS Accounting Settings box as Damage & Insurance Claims (reuses `unloading_expense_account` rather than adding a second configurable account for what the BRD itself groups with unloading as "labour/vendor" charges).
+
+#### GET `dms_erp.finance.labour_api.list_labour_records`
+
+**List / search** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | optional | Pending / Partially Paid / Paid |
+| `search` | string | optional | substring match on labourer name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "LAB-2026-0004", "labourerName": "Ramesh Bhai", "contractor": "Morbi Labour Contractors",
+    "dailyRate": 500, "periodStart": "2026-09-01", "periodEnd": "2026-09-15", "status": "Partially Paid",
+    "attendance": [
+      { "date": "2026-09-01", "present": true, "workDone": "Unloading", "linkedUnloadingVoucher": "UNL-2026-0001" },
+      { "date": "2026-09-02", "present": true, "workDone": "Movement", "linkedUnloadingVoucher": null }
+    ],
+    "amountDue": 1000, "amountPaid": 400, "paymentMode": "Cash", "paymentReference": null,
+    "paidBy": "warehouse.staff@pacific.example", "paidAt": "2026-09-16", "paymentEntry": null, "remarks": null
+  }],
+  "total": 6, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.finance.labour_api.get_labour_record`
+
+**Get single record** — `record` (string, required). Response: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.create_labour_record`
+
+**Create record** — Warehouse/Management only. Starts with an empty attendance table, amountDue 0.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `labourer_name` | string | required |  |
+| `daily_rate` | number | required |  |
+| `contractor` | string | optional |  |
+| `period_start, period_end` | date | optional |  |
+
+**Response**: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.add_attendance_day`
+
+**Add an attendance day** — Recomputes amountDue from every Present day in the table.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `record` | string | required |  |
+| `date` | date | required |  |
+| `present` | bool | default true |  |
+| `work_done` | string | optional | e.g. "Unloading", "Movement" |
+| `linked_unloading_voucher` | string | optional | BRD C.9.2 — links this day's work back to the Unloading Charge it was part of, when consignment-related |
+
+**Response**: same shape as one row of list_labour_records' "items".
+
+
+#### POST `dms_erp.finance.labour_api.record_payment`
+
+**Record a payment** — Can be called more than once; amountPaid accumulates. Status becomes Partially Paid or Paid depending on amountPaid vs. amountDue.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `record` | string | required |  |
+| `amount_paid` | number | required | this payment's amount, added to any prior amountPaid |
+| `payment_mode` | string | required | Cash / Bank Transfer / UPI / Cheque |
+| `payment_reference` | string | optional |  |
+
+**Response**
+
+```json
+(same shape as one list row; paymentEntry set only if DMS Accounting Settings has posting on — and only holds the most recent payment's posting, same single-voucher simplification Unloading Charge already makes)
+```
 
 
 ---
