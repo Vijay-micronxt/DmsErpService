@@ -1,0 +1,167 @@
+{
+ "actions": [],
+ "autoname": "field:series_name",
+ "creation": "2026-09-18 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "series_name",
+  "supplier",
+  "column_break_series",
+  "size",
+  "thickness",
+  "finish",
+  "section_break_uom",
+  "pieces_per_box",
+  "sqft_per_box",
+  "weight_per_box_kg",
+  "section_break_thresholds",
+  "bulk_qty_threshold",
+  "retail_qty_threshold",
+  "section_break_prices",
+  "price_list_rates"
+ ],
+ "fields": [
+  {
+   "fieldname": "series_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Series Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Supplier",
+   "options": "Supplier"
+  },
+  {
+   "fieldname": "column_break_series",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "size",
+   "fieldtype": "Data",
+   "label": "Size"
+  },
+  {
+   "fieldname": "thickness",
+   "fieldtype": "Data",
+   "label": "Thickness"
+  },
+  {
+   "fieldname": "finish",
+   "fieldtype": "Data",
+   "label": "Finish"
+  },
+  {
+   "fieldname": "section_break_uom",
+   "fieldtype": "Section Break",
+   "label": "UOM Conversions"
+  },
+  {
+   "fieldname": "pieces_per_box",
+   "fieldtype": "Float",
+   "label": "Pieces per Box"
+  },
+  {
+   "fieldname": "sqft_per_box",
+   "fieldtype": "Float",
+   "label": "Sqft per Box"
+  },
+  {
+   "fieldname": "weight_per_box_kg",
+   "fieldtype": "Float",
+   "label": "Weight per Box (Kg)"
+  },
+  {
+   "fieldname": "section_break_thresholds",
+   "fieldtype": "Section Break",
+   "label": "Retail / Bulk Thresholds"
+  },
+  {
+   "description": "Order qty (boxes) at or above which an order line auto-classifies as Bulk (BRD C.4.3).",
+   "fieldname": "bulk_qty_threshold",
+   "fieldtype": "Int",
+   "label": "Bulk Qty Threshold (Boxes)"
+  },
+  {
+   "description": "Order qty (boxes) at or below which an order line auto-classifies as Retail (BRD C.4.3).",
+   "fieldname": "retail_qty_threshold",
+   "fieldtype": "Int",
+   "label": "Retail Qty Threshold (Boxes)"
+  },
+  {
+   "fieldname": "section_break_prices",
+   "fieldtype": "Section Break",
+   "label": "Price List Rates"
+  },
+  {
+   "description": "Rate per Price List for items in this series — the source Batch 2's dealer price-tier work (BRD C.1.4/C.7.1) publishes onto individual Items from.",
+   "fieldname": "price_list_rates",
+   "fieldtype": "Table",
+   "label": "Price List Rates",
+   "options": "Series Price List Rate"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "Series",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Purchase",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "DMS Sales"
+  },
+  {
+   "read": 1,
+   "role": "DMS Warehouse"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

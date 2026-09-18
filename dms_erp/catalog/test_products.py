@@ -2,6 +2,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.catalog import api as catalog_api
+from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
@@ -16,6 +17,15 @@ def make_supplier(supplier_name):
 	return supplier_name
 
 
+def make_dealer(customer_name):
+	if frappe.db.exists("Customer", customer_name):
+		return customer_name
+	frappe.get_doc(
+		{"doctype": "Customer", "customer_name": customer_name, "customer_group": "All Customer Groups", "territory": "All Territories"}
+	).insert(ignore_permissions=True)
+	return customer_name
+
+
 class TestProducts(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -23,14 +33,17 @@ class TestProducts(FrappeTestCase):
 		setup_catalog()
 		setup_pricing()
 		cls.supplier = make_supplier("Product Test Supplier")
+		cls.dealer = make_dealer("Product Test Dealer")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for code in ("PROD-TEST-A", "PROD-TEST-B"):
+		for code in ("PROD-TEST-A", "PROD-TEST-B", "PROD-TEST-C", "PROD-TEST-D"):
 			if frappe.db.exists("Item Price Proposal", code):
 				frappe.delete_doc("Item Price Proposal", code, force=True, ignore_permissions=True)
 			if frappe.db.exists("Item", code):
 				frappe.delete_doc("Item", code, force=True, ignore_permissions=True)
+		if frappe.db.exists("Series", "Product Test Series"):
+			frappe.delete_doc("Series", "Product Test Series", force=True, ignore_permissions=True)
 
 	def test_create_product_creates_item_and_pending_price_proposal(self):
 		product = catalog_api.create_product(
@@ -233,3 +246,110 @@ class TestProducts(FrappeTestCase):
 
 		product = catalog_api.get_product("PROD-TEST-A")
 		self.assertEqual(product["dealerPrice"], 612)
+
+	def test_new_product_has_no_dealer_codes_or_images(self):
+		product = catalog_api.create_product(
+			code="PROD-TEST-C",
+			name="Test Codes/Images Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		self.assertEqual(product["dealerCodes"], [])
+		self.assertEqual(product["images"], [])
+
+	def test_update_product_sets_dealer_codes_and_images(self):
+		catalog_api.create_product(
+			code="PROD-TEST-C",
+			name="Test Codes/Images Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		updated = catalog_api.update_product(
+			"PROD-TEST-C",
+			{
+				"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "DLR-CODE-1", "sample_issued": 1}],
+				"images": [{"image": "/files/tile.jpg", "image_type": "Product", "is_primary": 1}],
+			},
+		)
+
+		self.assertEqual(
+			updated["dealerCodes"], [{"dealer": self.dealer, "customerItemCode": "DLR-CODE-1", "sampleIssued": True}]
+		)
+		self.assertEqual(updated["images"], [{"image": "/files/tile.jpg", "imageType": "Product", "isPrimary": True}])
+
+	def test_resolve_dealer_code_finds_the_item_by_the_dealers_own_code(self):
+		catalog_api.create_product(
+			code="PROD-TEST-C",
+			name="Test Codes/Images Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		catalog_api.update_product(
+			"PROD-TEST-C", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "DLR-CODE-2", "sample_issued": 1}]}
+		)
+
+		resolved = catalog_api.resolve_dealer_code(self.dealer, "DLR-CODE-2")
+		self.assertEqual(resolved["id"], "PROD-TEST-C")
+
+	def test_resolve_dealer_code_returns_none_for_an_unknown_code(self):
+		self.assertIsNone(catalog_api.resolve_dealer_code(self.dealer, "NO-SUCH-CODE"))
+
+	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
+		series_api.create_series(
+			series_name="Product Test Series",
+			finish="Glossy",
+			pieces_per_box=2,
+			sqft_per_box=15.5,
+			weight_per_box_kg=28,
+			bulk_qty_threshold=200,
+			retail_qty_threshold=50,
+		)
+
+		product = catalog_api.create_product(
+			code="PROD-TEST-D",
+			name="Series-Backed Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref="Product Test Series",
+		)
+
+		self.assertEqual(product["seriesRef"], "Product Test Series")
+		self.assertEqual(product["series"], "Product Test Series")
+		self.assertEqual(product["finish"], "Glossy")
+		self.assertEqual(product["piecesPerBox"], 2)
+		self.assertEqual(product["sqftPerBox"], 15.5)
+		self.assertEqual(product["weightPerBoxKg"], 28)
+		self.assertEqual(product["bulkQtyThreshold"], 200)
+		self.assertEqual(product["retailQtyThreshold"], 50)
+
+	def test_create_product_explicit_attributes_override_the_series(self):
+		series_api.create_series(series_name="Product Test Series", finish="Glossy", pieces_per_box=2)
+
+		product = catalog_api.create_product(
+			code="PROD-TEST-D",
+			name="Series-Backed Item, Overridden",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref="Product Test Series",
+			finish="Matte",
+			pieces_per_box=4,
+		)
+
+		self.assertEqual(product["finish"], "Matte")
+		self.assertEqual(product["piecesPerBox"], 4)

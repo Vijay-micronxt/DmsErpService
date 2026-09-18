@@ -39,6 +39,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Auth](#auth)
 - [Dealers](#dealers)
 - [Products / Item Master](#products-item-master)
+- [Series Master](#series-master)
 - [Pricing](#pricing)
 - [Dealer Catalog Visibility](#dealer-catalog-visibility)
 - [Inquiries](#inquiries)
@@ -267,11 +268,14 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
   "items": [{
     "id": "PVT-6060", "code": "PVT-6060", "name": "Marbella Beige Vitrified 600x600",
     "size": "600x600mm", "finish": "Glossy", "color": "Beige", "series": "Marbella",
+    "seriesRef": "Marbella", "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
     "category": "Vitrified", "swatch": "#D8C7A8",
     "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
     "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
     "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
-    "leadTimeDays": 21, "altItemId": null
+    "leadTimeDays": 21, "altItemId": null,
+    "dealerCodes": [{"dealer": "Anand Tiles", "customerItemCode": "AT-PVT-6060", "sampleIssued": true}],
+    "images": [{"image": "/files/pvt-6060.jpg", "imageType": "Product", "isPrimary": true}]
   }],
   "total": 214, "limit": 20, "offset": 0
 }
@@ -341,10 +345,12 @@ its name and parent worth a second call for.
 | `margin_pct` | number | required |  |
 | `effective_date` | date | required |  |
 | `size, finish, color, series, swatch` | string | optional |  |
+| `series_ref` | string | optional | Series master name (BRD C.1.1) — when set, `finish`/`pieces_per_box`/`sqft_per_box`/`weight_per_box_kg`/`series` fall back to the Series' own values for any of those left unset here (explicit params always win); `bulkQtyThreshold`/`retailQtyThreshold` always come from the Series |
 | `status` | string | default "Active" | one of the 5 lifecycle states |
 | `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
 | `lead_time_days` | int | default 0 |  |
 | `alt_item` | string | optional | substitute Item code |
+| `hsn_code` | string | optional | only meaningful when india_compliance is installed |
 
 **Response**
 
@@ -362,7 +368,7 @@ its name and parent worth a second call for.
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `item` | string | required | Item code |
-| `patch` | object | required | keys: name, category, size, finish, color, series, swatch, status, piecesPerBox, sqftPerBox, weightPerBoxKg, leadTimeDays, altItemId |
+| `patch` | object | required | keys: name, category, size, finish, color, series, swatch, status, piecesPerBox, sqftPerBox, weightPerBoxKg, leadTimeDays, altItemId, hsnCode, seriesRef, bulkQtyThreshold, retailQtyThreshold, dealerCodes, images |
 
 **Response**
 
@@ -371,6 +377,91 @@ its name and parent worth a second call for.
 ```
 
 > status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back.
+
+> `dealerCodes` / `images` replace the entire child table each call (same convention as Pickup Run's `lines`), with rows shaped `{dealer, customer_item_code, sample_issued}` / `{image, image_type, is_primary}` — not the camelCase `_serialize` output shape.
+
+
+#### GET `dms_erp.catalog.api.resolve_dealer_code`
+
+**Resolve a dealer's own item code** (BRD C.1.5/D.4) — the prerequisite for the WhatsApp flow and dealer-app catalog gating: a dealer only ever types/scans their own code, never the internal item_code.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required | Customer name |
+| `code` | string | required | the dealer's own customer_item_code |
+
+**Response**
+
+```json
+(same shape as get_product, or null if the code doesn't resolve for that dealer)
+```
+
+
+---
+
+
+## Series Master
+
+BRD C.1.1's central master concept: a Series carries a supplier, tile attributes (size/thickness/finish), UOM conversions and retail/bulk qty thresholds. `create_product`/`update_product`'s `series_ref` param propagates these onto an Item at creation (see Products / Item Master above). Doesn't publish prices directly — `priceListRates` is a source for future per-Series pricing work, not yet wired to any live Item Price.
+
+#### GET `dms_erp.catalog.series_api.list_series`
+
+**List / search series** — paginated.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on series name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "Marbella", "seriesName": "Marbella", "supplier": "Orient Ceramics",
+    "size": "600x600mm", "thickness": "9mm", "finish": "Glossy",
+    "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
+    "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
+    "priceListRates": [{"priceList": "Standard Selling", "rate": 560}]
+  }],
+  "total": 12, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.catalog.series_api.get_series`
+
+**Get single series** — `series` (string, required) is the Series name. Response: same shape as one row of `list_series`' "items".
+
+
+#### POST `dms_erp.catalog.series_api.create_series`
+
+**Create series** — Purchase/Management only.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `series_name` | string | required | also the doc name |
+| `supplier, size, thickness, finish` | string | optional |  |
+| `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
+| `bulk_qty_threshold, retail_qty_threshold` | int | default 0 |  |
+| `price_list_rates` | array | optional | `[{price_list, rate}, ...]` |
+
+**Response**: same shape as `get_series`.
+
+
+#### POST `dms_erp.catalog.series_api.update_series`
+
+**Update series** — Patch-style, Purchase/Management only.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `series` | string | required | Series name |
+| `patch` | object | required | keys: supplier, size, thickness, finish, piecesPerBox, sqftPerBox, weightPerBoxKg, bulkQtyThreshold, retailQtyThreshold, priceListRates |
+
+**Response**: same shape as `get_series`.
 
 
 ---
@@ -1839,6 +1930,8 @@ Capacity-aware planning layer in front of supplier-ready PO lines — groups the
 ## Purchase Requirements / Reorder Planning
 
 Fully real formula as of Phase 10+13: current stock, missed demand, pending inquiries, retail sales velocity, and open-PO coverage.
+
+> `suggestedQty` rounds to the nearest **5** boxes (BRD C.4.1/C.4.2, not 10), then is raised up to the item's `custom_moq` (falling back to `DMS Purchase Settings.default_moq` when the item has none set) — never applied to an already-zero suggestion. A daily scheduled job (`dms_erp.purchase.reorder_api.notify_reorder_review`) sends a Notification Log entry to every enabled DMS Purchase/DMS Management user whenever at least one item has a positive `suggestedQty`.
 
 #### GET `dms_erp.purchase.reorder_api.reorder_suggestions`
 
