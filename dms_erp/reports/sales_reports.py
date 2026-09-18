@@ -17,12 +17,7 @@ from dms_erp.comms.api import last_message
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase.reorder_api import MISSED_DEMAND_STATUSES
 from dms_erp.sales import dealer_api, inquiry_api
-
-DUPLICATE_INQUIRY_WINDOW_DAYS = 7
-# Inquiry's 10-state lifecycle (sales/inquiry_api.py) — these four are the ones
-# that mean the demand has already been actioned or dropped; everything else is
-# still "open" and eligible to be flagged as a duplicate.
-CLOSED_INQUIRY_STATUSES = {"Converted to Order", "Rejected", "Mapped to PO", "Closed"}
+from dms_erp.sales.utils import CLOSED_INQUIRY_STATUSES, DUPLICATE_INQUIRY_WINDOW_DAYS
 
 
 def _in_range(d, from_date, to_date) -> bool:

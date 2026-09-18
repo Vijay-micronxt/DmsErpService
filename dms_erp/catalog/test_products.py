@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -37,7 +39,7 @@ class TestProducts(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for code in ("PROD-TEST-A", "PROD-TEST-B", "PROD-TEST-C", "PROD-TEST-D"):
+		for code in ("PROD-TEST-A", "PROD-TEST-B", "PROD-TEST-C", "PROD-TEST-D", "PROD-TEST-IMG-1", "PROD-TEST-IMG-2"):
 			if frappe.db.exists("Item Price Proposal", code):
 				frappe.delete_doc("Item Price Proposal", code, force=True, ignore_permissions=True)
 			if frappe.db.exists("Item", code):
@@ -353,3 +355,99 @@ class TestProducts(FrappeTestCase):
 
 		self.assertEqual(product["finish"], "Matte")
 		self.assertEqual(product["piecesPerBox"], 4)
+
+	def _fake_upload(self, filename=b"fake-image-bytes", name="swatch.jpg"):
+		fake_file = MagicMock()
+		fake_file.filename = name
+		fake_file.stream.read.return_value = filename
+		return fake_file
+
+	def test_upload_product_image_appends_a_row_and_returns_the_gallery(self):
+		catalog_api.create_product(
+			code="PROD-TEST-IMG-1",
+			name="Image Gallery Test Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		with patch.object(frappe.local, "request") as mock_request:
+			mock_request.files = {"file": self._fake_upload()}
+			result = catalog_api.upload_product_image(
+				item="PROD-TEST-IMG-1", image_type="Application", is_primary="true"
+			)
+
+		self.assertEqual(len(result["images"]), 1)
+		self.assertEqual(result["images"][0]["imageType"], "Application")
+		self.assertTrue(result["images"][0]["isPrimary"])
+		self.assertTrue(result["images"][0]["image"])
+
+	def test_upload_product_image_rejects_an_invalid_image_type(self):
+		catalog_api.create_product(
+			code="PROD-TEST-IMG-1",
+			name="Image Gallery Test Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		with patch.object(frappe.local, "request") as mock_request:
+			mock_request.files = {"file": self._fake_upload()}
+			with self.assertRaises(frappe.ValidationError):
+				catalog_api.upload_product_image(item="PROD-TEST-IMG-1", image_type="Bogus")
+
+	def test_upload_product_image_requires_a_file(self):
+		catalog_api.create_product(
+			code="PROD-TEST-IMG-1",
+			name="Image Gallery Test Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+
+		with patch.object(frappe.local, "request") as mock_request:
+			mock_request.files = {}
+			with self.assertRaises(frappe.ValidationError):
+				catalog_api.upload_product_image(item="PROD-TEST-IMG-1")
+
+	def test_remove_product_image_drops_only_the_matching_row(self):
+		catalog_api.create_product(
+			code="PROD-TEST-IMG-2",
+			name="Image Removal Test Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		doc = frappe.get_doc("Item", "PROD-TEST-IMG-2")
+		doc.append("custom_images", {"image": "/files/a.jpg", "image_type": "Product", "is_primary": 1})
+		doc.append("custom_images", {"image": "/files/b.jpg", "image_type": "Application", "is_primary": 0})
+		doc.save(ignore_permissions=True)
+
+		result = catalog_api.remove_product_image(item="PROD-TEST-IMG-2", image="/files/a.jpg")
+
+		self.assertEqual(len(result["images"]), 1)
+		self.assertEqual(result["images"][0]["image"], "/files/b.jpg")
+
+	def test_upload_and_remove_product_image_require_purchase_or_management_role(self):
+		catalog_api.create_product(
+			code="PROD-TEST-IMG-1",
+			name="Image Gallery Test Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+		)
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			catalog_api.upload_product_image(item="PROD-TEST-IMG-1")
+		with self.assertRaises(frappe.PermissionError):
+			catalog_api.remove_product_image(item="PROD-TEST-IMG-1", image="/files/a.jpg")
