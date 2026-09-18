@@ -19,7 +19,7 @@ from frappe.utils import now_datetime, today
 
 from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
-from dms_erp.pricing.api import get_dealer_price
+from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
@@ -43,7 +43,7 @@ def _serialize(doc) -> dict:
 		"sourceRef": doc.custom_source_ref,
 		"channel": doc.custom_order_channel,
 		"lines": [_serialize_line(row) for row in doc.items],
-		# Server-computed only — every line's rate came from get_dealer_price at
+		# Server-computed only — every line's rate came from get_price_for_dealer at
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
 		"stage": doc.custom_fulfillment_stage,
@@ -139,7 +139,7 @@ def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str
 	items = []
 	for line in lines:
 		item = line["item"]
-		rate = get_dealer_price(item)
+		rate = get_price_for_dealer(item, dealer)
 		if rate is None:
 			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
 		items.append({"item_code": item, "qty": line["qty"], "rate": rate, "delivery_date": expected_dispatch})
