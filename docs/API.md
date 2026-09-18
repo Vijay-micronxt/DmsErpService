@@ -404,6 +404,44 @@ its name and parent worth a second call for.
 > `dealerCodes` / `images` replace the entire child table each call (same convention as Pickup Run's `lines`), with rows shaped `{dealer, customer_item_code, sample_issued}` / `{image, image_type, is_primary}` — not the camelCase `_serialize` output shape.
 
 
+#### POST `dms_erp.catalog.api.upload_product_image`
+
+**Upload one image and add it to the gallery** (BRD D.4) — Purchase/Management only. `multipart/form-data`, not JSON — the file goes in a form field named `file`; `item`/`image_type`/`is_primary` are ordinary form fields alongside it, not query params. Appends one row rather than replacing the whole gallery (unlike `update_product`'s `images` patch, which is for when the caller already has URLs in hand).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required | Item code |
+| `file` | file (multipart field) | required | the image itself |
+| `image_type` | string | optional, default "Product" | "Product" \| "Application" \| "Additional" |
+| `is_primary` | string | optional, default false | "true"/"1" to mark this the primary image |
+
+**Response**
+
+```json
+(same shape as get_product)
+```
+
+
+#### POST `dms_erp.catalog.api.remove_product_image`
+
+**Remove one image from the gallery** — Purchase/Management only. Drops the matching row by its `image` URL; the underlying File document itself is left alone.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required | Item code |
+| `image` | string | required | the image URL, as returned in `images[].image` |
+
+**Response**
+
+```json
+(same shape as get_product)
+```
+
+
 #### GET `dms_erp.catalog.api.resolve_dealer_code`
 
 **Resolve a dealer's own item code** (BRD C.1.5/D.4) — the prerequisite for the WhatsApp flow and dealer-app catalog gating: a dealer only ever types/scans their own code, never the internal item_code.
@@ -769,10 +807,12 @@ Real custom doctype with full CRUD — the frontend's own creation flow is the t
 **Response**
 
 ```json
-(same shape as one list row)
+(same shape as one list row, plus "duplicateOf")
 ```
 
 > enforces the same dealer-catalog visibility + sellability gate Quotation has always had — a hidden or Pulled Back item is rejected here (PermissionError / ValidationError), not just further down the funnel
+
+> BRD C.2.4 — `duplicateOf` is the id of the most recent still-open inquiry for the same dealer+item within the last `sales.utils.DUPLICATE_INQUIRY_WINDOW_DAYS` (7), or `null`. A hint for the caller to warn and let the user confirm-and-continue, not a block — the inquiry is created either way.
 
 
 #### POST `dms_erp.sales.inquiry_api.update_inquiry`

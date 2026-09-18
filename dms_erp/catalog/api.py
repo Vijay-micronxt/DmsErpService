@@ -335,6 +335,52 @@ def update_product(item: str, patch: dict):
 	return _serialize(doc)
 
 
+@frappe.whitelist(methods=["POST"])
+def upload_product_image(item: str, image_type: str = "Product", is_primary: str | int | bool = False):
+	"""BRD D.4 item image gallery — multipart upload (form field "file"), saved as a
+	real Frappe File attached to the Item, then appended as a new row on
+	custom_images. update_product's images patch already lets a caller replace the
+	whole gallery at once with URLs it already has; this is the missing write path
+	that actually gets a browser-picked file onto the server and into a URL in the
+	first place, one row at a time rather than round-tripping the whole array."""
+	_assert_can_manage_products()
+
+	if "file" not in frappe.request.files:
+		frappe.throw(_("No file uploaded."), frappe.ValidationError)
+	if image_type not in {"Product", "Application", "Additional"}:
+		frappe.throw(_("Invalid image_type: {0}").format(image_type), frappe.ValidationError)
+
+	from frappe.utils.file_manager import save_file
+
+	uploaded = frappe.request.files["file"]
+	file_doc = save_file(uploaded.filename, uploaded.stream.read(), "Item", item, is_private=0)
+
+	# multipart/form-data always arrives as a string (not JSON-typed) -- parsed
+	# leniently rather than relying on frappe's whitelist arg coercion for this.
+	is_primary_flag = str(is_primary).strip().lower() in {"1", "true", "yes"}
+
+	doc = frappe.get_doc("Item", item)
+	doc.append("custom_images", {"image": file_doc.file_url, "image_type": image_type, "is_primary": 1 if is_primary_flag else 0})
+	doc.save(ignore_permissions=True)
+
+	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST", "DELETE"])
+def remove_product_image(item: str, image: str):
+	"""Drops one row from the gallery by its file URL — the uploaded File document
+	itself is left alone (same "detach, don't delete the underlying file" choice
+	Frappe's own attachment UI makes) since other records could in principle still
+	reference it."""
+	_assert_can_manage_products()
+
+	doc = frappe.get_doc("Item", item)
+	doc.custom_images = [row for row in doc.custom_images if row.image != image]
+	doc.save(ignore_permissions=True)
+
+	return _serialize(doc)
+
+
 @frappe.whitelist(methods=["GET"])
 def resolve_dealer_code(dealer: str, code: str) -> dict | None:
 	"""BRD C.1.5/D.4: resolve a dealer's own customer_item_code back to the Item it
