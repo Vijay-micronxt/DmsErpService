@@ -76,6 +76,15 @@ CUSTOM_FIELDS = {
 		{"fieldname": "custom_claim_ref", "fieldtype": "Data", "label": "Claim Reference", "insert_after": "custom_damage_type"},
 		{"fieldname": "custom_remarks", "fieldtype": "Small Text", "label": "Remarks", "insert_after": "custom_claim_ref"},
 	],
+	"Batch": [
+		{
+			"fieldname": "custom_batch_weight_kg",
+			"fieldtype": "Float",
+			"label": "Weight per Box (Kg)",
+			"description": "BRD C.1.3/C.6.1 — this batch's actual weight per box, which can differ from the Item's standard weight (the manufacturer's material can change batch to batch). Captured at allocation_api.create_allocation, defaulting to the Item's own custom_weight_per_box_kg when not given explicitly.",
+			"insert_after": "item",
+		},
+	],
 }
 
 

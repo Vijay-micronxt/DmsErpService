@@ -169,6 +169,12 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 		item_doc = frappe.get_cached_doc("Item", row.item_code)
 		bay_type = frappe.get_cached_value("Warehouse", row.bay, "custom_bay_type")
 		is_damage_bay = bay_type in DAMAGE_BAY_TYPES
+		# A real batch's own weight (BRD C.1.3/C.6.1) can differ from the Item's
+		# standard weight -- prefer it, falling back to the Item's own weight for
+		# any batch created before this field existed (custom_batch_weight_kg unset).
+		weight_per_box_kg = frappe.db.get_value("Batch", row.batch_no, "custom_batch_weight_kg") if row.batch_no else None
+		if weight_per_box_kg is None:
+			weight_per_box_kg = item_doc.custom_weight_per_box_kg
 		out.append(
 			{
 				# No dedicated "lot" doctype exists (see module docstring) — this is a
@@ -181,6 +187,8 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 				"category": item_doc.item_group,
 				"batchNumber": row.batch_no,
 				"boxes": row.boxes,
+				"weightPerBoxKg": weight_per_box_kg,
+				"totalWeightKg": (weight_per_box_kg or 0) * row.boxes if weight_per_box_kg is not None else None,
 				"storedAt": str(row.stored_at),
 				"damageType": bay_type if is_damage_bay else None,
 				"claimRef": claim_ref_for_lot(row.bay, row.item_code, row.batch_no) if is_damage_bay else None,
@@ -189,10 +197,17 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	return out
 
 
-def ensure_batch(item_code: str, batch_no: str) -> str:
+def ensure_batch(item_code: str, batch_no: str, weight_per_box_kg: float | None = None) -> str:
 	if frappe.db.exists("Batch", batch_no):
 		return batch_no
-	frappe.get_doc({"doctype": "Batch", "batch_id": batch_no, "item": item_code}).insert(ignore_permissions=True)
+	# BRD C.1.3/C.6.1: a batch's actual weight can differ from the Item's standard
+	# weight (the manufacturer's material can change batch to batch) -- defaults to
+	# the Item's own standard weight when the caller doesn't override it.
+	if weight_per_box_kg is None:
+		weight_per_box_kg = frappe.get_cached_value("Item", item_code, "custom_weight_per_box_kg")
+	frappe.get_doc(
+		{"doctype": "Batch", "batch_id": batch_no, "item": item_code, "custom_batch_weight_kg": weight_per_box_kg}
+	).insert(ignore_permissions=True)
 	return batch_no
 
 

@@ -29,7 +29,7 @@ from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable
+from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
@@ -56,9 +56,20 @@ def _serialize(doc) -> dict:
 		"freight": doc.custom_freight,
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
-		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
+		"lines": [_serialize_line(row) for row in doc.items],
 		"total": doc.grand_total,
 		"status": doc.status,
+	}
+
+
+def _serialize_line(row) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
+	return {
+		"itemCode": row.item_code,
+		"qty": row.qty,
+		"rate": row.rate,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
 
 

@@ -43,6 +43,12 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["channel"], "Retail")
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
 
+	def test_order_line_carries_the_items_weight(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		order = self._make_order(qty=10)
+		self.assertEqual(order["lines"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(order["lines"][0]["totalWeightKg"], 280)
+
 	def test_create_order_accepts_bulk_channel(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")
 		order = order_api.create_order(

@@ -17,6 +17,7 @@ import frappe
 from frappe import _
 from frappe.utils import now_datetime, today
 
+from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.sales.order_channel import auto_classify_channel
@@ -41,7 +42,7 @@ def _serialize(doc) -> dict:
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,
 		"channel": doc.custom_order_channel,
-		"lines": [{"itemCode": row.item_code, "qty": row.qty, "rate": row.rate} for row in doc.items],
+		"lines": [_serialize_line(row) for row in doc.items],
 		# Server-computed only — every line's rate came from get_dealer_price at
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
@@ -53,6 +54,17 @@ def _serialize(doc) -> dict:
 			{"stage": row.stage, "at": row.at, "by": row.by, "note": row.note}
 			for row in sorted(doc.custom_stage_history, key=lambda r: r.idx)
 		],
+	}
+
+
+def _serialize_line(row) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
+	return {
+		"itemCode": row.item_code,
+		"qty": row.qty,
+		"rate": row.rate,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
 
 

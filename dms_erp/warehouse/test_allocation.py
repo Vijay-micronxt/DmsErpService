@@ -46,6 +46,35 @@ class TestAllocation(FrappeTestCase):
 		self.assertEqual(by_bay[bay_a_name], 60)
 		self.assertEqual(by_bay[bay_b_name], 40)
 
+	def test_create_allocation_defaults_batch_weight_to_the_items_standard_weight(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+
+		result = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-WEIGHT-DEFAULT",
+			total_qty=50,
+			lines=[{"bay": "ALLOC-A-01", "qty": 50}],
+			supplier=self.supplier,
+		)
+
+		self.assertEqual(result["weightPerBoxKg"], 28)
+		self.assertEqual(result["totalWeightKg"], 1400)
+		self.assertEqual(frappe.db.get_value("Batch", "ALLOC-BATCH-WEIGHT-DEFAULT", "custom_batch_weight_kg"), 28)
+
+	def test_create_allocation_accepts_an_explicit_batch_weight_override(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+
+		result = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-WEIGHT-OVERRIDE",
+			total_qty=50,
+			lines=[{"bay": "ALLOC-A-01", "qty": 50}],
+			supplier=self.supplier,
+			weight_per_box_kg=31.5,
+		)
+
+		self.assertEqual(result["weightPerBoxKg"], 31.5)
+
 	def test_create_allocation_rejects_mismatched_line_total(self):
 		with self.assertRaises(frappe.ValidationError):
 			allocation_api.create_allocation(

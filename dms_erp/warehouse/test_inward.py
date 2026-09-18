@@ -23,6 +23,23 @@ class TestInward(FrappeTestCase):
 		self.assertEqual(truck["status"], "Scheduled")
 		self.assertEqual(truck["boxes"], 500)
 
+	def test_truck_weight_falls_back_to_the_items_standard_weight_before_allocation(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50)
+		self.assertEqual(truck["weightPerBoxKg"], 28)
+		self.assertEqual(truck["totalWeightKg"], 1400)
+
+	def test_truck_weight_prefers_the_confirmed_batchs_own_weight_once_allocated(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50)
+		frappe.get_doc({"doctype": "Batch", "batch_id": "INWARD-WEIGHT-BATCH", "item": self.item, "custom_batch_weight_kg": 31.5}).insert(
+			ignore_permissions=True
+		)
+		frappe.db.set_value("Inward Truck", truck["id"], "batch_no", "INWARD-WEIGHT-BATCH")
+
+		refetched = inward_api.list_trucks(search=truck["lr"])["items"][0]
+		self.assertEqual(refetched["weightPerBoxKg"], 31.5)
+
 	def test_advance_truck_follows_flow(self):
 		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=200)
 		for status in ("At Gate", "Unloading", "Put-away"):

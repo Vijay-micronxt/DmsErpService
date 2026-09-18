@@ -29,7 +29,7 @@ import frappe
 from frappe import _
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable
+from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 
 INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -42,6 +42,7 @@ def _assert_can_manage_inquiries():
 
 
 def _serialize(doc) -> dict:
+	weight_per_box_kg = item_weight_per_box_kg(doc.item)
 	return {
 		"id": doc.name,
 		"number": doc.name,
@@ -49,6 +50,8 @@ def _serialize(doc) -> dict:
 		"dealerId": doc.dealer,
 		"productId": doc.item,
 		"qty": doc.qty,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * doc.qty if weight_per_box_kg is not None else None,
 		"status": doc.status,
 		"source": doc.source,
 		"expectedDelivery": doc.expected_delivery,

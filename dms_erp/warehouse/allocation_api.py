@@ -40,7 +40,14 @@ def _assert_can_allocate():
 		frappe.throw(_("Only Warehouse or Management can allocate bays."), frappe.PermissionError)
 
 
+def _batch_weight_per_box_kg(batch_no: str | None) -> float | None:
+	if not batch_no:
+		return None
+	return frappe.db.get_value("Batch", batch_no, "custom_batch_weight_kg")
+
+
 def _serialize(doc) -> dict:
+	weight_per_box_kg = _batch_weight_per_box_kg(doc.batch_no)
 	return {
 		"id": doc.name,
 		"slipNumber": doc.name,
@@ -51,6 +58,8 @@ def _serialize(doc) -> dict:
 		"totalQty": doc.total_qty,
 		"status": doc.status,
 		"purchaseReceipt": doc.purchase_receipt,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * doc.total_qty if weight_per_box_kg is not None else None,
 		"allocations": [
 			{"bayId": row.bay, "bayCode": frappe.db.get_value("Warehouse", row.bay, "custom_bay_code"), "qty": row.qty, "confirmed": bool(row.confirmed)}
 			for row in doc.lines
@@ -103,6 +112,7 @@ def create_allocation(
 	lines: list[dict],
 	inward_truck: str | None = None,
 	supplier: str | None = None,
+	weight_per_box_kg: float | None = None,
 ):
 	_assert_can_allocate()
 
@@ -129,7 +139,7 @@ def create_allocation(
 	if not supplier:
 		frappe.throw(_("A supplier is required (directly, or via inward_truck)."), frappe.ValidationError)
 
-	ensure_batch(item, batch_no)
+	ensure_batch(item, batch_no, weight_per_box_kg=weight_per_box_kg)
 
 	alloc = frappe.get_doc(
 		{

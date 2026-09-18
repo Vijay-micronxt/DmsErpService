@@ -30,6 +30,12 @@ class TestPoApi(FrappeTestCase):
 		self.assertEqual(po["lines"][0]["readyQty"], 0)
 		self.assertEqual(frappe.db.get_value("Purchase Order", po["id"], "docstatus"), 1)
 
+	def test_purchase_order_line_carries_the_items_weight(self):
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date="2026-09-01")
+		self.assertEqual(po["lines"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(po["lines"][0]["totalWeightKg"], 28000)
+
 	def test_set_line_ready_clamps_to_ordered_qty(self):
 		po = po_api.create_purchase_order(item=self.item, ordered_qty=500, supplier=self.supplier, expected_ready_date="2026-09-01")
 		line_id = po["lines"][0]["id"]

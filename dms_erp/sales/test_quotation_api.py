@@ -43,6 +43,12 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(quotation["lines"][0]["rate"], 560)  # round(500 * 1.12)
 		self.assertEqual(quotation["channel"], "Retail")  # default
 
+	def test_quotation_line_carries_the_items_weight(self):
+		frappe.db.set_value("Item", self.priced_item, "custom_weight_per_box_kg", 28)
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
+		self.assertEqual(quotation["lines"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(quotation["lines"][0]["totalWeightKg"], 280)
+
 	def test_create_quotation_accepts_bulk_channel_and_carries_into_order(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 500}], markup_pct=8, channel="Bulk"

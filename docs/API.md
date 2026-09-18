@@ -33,6 +33,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 
 1. **Inquiry + Quotation persistence** — the backend leads on both. `Inquiry` is a real custom doctype with full CRUD; `Quotation` is native ERPNext with create, line-edit, and status control.
 2. **No GL account is ever hardcoded or guessed.** Claim settlement and unloading payment both route through **DMS Accounting Settings** — a single on/off flag plus five nullable Account links. While it's off (the default), both actions are pure status/amount updates with zero accounting side effect.
+3. **`weightPerBoxKg`/`totalWeightKg` (BRD C.1.3, per-line where a document has lines)** appear on every transaction-document endpoint this app builds: Inquiries, Quotations, Orders, Purchase Orders, Pickup Run, Inward, Bay Allocation, and Stock/Lots. Before a Bay Allocation exists (Inquiry/Quotation/Order/PO/Pickup Run/an un-allocated Inward Truck), the value is the Item's own standard weight (`custom_weight_per_box_kg`). From Bay Allocation onward, it's the confirmed Batch's own weight (`custom_batch_weight_kg`, can differ from the Item's standard weight when the manufacturer's material changed batch to batch) — Inward/Stock-Lots prefer the Batch weight once one is linked, falling back to the Item's own weight before that. Both fields are `null` when the Item has no standard weight set at all. Delivery Note and Sales Invoice have no dms_erp-specific endpoint at all (pure native ERPNext), so weight isn't surfaced there.
 
 ## Modules
 
@@ -1474,6 +1475,7 @@ A live aggregate over native Stock Ledger Entry, grouped by item+bay+batch — n
 | `lines` | array | required | [{ bay: bay code, qty }], must sum to total_qty |
 | `inward_truck` | string | optional |  |
 | `supplier` | string | optional, required if no inward_truck |  |
+| `weight_per_box_kg` | number | optional | this Batch's actual weight (BRD C.1.3/C.6.1) — defaults to the Item's own standard weight when omitted. Only meaningful the first time this `batch_no` is created; a repeat call with an existing batch_no is a no-op on this field. |
 
 **Response**
 
