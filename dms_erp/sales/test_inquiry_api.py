@@ -1,10 +1,12 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog import dealer_catalog_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api
+from dms_erp.sales.utils import DUPLICATE_INQUIRY_WINDOW_DAYS
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
@@ -27,6 +29,40 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(inquiry["status"], "Open")
 		self.assertEqual(inquiry["dealerId"], self.dealer)
 		self.assertEqual(inquiry["qty"], 100)
+		self.assertIsNone(inquiry["duplicateOf"])
+
+	def test_create_inquiry_flags_a_recent_open_duplicate(self):
+		dealer = make_dealer("Inquiry Duplicate Dealer")
+		first = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=10, source="Phone")
+		second = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=20, source="WhatsApp")
+		self.assertEqual(second["duplicateOf"], first["id"])
+
+	def test_create_inquiry_does_not_flag_a_closed_duplicate(self):
+		dealer = make_dealer("Inquiry Closed Duplicate Dealer")
+		first = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=10, source="Phone")
+		inquiry_api.update_inquiry(first["id"], {"status": "Converted to Order"})
+
+		second = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=20, source="WhatsApp")
+		self.assertIsNone(second["duplicateOf"])
+
+	def test_create_inquiry_does_not_flag_a_duplicate_outside_the_window(self):
+		dealer = make_dealer("Inquiry Stale Duplicate Dealer")
+		first = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=10, source="Phone")
+		frappe.db.set_value("Inquiry", first["id"], "date", add_days(today(), -(DUPLICATE_INQUIRY_WINDOW_DAYS + 1)))
+
+		second = inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=20, source="WhatsApp")
+		self.assertIsNone(second["duplicateOf"])
+
+	def test_create_inquiry_does_not_flag_a_different_dealer_or_item(self):
+		other_dealer = make_dealer("Inquiry Duplicate Other Dealer")
+		other_item = make_item("INQ-DUP-OTHER-ITEM", "Vitrified")
+		inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+
+		different_dealer = inquiry_api.create_inquiry(dealer=other_dealer, item=self.item, qty=10, source="Phone")
+		self.assertIsNone(different_dealer["duplicateOf"])
+
+		different_item = inquiry_api.create_inquiry(dealer=self.dealer, item=other_item, qty=10, source="Phone")
+		self.assertIsNone(different_item["duplicateOf"])
 
 	def test_inquiry_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)

@@ -3,11 +3,6 @@ No ERPNext doctype models "logged demand, not yet a sales document, that later
 converts to a Quotation/Order or gets marked as missed" with Pacific's exact 10-state
 status lifecycle, so this is a genuine custom doctype.
 
-Note: unlike most other frontend api/*.ts modules, pacific-tileflow's `inquiries` are
-still static read-only seed data — there's no create/update wired up client-side yet.
-This module builds the real, mutable backend the BRD describes; the frontend will
-need its own follow-up work to call it.
-
 `convert_to_purchase_requirement` (Phase 12) is the missing piece of that 10-state
 lifecycle: nothing ever set an Inquiry to "Mapped to PO" because nothing ever raised
 a Purchase Order *from* one. It's a thin wrapper over `purchase.po_api.
@@ -20,6 +15,13 @@ create_quotation` always has — dealer-assigned visibility and current sellabil
 so a hidden or Pulled Back item is rejected here too, not just at the Quotation
 step further down the funnel.
 
+BRD C.2.4 same-moment duplicate check: create_inquiry (Phase 21) now looks for a
+still-open inquiry for the same dealer+item within the last
+sales.utils.DUPLICATE_INQUIRY_WINDOW_DAYS (the same rule and window
+reports.duplicate_inquiry_report already used) and returns it as `duplicateOf` on
+the response — a hint, not a block, so the caller decides whether to warn and let
+the user confirm-and-continue, matching the BRD's own phrasing.
+
 list_inquiries is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list -- reports need the whole result set, so
 they call list_all_inquiries (unpaginated, internal-only) instead.
@@ -31,6 +33,7 @@ from frappe import _
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
+from dms_erp.sales.utils import find_open_duplicate_inquiries
 
 INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
@@ -123,6 +126,9 @@ def create_inquiry(
 	if not is_sellable(status):
 		frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
 
+	# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
+	duplicates = find_open_duplicate_inquiries(dealer, item)
+
 	doc = frappe.get_doc(
 		{
 			"doctype": "Inquiry",
@@ -138,7 +144,9 @@ def create_inquiry(
 		}
 	)
 	doc.insert(ignore_permissions=True)
-	return _serialize(doc)
+	result = _serialize(doc)
+	result["duplicateOf"] = duplicates[0]["id"] if duplicates else None
+	return result
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
