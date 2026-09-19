@@ -15,6 +15,12 @@ because it needs Sales history (Phase 5).
 Creating/editing item masters and publishing a launch price are Purchase/Management
 actions per the BRD flow; Sales/Warehouse only read the catalog.
 
+BRD C.1.1 requires every item to be created against a Series master — create_product
+enforces that going forward. It's deliberately enforced only on creation, not on
+update_product: a handful of items created before this rule existed have no Series
+attached (grandfathered), and forcing a retroactive choice on every edit of one of
+those is a separate decision nobody's made yet.
+
 hsnCode is a third category, alongside "native ERPNext field" and "our own Custom
 Field": it's neither — gst_hsn_code only exists on Item when the india_compliance
 app (GST/India tax compliance) is installed on a given site, which mandates it on
@@ -230,11 +236,11 @@ def create_product(
 	purchase_cost: float,
 	margin_pct: float,
 	effective_date,
+	series_ref: str | None = None,
 	size: str | None = None,
 	finish: str | None = None,
 	color: str | None = None,
 	series: str | None = None,
-	series_ref: str | None = None,
 	swatch: str | None = None,
 	status: str = "Active",
 	pieces_per_box: float = 0,
@@ -248,6 +254,14 @@ def create_product(
 
 	if status not in DISCONTINUATION_STATUSES:
 		frappe.throw(_("Invalid status: {0}").format(status), frappe.ValidationError)
+
+	# BRD C.1.1 — every new item must be created against a Series master; only existing
+	# items created before this was enforced are grandfathered without one (see the
+	# module docstring). update_product still allows leaving seriesRef unset when
+	# editing one of those, since retroactively forcing a choice there is a separate,
+	# not-yet-made call.
+	if not series_ref or not frappe.db.exists("Series", series_ref):
+		frappe.throw(_("A Series master is required to create a new item."), frappe.ValidationError)
 
 	finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold = _apply_series_defaults(
 		series_ref, finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg
