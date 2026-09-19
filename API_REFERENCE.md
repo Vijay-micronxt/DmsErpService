@@ -53,7 +53,7 @@ Status legend: ✅ tested & confirmed working in this session · 🐛 tested, bu
 **`login`** — POST, `allow_guest` — ✅
 ```json
 POST /api/method/dms_erp.auth.api.login
-{ "usr": "Administrator", "pwd": "admin123", "device_id": "postman-1", "device_name": "Postman" }
+{ "usr": "Administrator", "pwd": "<password>", "device_id": "postman-1", "device_name": "Postman" }
 ```
 ```json
 { "message": {

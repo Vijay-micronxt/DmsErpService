@@ -2,3 +2,4 @@
 dms_erp.patches.rename_series_to_product_series
 
 [post_model_sync]
+dms_erp.patches.copy_series_to_product_series
