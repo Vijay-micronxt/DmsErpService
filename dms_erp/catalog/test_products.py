@@ -44,8 +44,8 @@ class TestProducts(FrappeTestCase):
 
 	@classmethod
 	def tearDownClass(cls):
-		if frappe.db.exists("Series", "Product Test Default Series"):
-			frappe.delete_doc("Series", "Product Test Default Series", force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", "Product Test Default Series"):
+			frappe.delete_doc("Product Series", "Product Test Default Series", force=True, ignore_permissions=True)
 		super().tearDownClass()
 
 	def tearDown(self):
@@ -55,8 +55,8 @@ class TestProducts(FrappeTestCase):
 				frappe.delete_doc("Item Price Proposal", code, force=True, ignore_permissions=True)
 			if frappe.db.exists("Item", code):
 				frappe.delete_doc("Item", code, force=True, ignore_permissions=True)
-		if frappe.db.exists("Series", "Product Test Series"):
-			frappe.delete_doc("Series", "Product Test Series", force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", "Product Test Series"):
+			frappe.delete_doc("Product Series", "Product Test Series", force=True, ignore_permissions=True)
 
 	def test_create_product_creates_item_and_pending_price_proposal(self):
 		product = catalog_api.create_product(
@@ -423,7 +423,7 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(updated["seriesRef"], other_series)
 		self.assertEqual(updated["series"], "Product Test Other Series")
 
-		frappe.delete_doc("Series", other_series, force=True, ignore_permissions=True)
+		frappe.delete_doc("Product Series", other_series, force=True, ignore_permissions=True)
 
 	def test_update_product_rejects_an_unknown_series_ref(self):
 		catalog_api.create_product(

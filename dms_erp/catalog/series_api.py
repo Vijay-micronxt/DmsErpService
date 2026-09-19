@@ -49,10 +49,10 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 def list_series(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
 	filters = {"series_name": ["like", f"%{search}%"]} if search else {}
-	total = frappe.db.count("Series", filters=filters)
-	names = frappe.get_all("Series", filters=filters, pluck="name", order_by="series_name asc", limit_start=offset, limit_page_length=limit)
+	total = frappe.db.count("Product Series", filters=filters)
+	names = frappe.get_all("Product Series", filters=filters, pluck="name", order_by="series_name asc", limit_start=offset, limit_page_length=limit)
 	return {
-		"items": [_serialize(frappe.get_doc("Series", name)) for name in names],
+		"items": [_serialize(frappe.get_doc("Product Series", name)) for name in names],
 		"total": total,
 		"limit": limit,
 		"offset": offset,
@@ -61,7 +61,7 @@ def list_series(search: str | None = None, limit: int = 20, offset: int = 0):
 
 @frappe.whitelist(methods=["GET"])
 def get_series(series: str):
-	return _serialize(frappe.get_doc("Series", series))
+	return _serialize(frappe.get_doc("Product Series", series))
 
 
 @frappe.whitelist(methods=["POST"])
@@ -86,7 +86,7 @@ def create_series(
 
 	doc = frappe.get_doc(
 		{
-			"doctype": "Series",
+			"doctype": "Product Series",
 			"series_name": series_name,
 			"supplier": supplier,
 			"size": size,
@@ -129,7 +129,7 @@ def update_series(series: str, patch: dict):
 		"priceListRates": "price_list_rates",
 	}
 
-	doc = frappe.get_doc("Series", series)
+	doc = frappe.get_doc("Product Series", series)
 	for key, value in patch.items():
 		fieldname = field_map.get(key)
 		if fieldname:

@@ -25,8 +25,8 @@ class TestWithdrawalApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		if frappe.db.exists("Series", SERIES):
-			frappe.delete_doc("Series", SERIES, force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", SERIES):
+			frappe.delete_doc("Product Series", SERIES, force=True, ignore_permissions=True)
 
 	def _make_series(self, **overrides):
 		params = {
@@ -37,8 +37,8 @@ class TestWithdrawalApi(FrappeTestCase):
 			"withdrawal_min_annual_sales_boxes": 100,
 		}
 		params.update(overrides)
-		if frappe.db.exists("Series", SERIES):
-			frappe.delete_doc("Series", SERIES, force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", SERIES):
+			frappe.delete_doc("Product Series", SERIES, force=True, ignore_permissions=True)
 		return series_api.create_series(**params)
 
 	def _delivered_sale(self, item, qty, days_ago):
