@@ -367,8 +367,8 @@ its name and parent worth a second call for.
 | `purchase_cost` | number | required |  |
 | `margin_pct` | number | required |  |
 | `effective_date` | date | required |  |
+| `series_ref` | string | **required** | Series master name (BRD C.1.1) — `finish`/`pieces_per_box`/`sqft_per_box`/`weight_per_box_kg`/`series` fall back to the Series' own values for any of those left unset here (explicit params always win); `bulkQtyThreshold`/`retailQtyThreshold` always come from the Series. Enforced on creation only — a handful of items created before this rule existed have no Series attached, and `update_product` still allows leaving it unset when editing one of those. |
 | `size, finish, color, series, swatch` | string | optional |  |
-| `series_ref` | string | optional | Series master name (BRD C.1.1) — when set, `finish`/`pieces_per_box`/`sqft_per_box`/`weight_per_box_kg`/`series` fall back to the Series' own values for any of those left unset here (explicit params always win); `bulkQtyThreshold`/`retailQtyThreshold` always come from the Series |
 | `status` | string | default "Active" | one of the 5 lifecycle states |
 | `pieces_per_box, sqft_per_box, weight_per_box_kg` | number | default 0 |  |
 | `lead_time_days` | int | default 0 |  |

@@ -36,6 +36,17 @@ class TestProducts(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Product Test Supplier")
 		cls.dealer = make_dealer("Product Test Dealer")
+		# A default Series for tests that aren't themselves exercising series-related
+		# behavior -- create_product now requires one (BRD C.1.1). Kept distinct from
+		# "Product Test Series" below, which individual tests create/delete locally
+		# with their own attributes to test the fill-in/override behavior itself.
+		cls.series = series_api.create_series(series_name="Product Test Default Series", finish="Glossy", pieces_per_box=2)["id"]
+
+	@classmethod
+	def tearDownClass(cls):
+		if frappe.db.exists("Series", "Product Test Default Series"):
+			frappe.delete_doc("Series", "Product Test Default Series", force=True, ignore_permissions=True)
+		super().tearDownClass()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -56,6 +67,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 			size="600x1200mm",
 			status="Active",
 			pieces_per_box=2,
@@ -85,6 +97,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 			hsn_code="69072100",
 		)
 		self.assertEqual(product["hsnCode"], "69072100")
@@ -122,6 +135,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		catalog_api.create_product(
 			code="PROD-TEST-B",
@@ -131,6 +145,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		page = catalog_api.list_products(limit=1, offset=0)
@@ -153,6 +168,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		catalog_api.create_product(
 			code="PROD-TEST-B",
@@ -162,6 +178,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		catalog_api.update_product("PROD-TEST-B", {"status": "Pulled Back"})
 
@@ -185,6 +202,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		catalog_api.create_product(
 			code="PROD-TEST-B",
@@ -194,6 +212,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		by_first_supplier = catalog_api.list_products(supplier=self.supplier)
@@ -217,6 +236,31 @@ class TestProducts(FrappeTestCase):
 				purchase_cost=100,
 				margin_pct=20,
 				effective_date="2026-08-01",
+				series_ref=self.series,
+			)
+
+	def test_create_product_requires_a_series_ref(self):
+		with self.assertRaises(frappe.ValidationError):
+			catalog_api.create_product(
+				code="PROD-TEST-B",
+				name="No Series",
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=100,
+				margin_pct=20,
+				effective_date="2026-08-01",
+			)
+
+		with self.assertRaises(frappe.ValidationError):
+			catalog_api.create_product(
+				code="PROD-TEST-B",
+				name="Bogus Series",
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=100,
+				margin_pct=20,
+				effective_date="2026-08-01",
+				series_ref="No Such Series",
 			)
 
 	def test_update_product_status_changes_lifecycle_flags(self):
@@ -228,6 +272,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		updated = catalog_api.update_product("PROD-TEST-A", {"status": "Pulled Back"})
@@ -243,6 +288,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		pricing_api.approve_price(item="PROD-TEST-A", final_price=612, reason="Launch")
 
@@ -258,6 +304,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		self.assertEqual(product["dealerCodes"], [])
 		self.assertEqual(product["images"], [])
@@ -271,6 +318,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		updated = catalog_api.update_product(
@@ -295,6 +343,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		catalog_api.update_product(
 			"PROD-TEST-C", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "DLR-CODE-2", "sample_issued": 1}]}
@@ -371,6 +420,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		with patch.object(frappe.local, "request") as mock_request:
@@ -393,6 +443,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		with patch.object(frappe.local, "request") as mock_request:
@@ -409,6 +460,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 
 		with patch.object(frappe.local, "request") as mock_request:
@@ -425,6 +477,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		doc = frappe.get_doc("Item", "PROD-TEST-IMG-2")
 		doc.append("custom_images", {"image": "/files/a.jpg", "image_type": "Product", "is_primary": 1})
@@ -445,6 +498,7 @@ class TestProducts(FrappeTestCase):
 			purchase_cost=400,
 			margin_pct=25,
 			effective_date="2026-08-01",
+			series_ref=self.series,
 		)
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
