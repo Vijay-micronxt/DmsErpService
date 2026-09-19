@@ -31,7 +31,7 @@ CUSTOM_FIELDS = {
 			"fieldname": "custom_series_ref",
 			"fieldtype": "Link",
 			"label": "Series (Master)",
-			"options": "Series",
+			"options": "Product Series",
 			"description": "BRD C.1.1 central Series master. When set at item creation, unset attribute/UOM/threshold fields are filled in from this Series (explicit values passed at creation always win).",
 			"insert_after": "custom_series",
 		},
