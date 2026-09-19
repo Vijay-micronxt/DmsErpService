@@ -742,6 +742,22 @@ Assignment (is_visible) and sellability are two separate questions, enforced at 
 ```
 
 
+#### GET `dms_erp.catalog.dealer_catalog_api.dealer_catalog_export`
+
+**Dealer catalog export** (BRD C.14) — a printable per-dealer catalog sheet, limited to what `catalog_for` already resolves as visible-and-sellable for that dealer. Rendered as plain HTML (not a Desk Print Format — this app never redirects into `/app`), same approach as `allocation_api.render_box_stickers_html`: the frontend opens the returned document in a new tab and hands off to the browser's own Print / Save-as-PDF.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required |  |
+| `include_price` | bool | default true | price-inclusive/exclusive format toggle. When true, the price shown is *this dealer's own tier rate* (`pricing.get_price_for_dealer`), not a flat list price |
+
+**Response**
+
+A JSON string (the usual `{"message": "..."}` envelope) containing the full HTML document — a table of thumbnail / item code (+ the dealer's own mapped code, if any) / name / series / size-finish, and a price column when `include_price` is true.
+
+
 ---
 
 ## Inquiries
