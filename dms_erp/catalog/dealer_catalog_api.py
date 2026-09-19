@@ -20,10 +20,14 @@ was previously visibility-only, letting a discontinued item stay in an "effectiv
 catalog" it should never have appeared in).
 """
 
+from html import escape as _esc
+
 import frappe
 from frappe import _
+from frappe.utils import now_datetime
 
 from dms_erp.catalog.utils import is_sellable
+from dms_erp.pricing.api import get_price_for_dealer
 
 CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
@@ -108,3 +112,101 @@ def category_coverage(dealer: str, item_group: str):
 		{"parent": dealer, "item": ["in", frappe.get_all("Item", filters={"item_group": item_group}, pluck="name")]},
 	)
 	return {"total": total, "visible": visible}
+
+
+_CATALOG_EXPORT_CSS = """
+	body { margin: 0; padding: 24px; font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1b2024; }
+	h1 { font-size: 18px; margin: 0 0 2px; }
+	.meta { font-size: 12px; color: #545c61; margin: 0 0 20px; }
+	table { width: 100%; border-collapse: collapse; font-size: 12px; }
+	th, td { border-bottom: 1px solid #dce0df; padding: 8px 10px; text-align: left; vertical-align: middle; }
+	th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: #545c61; }
+	td.price, th.price { text-align: right; white-space: nowrap; }
+	img.thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; background: #f5f6f5; }
+	@media print { body { padding: 0; } }
+"""
+
+
+@frappe.whitelist(methods=["GET"])
+def dealer_catalog_export(dealer: str, include_price: str | int | bool = True) -> str:
+	"""BRD C.14 — a per-dealer catalog sheet limited to what catalog_for(dealer)
+	already resolves as visible-and-sellable for that dealer, rendered as printable
+	HTML the same way allocation_api.render_box_stickers_html renders sticker sheets
+	(plain HTML in the ordinary JSON envelope, not a Desk Print Format — this
+	API-only app never redirects into /app). `include_price` is the BRD's
+	price-inclusive/exclusive format toggle; the price shown, when included, is this
+	dealer's own tier rate (pricing.get_price_for_dealer) rather than a flat list
+	price, so a Master Dealer's export doesn't leak a Standard Dealer's number or
+	vice versa."""
+	include_price_flag = str(include_price).strip().lower() in {"1", "true", "yes"}
+	item_codes = catalog_for(dealer)
+	dealer_name = frappe.db.get_value("Customer", dealer, "customer_name") or dealer
+
+	items = (
+		frappe.get_all(
+			"Item",
+			filters={"name": ["in", item_codes]},
+			fields=["name", "item_name", "custom_size", "custom_finish", "custom_series", "item_group"],
+			order_by="item_group asc, item_name asc",
+		)
+		if item_codes
+		else []
+	)
+
+	dealer_codes = (
+		{
+			row.parent: row.customer_item_code
+			for row in frappe.get_all(
+				"Item Dealer Code", filters={"parent": ["in", item_codes], "dealer": dealer}, fields=["parent", "customer_item_code"]
+			)
+		}
+		if item_codes
+		else {}
+	)
+	primary_images = (
+		{
+			row.parent: row.image
+			for row in frappe.get_all(
+				"Product Image", filters={"parent": ["in", item_codes], "is_primary": 1}, fields=["parent", "image"]
+			)
+		}
+		if item_codes
+		else {}
+	)
+
+	price_header = "<th class=\"price\">Price / box</th>" if include_price_flag else ""
+	rows = []
+	for it in items:
+		price_cell = ""
+		if include_price_flag:
+			rate = get_price_for_dealer(it.name, dealer)
+			price_cell = f"<td class=\"price\">{f'₹{rate:,.2f}' if rate is not None else '—'}</td>"
+		image = primary_images.get(it.name)
+		thumb = f"<img class=\"thumb\" src=\"{_esc(image)}\" alt=\"\">" if image else ""
+		dealer_code = dealer_codes.get(it.name)
+		code_display = f"{_esc(it.name)}<br><span style=\"color:#8a9196\">{_esc(dealer_code)}</span>" if dealer_code else _esc(it.name)
+		rows.append(
+			f"""<tr>
+	<td>{thumb}</td>
+	<td>{code_display}</td>
+	<td>{_esc(it.item_name or '')}</td>
+	<td>{_esc(it.custom_series or '—')}</td>
+	<td>{_esc(it.custom_size or '—')} / {_esc(it.custom_finish or '—')}</td>
+	{price_cell}
+</tr>"""
+		)
+
+	table = f"""<table>
+	<thead><tr><th></th><th>Item code</th><th>Name</th><th>Series</th><th>Size / Finish</th>{price_header}</tr></thead>
+	<tbody>{''.join(rows) if rows else '<tr><td colspan="6">No items are currently visible in this dealer’s catalog.</td></tr>'}</tbody>
+</table>"""
+
+	return (
+		f"<!doctype html><html><head><meta charset='utf-8'><title>Catalog — {_esc(dealer_name)}</title>"
+		f"<style>{_CATALOG_EXPORT_CSS}</style></head><body>"
+		f"<h1>Pacific Inc — Dealer Catalog</h1>"
+		f"<p class=\"meta\">{_esc(dealer_name)} &middot; {len(items)} items"
+		f"{' &middot; price-inclusive format' if include_price_flag else ' &middot; price-exclusive format'}"
+		f" &middot; generated {now_datetime().strftime('%d %b %Y')}</p>"
+		f"{table}</body></html>"
+	)
