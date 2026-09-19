@@ -193,6 +193,50 @@ _No parameters._
 ```
 
 
+### User management
+
+Staff accounts over the native User doctype (`dms_erp.auth.user_api`). Only the four DMS roles (`DMS Sales`, `DMS Warehouse`, `DMS Purchase`, `DMS Management`) can be granted or revoked here — `System Manager` and every other ERPNext role are never assignable through this API. Creating/editing is Management/System Manager only; `list_users` is open to any staff user (for picker / salesperson / assigned-to dropdowns).
+
+#### GET `dms_erp.auth.user_api.list_users`
+
+**List staff users** — paginated; hides Administrator/Guest. Returns only id, name, enabled state and DMS role slugs.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | matches name or email |
+| `role` | string | optional | a DMS role name, e.g. `DMS Warehouse` — how a picker dropdown gets only warehouse staff |
+| `disabled` | boolean | optional | default false |
+| `limit` / `offset` | int | optional | default 20 / 0 |
+
+```json
+{ "items": [{"id": "ravi@pacific.example", "email": "ravi@pacific.example", "fullName": "Ravi Kumar", "enabled": true, "appRoles": ["warehouse"]}], "total": 1, "limit": 20, "offset": 0 }
+```
+
+#### POST `dms_erp.auth.user_api.create_user`
+
+**Create a staff user** — Management/System Manager only. Password must satisfy the site's password policy.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `email` | string | required | becomes the User id |
+| `full_name` | string | required |  |
+| `password` | string | required |  |
+| `roles` | array of string | required | at least one of the four DMS roles |
+
+**Response** — same shape as one row of list_users.
+
+#### POST `dms_erp.auth.user_api.update_user`
+
+**Edit a staff user** — Management/System Manager only. Cannot edit Administrator/Guest, cannot change your own roles or disable yourself, and only a System Manager can edit another System Manager. Disabling a user also revokes their open sessions. Other (non-DMS) roles the user holds are left untouched.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `user` | string | required | User id (email) |
+| `patch` | object | required | keys: fullName, enabled, roles (the full desired set of DMS roles) |
+
+**Response** — same shape as one row of list_users.
+
+
 ---
 
 ## Dealers
@@ -224,7 +268,7 @@ Thin read layer over native Customer — every other module already treats a dea
 ```
 
 > ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType`/`salesperson` are the only three custom fields on Customer
-> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` has no write endpoint yet (set directly on the Customer). `salesperson` is written through `set_dealer_salesperson` below.
+> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` is written through `create_dealer` / `update_dealer` below. `salesperson` is written through `set_dealer_salesperson` below.
 
 
 #### GET `dms_erp.sales.dealer_api.get_dealer`
@@ -260,6 +304,96 @@ Thin read layer over native Customer — every other module already treats a dea
 ```json
 (same shape as one row of list_dealers)
 ```
+
+
+#### POST `dms_erp.sales.dealer_api.create_dealer`
+
+**Create a dealer** (BRD MD-01) — Sales/Management only. Creates a native Customer. `group` / `territory` fall back to the site's Selling Settings defaults when omitted; ERPNext rejects a group-type Customer Group, so pass a real leaf group.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | required | rejected if a dealer with this name already exists |
+| `group` | string | optional | Customer Group (leaf) |
+| `territory` | string | optional |  |
+| `dealer_type` | string | optional | Retail / Bulk / Project |
+| `credit_limit` | number | optional | stored on the Customer Credit Limit child row for this app's company |
+| `salesperson` | string | optional | a User id |
+
+**Response**
+
+```json
+(same shape as one row of list_dealers)
+```
+
+
+#### POST `dms_erp.sales.dealer_api.update_dealer`
+
+**Edit a dealer** — Sales/Management only. Unknown keys are ignored; `classification` is deliberately not editable (recomputed nightly).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required | Customer id |
+| `patch` | object | required | keys: name, group, territory, dealerType, salesperson, creditLimit, disabled |
+
+**Response**
+
+```json
+(same shape as one row of list_dealers)
+```
+
+
+---
+
+## Suppliers
+
+Thin layer over native Supplier — every other module already treats a supplier as a bare Supplier id. `latitude`/`longitude` (BRD C.1.6) are the only custom fields (purchase/setup.py).
+
+#### GET `dms_erp.purchase.supplier_api.list_suppliers`
+
+**List / search suppliers.** Params: `search` (string, optional), `disabled` (boolean, default false).
+
+**Response** — array of `{id, name, group, country, disabled, latitude, longitude}`.
+
+#### GET `dms_erp.purchase.supplier_api.get_supplier`
+
+**Get single supplier.** Params: `supplier` (string, required). Response: same shape as one row of list_suppliers.
+
+#### POST `dms_erp.purchase.supplier_api.set_supplier_location`
+
+**Set supplier GPS** (BRD C.1.6) — Purchase/Management only. Params: `supplier`, `latitude`, `longitude` (all required).
+
+#### POST `dms_erp.purchase.supplier_api.create_supplier`
+
+**Create a supplier** (BRD MD-02) — Purchase/Management only. Creates a native Supplier. `group` falls back to the site's Buying Settings default when omitted.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | required | rejected if a supplier with this name already exists |
+| `group` | string | optional | Supplier Group |
+| `country` | string | optional |  |
+| `latitude` | number | optional |  |
+| `longitude` | number | optional |  |
+
+**Response** — same shape as one row of list_suppliers.
+
+#### POST `dms_erp.purchase.supplier_api.update_supplier`
+
+**Edit a supplier** — Purchase/Management only. Unknown keys are ignored.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `supplier` | string | required | Supplier id |
+| `patch` | object | required | keys: name, group, country, latitude, longitude, disabled |
+
+**Response** — same shape as one row of list_suppliers.
 
 
 ---
