@@ -21,6 +21,12 @@ update_product: a handful of items created before this rule existed have no Seri
 attached (grandfathered), and forcing a retroactive choice on every edit of one of
 those is a separate decision nobody's made yet.
 
+custom_series (the free-text label, e.g. "Marbella") is never itself a caller-supplied
+param on create_product or update_product's patch -- it's always derived from
+custom_series_ref, the same way ERPNext's own "fetch_from" convention keeps a
+link-derived display field in sync with its master. Letting a caller set it
+independently would let it silently drift from the Series it's supposedly labeling.
+
 hsnCode is a third category, alongside "native ERPNext field" and "our own Custom
 Field": it's neither — gst_hsn_code only exists on Item when the india_compliance
 app (GST/India tax compliance) is installed on a given site, which mandates it on
@@ -80,17 +86,21 @@ def _set_alt_item(item_code: str, alt_item_code: str | None):
 		).insert(ignore_permissions=True)
 
 
-def _apply_series_defaults(series_ref, finish, series_label, pieces_per_box, sqft_per_box, weight_per_box_kg):
-	"""BRD C.1.1: a Series is the central master an Item can be created against.
-	Explicit values passed to create_product always win — a Series only fills in
-	what the caller left unset (falsy). Thresholds have no caller-supplied
-	equivalent at all, so they always come straight from the Series."""
+def _apply_series_defaults(series_ref, finish, pieces_per_box, sqft_per_box, weight_per_box_kg):
+	"""BRD C.1.1: a Series is the central master an Item is created against.
+	Explicit attribute values passed to create_product still win over the Series'
+	own — a Series only fills in what the caller left unset (falsy) for those.
+	The series label itself and both thresholds have no caller-supplied override
+	at all: they always come straight from the Series, so the label can never
+	drift out of sync with the master it's linked to (mirrors ERPNext's own
+	"fetch_from" convention for link-derived display fields)."""
 	bulk_qty_threshold = 0
 	retail_qty_threshold = 0
+	series_label = None
 	if series_ref:
 		series_doc = frappe.get_doc("Series", series_ref)
 		finish = finish or series_doc.finish
-		series_label = series_label or series_doc.series_name
+		series_label = series_doc.series_name
 		pieces_per_box = pieces_per_box or series_doc.pieces_per_box
 		sqft_per_box = sqft_per_box or series_doc.sqft_per_box
 		weight_per_box_kg = weight_per_box_kg or series_doc.weight_per_box_kg
@@ -240,7 +250,6 @@ def create_product(
 	size: str | None = None,
 	finish: str | None = None,
 	color: str | None = None,
-	series: str | None = None,
 	swatch: str | None = None,
 	status: str = "Active",
 	pieces_per_box: float = 0,
@@ -263,8 +272,11 @@ def create_product(
 	if not series_ref or not frappe.db.exists("Series", series_ref):
 		frappe.throw(_("A Series master is required to create a new item."), frappe.ValidationError)
 
-	finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold = _apply_series_defaults(
-		series_ref, finish, series, pieces_per_box, sqft_per_box, weight_per_box_kg
+	# The series label isn't a caller-supplied param at all -- it's always derived from the
+	# Series master itself, so it can never drift out of sync with the link (see
+	# _apply_series_defaults). Since series_ref is mandatory above, series_label is always set.
+	finish, series_label, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold = _apply_series_defaults(
+		series_ref, finish, pieces_per_box, sqft_per_box, weight_per_box_kg
 	)
 
 	item = frappe.get_doc(
@@ -278,7 +290,7 @@ def create_product(
 			"custom_size": size,
 			"custom_finish": finish,
 			"custom_color": color,
-			"custom_series": series,
+			"custom_series": series_label,
 			"custom_series_ref": series_ref,
 			"custom_bulk_qty_threshold": bulk_qty_threshold,
 			"custom_retail_qty_threshold": retail_qty_threshold,
@@ -315,13 +327,15 @@ def update_product(item: str, patch: dict):
 	if "status" in patch and patch["status"] not in DISCONTINUATION_STATUSES:
 		frappe.throw(_("Invalid status: {0}").format(patch["status"]), frappe.ValidationError)
 
+	# "series" (the display label) is deliberately not in this map -- like create_product, it's
+	# never caller-settable directly, only ever derived from seriesRef below, so it can't drift
+	# out of sync with the master it's linked to.
 	field_map = {
 		"name": "item_name",
 		"category": "item_group",
 		"size": "custom_size",
 		"finish": "custom_finish",
 		"color": "custom_color",
-		"series": "custom_series",
 		"swatch": "custom_swatch_color",
 		"status": "custom_discontinuation_status",
 		"piecesPerBox": "custom_pieces_per_box",
@@ -336,6 +350,9 @@ def update_product(item: str, patch: dict):
 		"retailQtyThreshold": "custom_retail_qty_threshold",
 	}
 
+	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Series", patch["seriesRef"]):
+		frappe.throw(_("Unknown Series master: {0}").format(patch["seriesRef"]), frappe.ValidationError)
+
 	doc = frappe.get_doc("Item", item)
 	for key, value in patch.items():
 		if key == "altItemId":
@@ -344,6 +361,10 @@ def update_product(item: str, patch: dict):
 		fieldname = field_map.get(key)
 		if fieldname:
 			doc.set(fieldname, value)
+
+	if "seriesRef" in patch and patch["seriesRef"]:
+		doc.custom_series = frappe.db.get_value("Series", patch["seriesRef"], "series_name")
+
 	doc.save(ignore_permissions=True)
 
 	return _serialize(doc)
