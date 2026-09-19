@@ -121,6 +121,40 @@ class TestAllocation(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			allocation_api.print_box_stickers(allocation["id"], copies_per_box=0)
 
+	def test_render_box_stickers_html_yields_one_card_per_physical_box(self):
+		allocation = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-STICKER-HTML",
+			total_qty=3,
+			lines=[{"bay": "ALLOC-A-01", "qty": 3}],
+			supplier=self.supplier,
+		)
+
+		html = allocation_api.render_box_stickers_html(allocation["id"], copies_per_box=2)
+		self.assertEqual(html.count('class="sticker"'), 6)  # 3 boxes x 2 copies
+		self.assertIn(self.item, html)
+		self.assertIn("ALLOC-BATCH-STICKER-HTML", html)
+		self.assertIn("data:image/png;base64,", html)
+
+	def test_render_box_stickers_html_escapes_item_name(self):
+		frappe.db.set_value("Item", self.item, "item_name", "Statuario <script>alert(1)</script>")
+		allocation = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-STICKER-ESCAPE",
+			total_qty=1,
+			lines=[{"bay": "ALLOC-A-01", "qty": 1}],
+			supplier=self.supplier,
+		)
+
+		html = allocation_api.render_box_stickers_html(allocation["id"])
+		self.assertNotIn("<script>", html)
+		self.assertIn("&lt;script&gt;", html)
+
+	def test_render_box_stickers_html_requires_allocate_role(self):
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			allocation_api.render_box_stickers_html("ALLOC-BATCH-STICKER-HTML")
+
 	def test_create_allocation_rejects_mismatched_line_total(self):
 		with self.assertRaises(frappe.ValidationError):
 			allocation_api.create_allocation(

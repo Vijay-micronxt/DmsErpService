@@ -23,6 +23,7 @@ allocation's own fields, so there's nothing here worth persisting.
 """
 
 import base64
+from html import escape as _esc
 from io import BytesIO
 
 import frappe
@@ -301,6 +302,53 @@ def print_box_stickers(allocation: str, copies_per_box: int = 1):
 		box_count = int(row["qty"]) * int(copies_per_box)
 		stickers.extend([row] * box_count)
 	return {"allocation": allocation, "count": len(stickers), "stickers": stickers}
+
+
+_BOX_STICKER_CSS = """
+	@page { size: 4in 2in; margin: 0.08in; }
+	* { box-sizing: border-box; }
+	body { margin: 0; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+	.sticker { width: 4in; height: 2in; padding: 0.1in 0.14in; display: flex; gap: 0.12in; page-break-after: always; }
+	.sticker:last-child { page-break-after: auto; }
+	.sticker .qr { width: 1in; height: 1in; flex-shrink: 0; }
+	.sticker .info { font-size: 9pt; line-height: 1.35; overflow: hidden; }
+	.sticker .info .code { font-size: 12pt; font-weight: 700; }
+	.sticker .info .name { font-size: 10pt; font-weight: 600; }
+	.sticker .info .row .k { color: #555; }
+"""
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def render_box_stickers_html(allocation: str, copies_per_box: int = 1) -> str:
+	"""BRD C.6.4's actual sticker layout — print_box_stickers' data (one entry per
+	physical box) rendered as a real printable HTML sheet, sized to a standard 4x2in
+	label via @page CSS. Returned as a plain HTML string in the ordinary JSON envelope
+	(not a Desk Print Format, which this API-only app deliberately avoids — see the
+	"no request from this app should ever redirect into /app" note in hooks.py) so the
+	frontend can open it in a new tab/window and hand off to the browser's own
+	Print / Save-as-PDF, which is also where the BRD's setup-time label size/printer
+	confirmation with Pacific ultimately gets applied."""
+	payload = print_box_stickers(allocation, copies_per_box)
+	cards = []
+	for s in payload["stickers"]:
+		weight = s.get("weightPerBoxKg")
+		weight_label = f"{weight} kg" if weight is not None else "—"
+		dom = s.get("dateOfManufacture")
+		cards.append(
+			f"""<div class="sticker">
+	<img class="qr" src="{s['qrCode']}" alt="QR">
+	<div class="info">
+		<div class="code">{_esc(s['itemCode'])}</div>
+		<div class="name">{_esc(s.get('itemName') or '')}</div>
+		<div class="row"><span class="k">Size/Finish:</span> {_esc(s.get('size') or '—')} / {_esc(s.get('finish') or '—')}</div>
+		<div class="row"><span class="k">Batch:</span> {_esc(s['batchNumber'] or '')}</div>
+		<div class="row"><span class="k">DOM:</span> {_esc(str(dom) if dom else '—')}</div>
+		<div class="row"><span class="k">Weight:</span> {weight_label}</div>
+		<div class="row"><span class="k">Bay:</span> {_esc(s.get('bayCode') or '')}</div>
+	</div>
+</div>"""
+		)
+	return f"<!doctype html><html><head><meta charset='utf-8'><title>Box Stickers</title><style>{_BOX_STICKER_CSS}</style></head><body>{''.join(cards)}</body></html>"
 
 
 @frappe.whitelist(methods=["GET"])
