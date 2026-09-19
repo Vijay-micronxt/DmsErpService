@@ -15,15 +15,20 @@ adds — see pricing.dealer_classification and sales.order_channel for what read
 and writes them. Both are read-only here; classification is recomputed nightly and
 dealerType has no write endpoint of its own yet.
 
-`salesperson` (BRD C.12.3 — ownership of the dealer relationship) is the one field
-this module does write: `set_dealer_salesperson`. Targets/performance-vs-target
-reporting is a deliberate follow-up, not built here — see sales/setup.py's
-custom_salesperson field description for why.
+`salesperson` (BRD C.12.3 — ownership of the dealer relationship) is written by
+`set_dealer_salesperson`. Targets/performance-vs-target reporting is a deliberate
+follow-up, not built here — see sales/setup.py's custom_salesperson field description
+for why.
+
+`create_dealer` / `update_dealer` cover the rest of the master-data write side (BRD
+MD-01): name, group, territory, dealer type, credit limit, salesperson, disabled.
+`classification` is deliberately not settable here — it is recomputed nightly.
 """
 
 import frappe
 from frappe import _
 
+from dms_erp.sales.order_channel import DEALER_TYPES
 from dms_erp.warehouse.utils import default_company
 
 SALES_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -31,7 +36,7 @@ SALES_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 
 def _assert_can_manage_dealers():
 	if not set(frappe.get_roles(frappe.session.user)) & SALES_WRITE_ROLES:
-		frappe.throw(_("Only Sales or Management can update dealer assignment."), frappe.PermissionError)
+		frappe.throw(_("Only Sales or Management can manage dealers."), frappe.PermissionError)
 
 
 def _serialize(
@@ -131,3 +136,83 @@ def set_dealer_salesperson(dealer: str, salesperson: str | None):
 
 	frappe.db.set_value("Customer", dealer, "custom_salesperson", salesperson)
 	return get_dealer(dealer)
+
+
+def _validate_dealer_type(dealer_type: str | None):
+	if dealer_type and dealer_type not in DEALER_TYPES:
+		frappe.throw(_("Invalid dealer type: {0}").format(dealer_type), frappe.ValidationError)
+
+
+def _set_credit_limit(doc, credit_limit: float | None):
+	company = default_company()
+	row = next((r for r in doc.get("credit_limits") or [] if r.company == company), None)
+	if row:
+		row.credit_limit = credit_limit or 0
+	else:
+		doc.append("credit_limits", {"company": company, "credit_limit": credit_limit or 0})
+
+
+@frappe.whitelist(methods=["POST"])
+def create_dealer(
+	name: str,
+	group: str | None = None,
+	territory: str | None = None,
+	dealer_type: str | None = None,
+	credit_limit: float | None = None,
+	salesperson: str | None = None,
+):
+	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
+	the site's Selling Settings defaults when omitted; a group-type Customer Group is
+	rejected by ERPNext itself, so pass a real leaf group."""
+	_assert_can_manage_dealers()
+
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("A dealer name is required."), frappe.ValidationError)
+	if frappe.db.exists("Customer", {"customer_name": name}):
+		frappe.throw(_("A dealer named {0} already exists.").format(name), frappe.DuplicateEntryError)
+	_validate_dealer_type(dealer_type)
+
+	values = {"doctype": "Customer", "customer_name": name, "customer_type": "Company"}
+	if group:
+		values["customer_group"] = group
+	if territory:
+		values["territory"] = territory
+	if dealer_type:
+		values["custom_dealer_type"] = dealer_type
+	if salesperson:
+		values["custom_salesperson"] = salesperson
+
+	doc = frappe.get_doc(values)
+	if credit_limit is not None:
+		_set_credit_limit(doc, credit_limit)
+	doc.insert(ignore_permissions=True)
+	return get_dealer(doc.name)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_dealer(dealer: str, patch: dict):
+	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled.
+	Anything else — including `classification`, which is recomputed nightly — is ignored."""
+	_assert_can_manage_dealers()
+
+	field_map = {
+		"name": "customer_name",
+		"group": "customer_group",
+		"territory": "territory",
+		"dealerType": "custom_dealer_type",
+		"salesperson": "custom_salesperson",
+	}
+	if "dealerType" in patch:
+		_validate_dealer_type(patch["dealerType"])
+
+	doc = frappe.get_doc("Customer", dealer)
+	for key, value in patch.items():
+		if key in field_map:
+			doc.set(field_map[key], value)
+		elif key == "creditLimit":
+			_set_credit_limit(doc, value)
+		elif key == "disabled":
+			doc.disabled = 1 if value else 0
+	doc.save(ignore_permissions=True)
+	return get_dealer(doc.name)
