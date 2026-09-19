@@ -20,8 +20,8 @@ class TestPricingApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		if frappe.db.exists("Series", "Pricing Test Series"):
-			frappe.delete_doc("Series", "Pricing Test Series", force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", "Pricing Test Series"):
+			frappe.delete_doc("Product Series", "Pricing Test Series", force=True, ignore_permissions=True)
 
 	def test_list_price_records_is_paginated(self):
 		before = pricing_api.list_price_records()

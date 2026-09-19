@@ -25,8 +25,8 @@ class TestOrderApi(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		if frappe.db.exists("Series", "Order Test Series"):
-			frappe.delete_doc("Series", "Order Test Series", force=True, ignore_permissions=True)
+		if frappe.db.exists("Product Series", "Order Test Series"):
+			frappe.delete_doc("Product Series", "Order Test Series", force=True, ignore_permissions=True)
 
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")

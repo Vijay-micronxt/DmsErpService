@@ -98,7 +98,7 @@ def _apply_series_defaults(series_ref, finish, pieces_per_box, sqft_per_box, wei
 	retail_qty_threshold = 0
 	series_label = None
 	if series_ref:
-		series_doc = frappe.get_doc("Series", series_ref)
+		series_doc = frappe.get_doc("Product Series", series_ref)
 		finish = finish or series_doc.finish
 		series_label = series_doc.series_name
 		pieces_per_box = pieces_per_box or series_doc.pieces_per_box
@@ -269,7 +269,7 @@ def create_product(
 	# module docstring). update_product still allows leaving seriesRef unset when
 	# editing one of those, since retroactively forcing a choice there is a separate,
 	# not-yet-made call.
-	if not series_ref or not frappe.db.exists("Series", series_ref):
+	if not series_ref or not frappe.db.exists("Product Series", series_ref):
 		frappe.throw(_("A Series master is required to create a new item."), frappe.ValidationError)
 
 	# The series label isn't a caller-supplied param at all -- it's always derived from the
@@ -350,7 +350,7 @@ def update_product(item: str, patch: dict):
 		"retailQtyThreshold": "custom_retail_qty_threshold",
 	}
 
-	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Series", patch["seriesRef"]):
+	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Product Series", patch["seriesRef"]):
 		frappe.throw(_("Unknown Series master: {0}").format(patch["seriesRef"]), frappe.ValidationError)
 
 	doc = frappe.get_doc("Item", item)
@@ -363,7 +363,7 @@ def update_product(item: str, patch: dict):
 			doc.set(fieldname, value)
 
 	if "seriesRef" in patch and patch["seriesRef"]:
-		doc.custom_series = frappe.db.get_value("Series", patch["seriesRef"], "series_name")
+		doc.custom_series = frappe.db.get_value("Product Series", patch["seriesRef"], "series_name")
 
 	doc.save(ignore_permissions=True)
 

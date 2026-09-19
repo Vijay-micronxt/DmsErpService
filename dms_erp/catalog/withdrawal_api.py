@@ -51,7 +51,7 @@ def _series_with_thresholds() -> dict[str, "frappe._dict"]:
 	unset Int field and an intentionally-blank one aren't reliably distinguishable at
 	the DB level, and a 0/unset threshold must never be read as "always breached"."""
 	rows = frappe.get_all(
-		"Series",
+		"Product Series",
 		fields=[
 			"name",
 			"withdrawal_no_sale_days_threshold",

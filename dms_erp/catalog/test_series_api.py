@@ -16,8 +16,8 @@ class TestSeriesApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		for name in ("Series Test Marbello", "Series Test Granito"):
-			if frappe.db.exists("Series", name):
-				frappe.delete_doc("Series", name, force=True, ignore_permissions=True)
+			if frappe.db.exists("Product Series", name):
+				frappe.delete_doc("Product Series", name, force=True, ignore_permissions=True)
 
 	def test_create_series_and_get(self):
 		created = series_api.create_series(
