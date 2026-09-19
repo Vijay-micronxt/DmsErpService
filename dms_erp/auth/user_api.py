@@ -91,6 +91,7 @@ def create_user(email: str, full_name: str, password: str, roles: list[str]):
 		frappe.throw(_("email, full_name and password are required."), frappe.ValidationError)
 	if not roles:
 		frappe.throw(_("At least one role is required, otherwise this user cannot log in."), frappe.ValidationError)
+	roles = list(dict.fromkeys(roles))
 	_validate_roles(roles)
 	if frappe.db.exists("User", email):
 		frappe.throw(_("A user with email {0} already exists.").format(email), frappe.DuplicateEntryError)
@@ -132,7 +133,12 @@ def update_user(user: str, patch: dict):
 		doc.first_name = patch["fullName"].strip()
 
 	if "roles" in patch:
-		wanted = list(patch["roles"] or [])
+		wanted = list(dict.fromkeys(patch["roles"] or []))
+		if not wanted:
+			frappe.throw(
+				_("At least one role is required, otherwise this user cannot log in. To deactivate a user, set enabled to false."),
+				frappe.ValidationError,
+			)
 		_validate_roles(wanted)
 		doc.set("roles", [row for row in doc.roles if row.role not in ASSIGNABLE_ROLES or row.role in wanted])
 		held = {row.role for row in doc.roles}

@@ -46,6 +46,11 @@ class TestUserApi(FrappeTestCase):
 		self.assertFalse(user_api.update_user("ua.update@pacific.example", {"enabled": False})["enabled"])
 		self.assertTrue(frappe.db.get_value("Auth Session", {"refresh_token_hash": "ua-test-hash"}, "revoked_at"))
 
+	def test_update_user_refuses_an_empty_role_set(self):
+		self._make("ua.empty@pacific.example")
+		with self.assertRaises(frappe.ValidationError):
+			user_api.update_user("ua.empty@pacific.example", {"roles": []})
+
 	def test_list_users_filters_by_role_and_hides_system_accounts(self):
 		self._make("ua.list@pacific.example", ("DMS Warehouse",))
 		ids = [u["id"] for u in user_api.list_users(role="DMS Warehouse")["items"]]

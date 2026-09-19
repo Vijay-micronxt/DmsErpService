@@ -169,7 +169,8 @@ def create_dealer(
 	name = (name or "").strip()
 	if not name:
 		frappe.throw(_("A dealer name is required."), frappe.ValidationError)
-	if frappe.db.exists("Customer", {"customer_name": name}):
+	# A renamed dealer keeps its original id, so the name can be taken as an id even when no dealer is displayed under it.
+	if frappe.db.exists("Customer", name) or frappe.db.exists("Customer", {"customer_name": name}):
 		frappe.throw(_("A dealer named {0} already exists.").format(name), frappe.DuplicateEntryError)
 	_validate_dealer_type(dealer_type)
 
@@ -207,6 +208,16 @@ def update_dealer(dealer: str, patch: dict):
 		_validate_dealer_type(patch["dealerType"])
 
 	doc = frappe.get_doc("Customer", dealer)
+	if "name" in patch:
+		new_name = (patch["name"] or "").strip()
+		if not new_name:
+			frappe.throw(_("A dealer name is required."), frappe.ValidationError)
+		taken = frappe.db.exists("Customer", {"customer_name": new_name, "name": ["!=", dealer]}) or (
+			new_name != dealer and frappe.db.exists("Customer", new_name)
+		)
+		if taken:
+			frappe.throw(_("A dealer named {0} already exists.").format(new_name), frappe.DuplicateEntryError)
+		patch = {**patch, "name": new_name}
 	for key, value in patch.items():
 		if key in field_map:
 			doc.set(field_map[key], value)

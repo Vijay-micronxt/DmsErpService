@@ -34,6 +34,19 @@ class TestDealerWriteApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			dealer_api.create_dealer("DW Bad Type Co", group=GROUP, dealer_type="Wholesale")
 
+	def test_create_dealer_rejects_the_old_name_of_a_renamed_dealer(self):
+		dealer_api.create_dealer("DW Rename Co", group=GROUP)
+		dealer_api.update_dealer("DW Rename Co", {"name": "DW Renamed Co"})
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.create_dealer("DW Rename Co", group=GROUP)
+
+	def test_update_dealer_rejects_renaming_to_a_name_another_dealer_uses(self):
+		dealer_api.create_dealer("DW Rename A", group=GROUP)
+		dealer_api.create_dealer("DW Rename B", group=GROUP)
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.update_dealer("DW Rename B", {"name": "DW Rename A"})
+		self.assertEqual(dealer_api.update_dealer("DW Rename B", {"name": "DW Rename B"})["name"], "DW Rename B")
+
 	def test_update_dealer_changes_fields_but_never_classification(self):
 		dealer_api.create_dealer("DW Update Co", group=GROUP)
 		updated = dealer_api.update_dealer(

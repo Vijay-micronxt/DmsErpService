@@ -87,7 +87,8 @@ def create_supplier(
 	name = (name or "").strip()
 	if not name:
 		frappe.throw(_("A supplier name is required."), frappe.ValidationError)
-	if frappe.db.exists("Supplier", {"supplier_name": name}):
+	# A renamed supplier keeps its original id, so the name can be taken as an id even when no supplier is displayed under it.
+	if frappe.db.exists("Supplier", name) or frappe.db.exists("Supplier", {"supplier_name": name}):
 		frappe.throw(_("A supplier named {0} already exists.").format(name), frappe.DuplicateEntryError)
 
 	values = {"doctype": "Supplier", "supplier_name": name}
@@ -119,6 +120,16 @@ def update_supplier(supplier: str, patch: dict):
 	}
 
 	doc = frappe.get_doc("Supplier", supplier)
+	if "name" in patch:
+		new_name = (patch["name"] or "").strip()
+		if not new_name:
+			frappe.throw(_("A supplier name is required."), frappe.ValidationError)
+		taken = frappe.db.exists("Supplier", {"supplier_name": new_name, "name": ["!=", supplier]}) or (
+			new_name != supplier and frappe.db.exists("Supplier", new_name)
+		)
+		if taken:
+			frappe.throw(_("A supplier named {0} already exists.").format(new_name), frappe.DuplicateEntryError)
+		patch = {**patch, "name": new_name}
 	for key, value in patch.items():
 		if key in field_map:
 			doc.set(field_map[key], value)

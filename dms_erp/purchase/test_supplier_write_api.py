@@ -19,6 +19,19 @@ class TestSupplierWriteApi(FrappeTestCase):
 		with self.assertRaises(frappe.DuplicateEntryError):
 			supplier_api.create_supplier("SW Dup Co")
 
+	def test_create_supplier_rejects_the_old_name_of_a_renamed_supplier(self):
+		supplier_api.create_supplier("SW Rename Co")
+		supplier_api.update_supplier("SW Rename Co", {"name": "SW Renamed Again Co"})
+		with self.assertRaises(frappe.DuplicateEntryError):
+			supplier_api.create_supplier("SW Rename Co")
+
+	def test_update_supplier_rejects_renaming_to_a_name_another_supplier_uses(self):
+		supplier_api.create_supplier("SW Rename A")
+		supplier_api.create_supplier("SW Rename B")
+		with self.assertRaises(frappe.DuplicateEntryError):
+			supplier_api.update_supplier("SW Rename B", {"name": "SW Rename A"})
+		self.assertEqual(supplier_api.update_supplier("SW Rename B", {"name": "SW Rename B"})["name"], "SW Rename B")
+
 	def test_update_supplier_changes_fields_and_disables(self):
 		supplier_api.create_supplier("SW Update Co")
 		updated = supplier_api.update_supplier("SW Update Co", {"name": "SW Renamed Co", "latitude": 21.5, "disabled": True})
