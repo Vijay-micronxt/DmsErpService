@@ -405,6 +405,41 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(product["finish"], "Matte")
 		self.assertEqual(product["piecesPerBox"], 4)
 
+	def test_update_product_series_ref_rederives_the_label(self):
+		other_series = series_api.create_series(series_name="Product Test Other Series", finish="Matte")["id"]
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+
+		updated = catalog_api.update_product("PROD-TEST-A", {"seriesRef": other_series})
+
+		self.assertEqual(updated["seriesRef"], other_series)
+		self.assertEqual(updated["series"], "Product Test Other Series")
+
+		frappe.delete_doc("Series", other_series, force=True, ignore_permissions=True)
+
+	def test_update_product_rejects_an_unknown_series_ref(self):
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+
+		with self.assertRaises(frappe.ValidationError):
+			catalog_api.update_product("PROD-TEST-A", {"seriesRef": "No Such Series"})
+
 	def _fake_upload(self, filename=b"fake-image-bytes", name="swatch.jpg"):
 		fake_file = MagicMock()
 		fake_file.filename = name
