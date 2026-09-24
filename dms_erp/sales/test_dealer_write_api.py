@@ -72,6 +72,20 @@ class TestDealerWriteApi(FrappeTestCase):
 		updated = dealer_api.update_dealer("DW Phone Update Co", {"phone": "09620204657"})
 		self.assertEqual(updated["phone"], "9620204657")
 
+	def test_create_dealer_defaults_to_price_visible_and_can_hide_it(self):
+		default_dealer = dealer_api.create_dealer("DW Price Default Co", group=GROUP)
+		self.assertTrue(default_dealer["priceVisible"])
+
+		hidden_dealer = dealer_api.create_dealer("DW Price Hidden Co", group=GROUP, price_visible=False)
+		self.assertFalse(hidden_dealer["priceVisible"])
+
+	def test_update_dealer_toggles_price_visible(self):
+		dealer_api.create_dealer("DW Price Toggle Co", group=GROUP)
+		hidden = dealer_api.update_dealer("DW Price Toggle Co", {"priceVisible": False})
+		self.assertFalse(hidden["priceVisible"])
+		shown = dealer_api.update_dealer("DW Price Toggle Co", {"priceVisible": True})
+		self.assertTrue(shown["priceVisible"])
+
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

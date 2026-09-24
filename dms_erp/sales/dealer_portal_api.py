@@ -43,14 +43,22 @@ def _catalog_entry(item_code: str, dealer: str) -> dict:
 	"""A trimmed, dealer-safe view of catalog.api.get_product's full serialization --
 	drops dealerCodes (every dealer's own item code for this item, including other
 	dealers') down to just this dealer's own code, and adds the top-3 on-hand
-	batches BRD C.13.1 wants shown at item-detail time."""
+	batches BRD C.13.1 wants shown at item-detail time.
+
+	`price` is null when this dealer's custom_price_visible is off (BRD C.13.1 --
+	"price (if enabled for that dealer)") -- staff-facing screens are unaffected,
+	since they never call through here."""
 	product = get_product(item_code)
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
 	product["dealerCode"] = own_code
-	product["price"] = get_price_for_dealer(item_code, dealer)
+	product["price"] = get_price_for_dealer(item_code, dealer) if _price_visible(dealer) else None
 	product["topBatches"] = top_batches(item_code)
 	return product
+
+
+def _price_visible(dealer: str) -> bool:
+	return bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
 
 
 @frappe.whitelist(methods=["GET"])
