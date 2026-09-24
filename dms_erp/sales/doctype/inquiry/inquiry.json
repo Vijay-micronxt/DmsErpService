@@ -20,7 +20,8 @@
   "assigned_to",
   "whatsapp_replied",
   "remarks",
-  "customer_po"
+  "customer_po",
+  "linked_sales_order"
  ],
  "fields": [
   {
@@ -115,6 +116,14 @@
    "fieldname": "customer_po",
    "fieldtype": "Data",
    "label": "Customer PO Number"
+  },
+  {
+   "description": "BRD D.3 — set once, at the same moment status moves to \"Converted to Order\" (sales.order_api._create_order), so the conversion is traceable from the Inquiry side rather than only discoverable by searching the Sales Order for a matching custom_source_ref.",
+   "fieldname": "linked_sales_order",
+   "fieldtype": "Link",
+   "label": "Linked Sales Order",
+   "options": "Sales Order",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

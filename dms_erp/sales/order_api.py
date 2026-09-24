@@ -164,9 +164,10 @@ def _create_order(
 		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
 	)
 	if inquiry:
-		frappe.db.set_value(
-			"Inquiry", inquiry, {"status": "Converted to Order", "customer_po": customer_po} if customer_po else {"status": "Converted to Order"}
-		)
+		values = {"status": "Converted to Order", "linked_sales_order": order["id"]}
+		if customer_po:
+			values["customer_po"] = customer_po
+		frappe.db.set_value("Inquiry", inquiry, values)
 
 	return order
 

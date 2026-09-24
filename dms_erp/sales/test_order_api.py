@@ -45,7 +45,9 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["sourceRef"], inquiry["id"])
 		self.assertEqual(order["stage"], "Confirmed")
 		self.assertEqual(order["channel"], "Retail")
-		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+		converted = inquiry_api.get_inquiry(inquiry["id"])
+		self.assertEqual(converted["status"], "Converted to Order")
+		self.assertEqual(converted["linkedSalesOrder"], order["id"])
 
 	def test_create_order_uses_the_dealers_tiered_price_not_the_flat_dealer_list(self):
 		series_api.create_series(
