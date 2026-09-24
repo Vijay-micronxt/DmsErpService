@@ -1,9 +1,14 @@
 """Dealer-portal auth (BRD C.13) — the "no OTP, reserved for the dealer-facing app"
 gap auth/api.py's own docstring already flagged. Phone + OTP, not username/password
 (dealers never get a password at all): request_otp finds the Customer whose
-custom_phone matches, issues a short numeric code, and delivers it over WhatsApp
-(comms.api._send_message) the same way every other dealer-facing message in this
-app goes out. verify_otp checks it and, on success, finds-or-creates that dealer's
+custom_phone matches, issues a short numeric code, and actually delivers it over
+WhatsApp via whats91's Meta-channel Authentication template (comms.whats91.
+send_otp_template — see that module for the required site_config keys).
+comms.api._send_message is still called alongside it, purely as the audit-log
+system of record every other WhatsApp message in this app goes through; it does
+not itself deliver anything (see its own module docstring) and a whats91 failure
+there is logged, never surfaced to the caller. verify_otp checks it and, on
+success, finds-or-creates that dealer's
 one portal User account (role DMS Dealer, User.custom_dealer linking back to the
 Customer) and issues the exact same access/refresh token pair staff logins get
 (auth.api._issue_tokens) — the JWT middleware doesn't care which kind of account it
@@ -29,6 +34,7 @@ from frappe.utils import add_to_date, now_datetime
 from dms_erp.auth.api import _issue_tokens
 from dms_erp.auth.utils import hash_token
 from dms_erp.comms.api import _send_message
+from dms_erp.comms.whats91 import send_otp_template
 
 OTP_LENGTH = 6
 OTP_TTL_MINUTES = 5
@@ -91,6 +97,10 @@ def request_otp(phone: str):
 					"otp_hash": hash_token(code),
 				}
 			).insert(ignore_permissions=True)
+			# The real send -- failure here (unconfigured site, whats91 outage, an
+			# invalid phone) is logged inside send_otp_template and never raises, so
+			# it can't change this endpoint's response shape (see module docstring).
+			send_otp_template(phone, code)
 			_send_message(
 				dealer,
 				_("Your Pacific Inc verification code is {0}. It expires in {1} minutes.").format(code, OTP_TTL_MINUTES),
