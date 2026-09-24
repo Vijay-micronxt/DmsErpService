@@ -49,6 +49,7 @@ def _serialize(
 	classification: str | None = None,
 	dealer_type: str | None = None,
 	salesperson: str | None = None,
+	phone: str | None = None,
 ) -> dict:
 	return {
 		"id": name,
@@ -60,6 +61,8 @@ def _serialize(
 		"classification": classification,
 		"dealerType": dealer_type,
 		"salesperson": salesperson,
+		# BRD C.13 — the dealer portal's login identifier (see auth.dealer_api).
+		"phone": phone,
 	}
 
 
@@ -91,6 +94,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_dealer_classification",
 			"custom_dealer_type",
 			"custom_salesperson",
+			"custom_phone",
 		],
 		order_by="customer_name asc",
 	)
@@ -106,6 +110,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_dealer_classification,
 			r.custom_dealer_type,
 			r.custom_salesperson,
+			r.custom_phone,
 		)
 		for r in rows
 	]
@@ -125,6 +130,7 @@ def get_dealer(dealer: str):
 		doc.custom_dealer_classification,
 		doc.custom_dealer_type,
 		doc.custom_salesperson,
+		doc.custom_phone,
 	)
 
 
@@ -160,6 +166,7 @@ def create_dealer(
 	dealer_type: str | None = None,
 	credit_limit: float | None = None,
 	salesperson: str | None = None,
+	phone: str | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -183,6 +190,8 @@ def create_dealer(
 		values["custom_dealer_type"] = dealer_type
 	if salesperson:
 		values["custom_salesperson"] = salesperson
+	if phone:
+		values["custom_phone"] = phone
 
 	doc = frappe.get_doc(values)
 	if credit_limit is not None:
@@ -193,7 +202,7 @@ def create_dealer(
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
-	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled.
+	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled, phone.
 	Anything else — including `classification`, which is recomputed nightly — is ignored."""
 	_assert_can_manage_dealers()
 
@@ -203,6 +212,7 @@ def update_dealer(dealer: str, patch: dict):
 		"territory": "territory",
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
+		"phone": "custom_phone",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])

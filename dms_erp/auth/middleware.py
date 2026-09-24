@@ -6,14 +6,39 @@ cookie-backed sessions) never engages either. If no/garbage Authorization header
 present we simply do nothing and leave the request as Guest; frappe.whitelist's own
 allow_guest=False check then rejects any protected staff-app endpoint with a clean
 PermissionError, so there's no need to raise here.
+
+BRD C.13 / Part B.2: "[the middleware] restricts access... enforces dealer-wise
+catalog/pricing/eligibility... exposes only required APIs". A dealer-portal account
+(role DMS Dealer, no staff role) resolving here is confined to the dealer-portal API
+surface below -- everything else in this app (list_inquiries, list_orders, get_dealer,
+the whole staff read surface) has never needed a role check on its GET endpoints,
+because until dealer accounts existed only staff could ever log in at all. That
+assumption breaks the moment a dealer session exists, so this is the one place that
+enforces it, rather than auditing and re-gating every read endpoint across the app.
 """
 
 import frappe
 import jwt as pyjwt
 
 from dms_erp.auth import jwt_utils
+from dms_erp.auth.api import STAFF_ROLES
 
 BEARER_PREFIX = "Bearer "
+
+DEALER_PORTAL_PREFIXES = (
+	"dms_erp.auth.dealer_api.",
+	"dms_erp.sales.dealer_portal_api.",
+)
+
+
+def _enforce_dealer_scope(request, user: str):
+	roles = set(frappe.get_roles(user))
+	if "DMS Dealer" not in roles or roles & set(STAFF_ROLES):
+		return  # not a dealer-only account -- the ordinary staff role gates apply as normal
+
+	method_path = request.path.removeprefix("/api/method/")
+	if not method_path.startswith(DEALER_PORTAL_PREFIXES):
+		frappe.throw("This account can only access the dealer portal.", frappe.PermissionError)
 
 
 def authenticate_request():
@@ -51,3 +76,5 @@ def authenticate_request():
 	form_dict = frappe.local.form_dict
 	frappe.set_user(user)
 	frappe.local.form_dict = form_dict
+
+	_enforce_dealer_scope(request, user)
