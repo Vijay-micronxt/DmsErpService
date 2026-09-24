@@ -62,6 +62,7 @@ def _serialize(doc) -> dict:
 		"assignedTo": doc.assigned_to,
 		"remarks": doc.remarks,
 		"whatsappReplied": bool(doc.whatsapp_replied),
+		"customerPo": doc.customer_po,
 	}
 
 
@@ -107,8 +108,7 @@ def get_inquiry(inquiry: str):
 	return _serialize(frappe.get_doc("Inquiry", inquiry))
 
 
-@frappe.whitelist(methods=["POST"])
-def create_inquiry(
+def _create_inquiry(
 	dealer: str,
 	item: str,
 	qty: float,
@@ -117,8 +117,16 @@ def create_inquiry(
 	follow_up_date=None,
 	assigned_to: str | None = None,
 	remarks: str | None = None,
-):
-	_assert_can_manage_inquiries()
+) -> dict:
+	"""Unguarded core of create_inquiry -- also called directly by
+	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
+	its own dealer identity, never a caller-supplied one) is the authorization for
+	that path, not INQUIRY_WRITE_ROLES."""
+	if assigned_to is None and set(frappe.get_roles(frappe.session.user)) & INQUIRY_WRITE_ROLES:
+		# Only a staff caller defaults to self-assignment -- a dealer-portal session
+		# (raise_inquiry) has no INQUIRY_WRITE_ROLES membership, so its inquiries stay
+		# unassigned rather than "assigned to" the dealer's own portal account.
+		assigned_to = frappe.session.user
 
 	if not is_visible(dealer, item):
 		frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
@@ -139,7 +147,7 @@ def create_inquiry(
 			"status": "Open",
 			"expected_delivery": expected_delivery,
 			"follow_up_date": follow_up_date,
-			"assigned_to": assigned_to or frappe.session.user,
+			"assigned_to": assigned_to,
 			"remarks": remarks,
 		}
 	)
@@ -147,6 +155,21 @@ def create_inquiry(
 	result = _serialize(doc)
 	result["duplicateOf"] = duplicates[0]["id"] if duplicates else None
 	return result
+
+
+@frappe.whitelist(methods=["POST"])
+def create_inquiry(
+	dealer: str,
+	item: str,
+	qty: float,
+	source: str,
+	expected_delivery=None,
+	follow_up_date=None,
+	assigned_to: str | None = None,
+	remarks: str | None = None,
+):
+	_assert_can_manage_inquiries()
+	return _create_inquiry(dealer, item, qty, source, expected_delivery, follow_up_date, assigned_to, remarks)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

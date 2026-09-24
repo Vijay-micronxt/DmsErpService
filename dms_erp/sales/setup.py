@@ -127,6 +127,13 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.12.3 — ownership of the dealer relationship. Targets/performance-vs-target reporting is a separate follow-up once the team decides whether that needs its own doctype or just a number field; this is the field-only version.",
 			"insert_after": "custom_dealer_type",
 		},
+		{
+			"fieldname": "custom_phone",
+			"fieldtype": "Data",
+			"label": "Phone",
+			"description": "BRD C.13 — the dealer portal's login identifier and OTP delivery target (see auth.dealer_api). Not used elsewhere in the app.",
+			"insert_after": "custom_salesperson",
+		},
 	],
 }
 

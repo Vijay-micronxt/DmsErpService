@@ -101,10 +101,12 @@ def list_templates():
 	return MESSAGE_TEMPLATES
 
 
-@frappe.whitelist(methods=["POST"])
-def send_message(dealer: str, text: str, related_type: str = "General", related_reference: str | None = None):
-	_assert_can_manage_comms()
-
+def _send_message(
+	dealer: str, text: str, related_type: str = "General", related_reference: str | None = None, sent_by: str | None = None
+) -> dict:
+	"""Unguarded core of send_message -- also called directly by auth.dealer_api's OTP
+	delivery, which runs as Guest (no staff session, so _assert_can_manage_comms would
+	reject it) and isn't sent "by" any staff user."""
 	doc = frappe.get_doc(
 		{
 			"doctype": "WhatsApp Message",
@@ -115,11 +117,17 @@ def send_message(dealer: str, text: str, related_type: str = "General", related_
 			"related_type": related_type,
 			"related_reference": related_reference,
 			"sent_at": now_datetime(),
-			"sent_by": frappe.session.user,
+			"sent_by": sent_by,
 		}
 	)
 	doc.insert(ignore_permissions=True)
 	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def send_message(dealer: str, text: str, related_type: str = "General", related_reference: str | None = None):
+	_assert_can_manage_comms()
+	return _send_message(dealer, text, related_type, related_reference, sent_by=frappe.session.user)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
