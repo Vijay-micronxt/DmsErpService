@@ -91,6 +91,14 @@ CUSTOM_FIELDS = {
 			"in_standard_filter": 1,
 			"insert_after": "custom_stage_history",
 		},
+		{
+			"fieldname": "custom_advance_confirmed",
+			"fieldtype": "Check",
+			"label": "Advance Payment Confirmed",
+			"default": "0",
+			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
+			"insert_after": "custom_order_channel",
+		},
 	],
 	"Customer": [
 		{
