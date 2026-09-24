@@ -39,12 +39,15 @@ pullback_display only records the condition and resell/write-off/clearance
 decision (BRD C.10.4); it does not move stock.
 """
 
+from html import escape as _esc
+
 import frappe
 from frappe import _
 from frappe.utils import add_months, getdate, now_datetime, today
 
 from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
 from dms_erp.pagination import clamp
+from dms_erp.qr_utils import qr_data_uri
 from dms_erp.warehouse.utils import default_company, get_bay
 
 SAMPLE_REQUEST_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -256,6 +259,65 @@ def issue_sample(request: str, bay: str, batch_no: str | None = None, photo: str
 	_set_product_visibility(doc.dealer, doc.item, True)
 
 	return {"sampleRequest": _serialize_request(doc), "placement": _serialize_placement(placement)}
+
+
+_SAMPLE_STICKER_CSS = """
+	@page { size: 2in 1in; margin: 0.06in; }
+	* { box-sizing: border-box; }
+	body { margin: 0; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+	.sticker { width: 2in; height: 1in; padding: 0.08in; display: flex; gap: 0.08in; align-items: center; }
+	.sticker .qr { width: 0.82in; height: 0.82in; flex-shrink: 0; }
+	.sticker .info { font-size: 8pt; line-height: 1.3; overflow: hidden; }
+	.sticker .info .code { font-size: 10pt; font-weight: 700; }
+	.sticker .info .name { font-weight: 600; }
+"""
+
+
+@frappe.whitelist(methods=["GET"])
+def get_sample_sticker_data(request: str) -> dict:
+	"""BRD C.10/D.3 dealer sample sticker — dealer-specific QR + product name, no
+	batch/bay/PR fields (unlike warehouse.allocation_api's box stickers): a sample
+	sticker travels with the dealer, not the warehouse's own inward flow. Built on
+	sample_qr_code, the same "each dealer gets a unique QR for the same item"
+	identity issue_sample already generates, so the sticker payload is exactly
+	what a dealer's own copy uniquely resolves to. Only meaningful once a sample
+	has actually been issued (sample_qr_code is empty before that)."""
+	doc = frappe.get_doc("Sample Request", request)
+	if not doc.sample_qr_code:
+		frappe.throw(_("{0} has not been issued yet — no sticker to print.").format(request), frappe.ValidationError)
+
+	item_doc = frappe.get_cached_doc("Item", doc.item)
+	dealer_name = frappe.get_cached_value("Customer", doc.dealer, "customer_name") or doc.dealer
+	return {
+		"itemCode": doc.item,
+		"itemName": item_doc.item_name,
+		"dealer": doc.dealer,
+		"dealerName": dealer_name,
+		"qrPayload": doc.sample_qr_code,
+		"qrCode": qr_data_uri(doc.sample_qr_code),
+	}
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def render_sample_sticker_html(request: str) -> str:
+	"""Renders get_sample_sticker_data as a small printable HTML sheet sized to a
+	2x1in label via @page CSS -- same plain-HTML-in-the-ordinary-JSON-envelope
+	approach as warehouse.allocation_api.render_box_stickers_html (not a Desk
+	Print Format; this API-only app never redirects into /app), opened in a new
+	tab and handed to the browser's own Print / Save-as-PDF."""
+	data = get_sample_sticker_data(request)
+	card = f"""<div class="sticker">
+	<img class="qr" src="{data['qrCode']}" alt="QR">
+	<div class="info">
+		<div class="code">{_esc(data['itemCode'])}</div>
+		<div class="name">{_esc(data.get('itemName') or '')}</div>
+		<div class="row">{_esc(data.get('dealerName') or '')}</div>
+	</div>
+</div>"""
+	return (
+		f"<!doctype html><html><head><meta charset='utf-8'><title>Sample Sticker</title>"
+		f"<style>{_SAMPLE_STICKER_CSS}</style></head><body>{card}</body></html>"
+	)
 
 
 def _grant_dealer_item_sample(dealer: str, item: str):

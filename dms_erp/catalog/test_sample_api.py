@@ -115,6 +115,31 @@ class TestSampleApi(FrappeTestCase):
 		recon = sample_api.record_reconciliation(slip, "Still Displayed", action="Put-up Replacement")
 		self.assertEqual(recon["action"], "Put-up Replacement")
 
+	def test_get_sample_sticker_data_after_issuance(self):
+		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
+		request_id = result["sampleRequest"]["id"]
+
+		data = sample_api.get_sample_sticker_data(request_id)
+		self.assertEqual(data["itemCode"], self.item)
+		self.assertEqual(data["dealer"], self.dealer)
+		self.assertEqual(data["qrPayload"], result["sampleRequest"]["sampleQrCode"])
+		self.assertTrue(data["qrCode"].startswith("data:image/png;base64,"))
+
+	def test_get_sample_sticker_data_refuses_a_not_yet_issued_request(self):
+		request = sample_api.create_sample_request(item=self.item, dealer=self.dealer)
+		with self.assertRaises(frappe.ValidationError):
+			sample_api.get_sample_sticker_data(request["id"])
+
+	def test_render_sample_sticker_html_includes_qr_and_escapes_item_name(self):
+		frappe.db.set_value("Item", self.item, "item_name", "Statuario <script>alert(1)</script>")
+		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
+
+		html = sample_api.render_sample_sticker_html(result["sampleRequest"]["id"])
+		self.assertEqual(html.count('class="sticker"'), 1)
+		self.assertIn("data:image/png;base64,", html)
+		self.assertNotIn("<script>", html)
+		self.assertIn("&lt;script&gt;", html)
+
 	def test_pullback_display_records_condition_and_decision_without_moving_stock(self):
 		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
 		slip = result["placement"]["id"]
