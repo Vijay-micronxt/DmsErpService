@@ -43,6 +43,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Series Master](#series-master)
 - [Pricing](#pricing)
 - [Dealer Catalog Visibility](#dealer-catalog-visibility)
+- [Sample & Display Management](#sample-display-management)
 - [Inquiries](#inquiries)
 - [Quotations](#quotations)
 - [Orders](#orders)
@@ -801,6 +802,8 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 
 Assignment (is_visible) and sellability are two separate questions, enforced at different points — see the note on catalog_for.
 
+> BRD C.1.5: day-to-day, this assignment is meant to follow a dealer's issued-sample list, not be set by hand — `catalog.sample_api.issue_sample` (see Sample & Display Management below) now calls the same assignment mechanism directly the moment a sample is actually issued. `set_product_visibility`/`set_category_visibility` below stay available as Purchase/Management admin overrides (bulk category grants, manual correction), not the primary path.
+
 #### GET `dms_erp.catalog.dealer_catalog_api.catalog_for`
 
 **Get catalog for dealer** — Item codes this dealer can inquire/quote for.
@@ -890,6 +893,113 @@ Assignment (is_visible) and sellability are two separate questions, enforced at 
 **Response**
 
 A JSON string (the usual `{"message": "..."}` envelope) containing the full HTML document — a table of thumbnail / item code (+ the dealer's own mapped code, if any) / name / series / size-finish, and a price column when `include_price` is true.
+
+
+---
+
+## Sample & Display Management
+
+BRD C.10. Lifecycle: Sales/Management raise a `Sample Request` for a dealer → Warehouse/Management approve it → `issue_sample` moves it out (a real Material Issue Stock Entry — deliberately not the bay-to-bay Material Transfer `warehouse.transfer_api` uses, to sidestep that module's known `list_stock_lots` bug), generates the dealer-specific QR, auto-creates a `Display Placement Slip` (starts the monitoring clock), and grants this dealer catalog visibility for the item (BRD C.1.5, see above). A daily job nudges dealers at the 3/6/12-month marks; `record_reconciliation` logs the outcome and `pullback_display` records a display's return.
+
+> `pullback_display` does not move stock — it only records condition and the resell/write-off/clearance decision. Physically returning boxes to a bay is the existing inward/allocation flow, once a warehouse team member actually has them in hand.
+
+#### POST `dms_erp.catalog.sample_api.create_sample_request`
+
+**Request a sample** — Sales/Management only.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `dealer` | string | required |  |
+| `qty` | number | default 1 |  |
+
+**Response**
+
+```json
+{ "id": "SR-2026-00001", "item": "PVT-6060", "dealer": "Sharma Tiles", "qty": 1, "requestedBy": "sales@pacificinc.in", "requestDate": "2026-09-24", "approvalStatus": "Pending", "approver": null, "batch": null, "sampleQrCode": null }
+```
+
+
+#### GET `dms_erp.catalog.sample_api.list_sample_requests`
+
+**List sample requests** — paginated. Params: `status` (Pending/Approved/Rejected/Issued, optional), `dealer` (optional), `limit`/`offset`.
+
+#### GET `dms_erp.catalog.sample_api.get_sample_request`
+
+**Get single sample request** — `request` (string, required). Response: same shape as one row of `list_sample_requests`.
+
+
+#### POST `dms_erp.catalog.sample_api.approve_sample_request`
+
+**Approve or reject a sample request** — Warehouse/Management only. Only a Pending request can be actioned.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `request` | string | required |  |
+| `approve` | bool | required | true → Approved, false → Rejected |
+| `batch` | string | optional | traceability only (BRD C.10.1) — not binding on any future sale |
+
+**Response** — same shape as `get_sample_request`.
+
+
+#### POST `dms_erp.catalog.sample_api.issue_sample`
+
+**Issue an approved sample** — Warehouse/Management only. Only an Approved request can be issued.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `request` | string | required |  |
+| `bay` | string | required | bay code the sample is drawn from |
+| `batch_no` | string | optional | falls back to the request's own `batch` if set |
+| `photo` | string (file url) | optional | attached to the auto-created Display Placement Slip |
+
+**Response**
+
+```json
+{ "sampleRequest": { "...": "approvalStatus now Issued, sampleQrCode set" }, "placement": { "id": "DPS-2026-00001", "sampleRequest": "SR-2026-00001", "item": "PVT-6060", "dealer": "Sharma Tiles", "displayQty": 1, "placementDate": "2026-09-24", "status": "Active", "condition": null, "photo": null, "pullbackDecision": null, "lastReminderSent": null, "lastReminderIntervalMonths": null } }
+```
+
+
+#### GET `dms_erp.catalog.sample_api.list_display_placements`
+
+**List display placements** — paginated. Params: `dealer`, `item`, `status` (Active/Removed/Pulled Back), all optional, `limit`/`offset`.
+
+#### GET `dms_erp.catalog.sample_api.get_display_placement`
+
+**Get single display placement** — `slip` (string, required). Response: same shape as one row of `list_display_placements`.
+
+
+#### POST `dms_erp.catalog.sample_api.record_reconciliation`
+
+**Log a monitoring-cycle outcome** (BRD C.10.3) — Sales/Warehouse/Management. A "Removed"/"Loose Not Shown" response defaults `action` to Pullback (and moves the placement to status Removed) unless the caller passes an explicit override; "Still Displayed" defaults to Keep.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `placement_slip` | string | required |  |
+| `response` | string | required | Still Displayed / Removed / Loose Not Shown |
+| `responded_via` | string | default "Staff" | WhatsApp / Staff |
+| `responded_by` | string | optional | defaults to the calling user when responded_via is Staff |
+| `action` | string | optional | Keep / Put-up Replacement / Pullback — overrides the response-based default |
+| `remarks` | string | optional |  |
+
+**Response**
+
+```json
+{ "id": "SDR-2026-00001", "placementSlip": "DPS-2026-00001", "dealer": "Sharma Tiles", "item": "PVT-6060", "reconDate": "2026-09-24", "response": "Still Displayed", "respondedVia": "Staff", "respondedBy": "sales@pacificinc.in", "action": "Keep", "remarks": null }
+```
+
+
+#### POST `dms_erp.catalog.sample_api.pullback_display`
+
+**Record a display pullback** (BRD C.10.4) — Sales/Warehouse/Management. Sets the placement's status to Pulled Back; does not move stock (see the module note above).
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `placement_slip` | string | required |  |
+| `condition` | string | required | Good / Fair / Damaged |
+| `decision` | string | required | Resell / Write-off / Clearance |
+
+**Response** — same shape as one row of `list_display_placements`.
 
 
 ---

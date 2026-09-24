@@ -9,6 +9,15 @@ unassigned dealer isn't silently blocked from everything.
 Per the BRD flow, Purchase (and Management) confirm/maintain catalog assignments;
 Sales only needs read access (the /inquiries item picker filters against it).
 
+BRD C.1.5: "a dealer can only access items for which a sample has been issued to
+that dealer... driven by the dealer's issued-sample list, not a manual assignment."
+catalog.sample_api.issue_sample is now that path -- it calls _set_product_visibility
+directly the moment a sample is actually issued, so day-to-day visibility follows
+sample issuance rather than a separate manual step. set_product_visibility /
+set_category_visibility stay whitelisted as Purchase/Management admin overrides
+(bulk category grants, manual correction) -- the assignment mechanism itself didn't
+change, only what normally drives it.
+
 `is_visible` stays a pure per-dealer assignment check — whether Purchase has opted an
 item into this dealer's catalog, independent of the item's own lifecycle (the Dealer
 Catalog editor still needs to show/toggle a Pulled Back item that's currently
@@ -69,10 +78,10 @@ def catalog_for(dealer: str):
 	return _sellable_item_codes(assigned)
 
 
-@frappe.whitelist(methods=["POST", "PUT"])
-def set_product_visibility(dealer: str, item: str, visible: bool):
-	_assert_can_manage_catalog()
-
+def _set_product_visibility(dealer: str, item: str, visible: bool) -> dict:
+	"""Unguarded core of set_product_visibility -- also called directly by
+	catalog.sample_api.issue_sample, whose own DMS Warehouse/Management role check is
+	the actual authorization for that path (see this module's docstring)."""
 	doc = _get_or_create(dealer)
 	already_visible = any(row.item == item for row in doc.items)
 
@@ -84,6 +93,12 @@ def set_product_visibility(dealer: str, item: str, visible: bool):
 		doc.save(ignore_permissions=True)
 
 	return {"success": True}
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def set_product_visibility(dealer: str, item: str, visible: bool):
+	_assert_can_manage_catalog()
+	return _set_product_visibility(dealer, item, visible)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

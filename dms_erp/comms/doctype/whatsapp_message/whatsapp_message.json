@@ -80,7 +80,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Related Type",
-   "options": "Inquiry\nOrder\nQuotation\nGeneral",
+   "options": "Inquiry\nOrder\nQuotation\nDisplay Placement Slip\nGeneral",
    "reqd": 1
   },
   {

@@ -2,7 +2,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, today
 
-from dms_erp.catalog import dealer_catalog_api, series_api
+from dms_erp.catalog import series_api
 from dms_erp.catalog import withdrawal_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
@@ -84,9 +84,32 @@ class TestWithdrawalApi(FrappeTestCase):
 		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 		self._delivered_sale(item, qty=10, days_ago=30)
-		for i in range(3):  # meets the min_store_count=3 threshold
+		for i in range(3):  # meets the min_store_count=3 threshold -- store count now
+			# reads real Active Display Placement Slips (BRD C.10), not Dealer Catalog
+			# assignment, so that's what has to exist here.
 			dealer = make_dealer(f"Withdrawal In-Store Dealer {i}")
-			dealer_catalog_api.set_product_visibility(dealer=dealer, item=item, visible=True)
+			request = frappe.get_doc(
+				{
+					"doctype": "Sample Request",
+					"item": item,
+					"dealer": dealer,
+					"qty": 1,
+					"requested_by": "Administrator",
+					"request_date": today(),
+					"approval_status": "Issued",
+				}
+			).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "Display Placement Slip",
+					"sample_request": request.name,
+					"item": item,
+					"dealer": dealer,
+					"display_qty": 1,
+					"placement_date": today(),
+					"status": "Active",
+				}
+			).insert(ignore_permissions=True)
 
 		moved = withdrawal_api.evaluate_product_withdrawals()
 

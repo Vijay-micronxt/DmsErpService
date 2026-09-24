@@ -1,0 +1,176 @@
+{
+ "actions": [],
+ "autoname": "DPS-.YYYY.-.#####",
+ "creation": "2026-09-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sample_request",
+  "item",
+  "dealer",
+  "display_qty",
+  "column_break_dps",
+  "placement_date",
+  "status",
+  "section_break_dps_condition",
+  "condition",
+  "photo",
+  "column_break_dps_pullback",
+  "pullback_decision",
+  "section_break_dps_monitoring",
+  "last_reminder_sent",
+  "last_reminder_interval_months"
+ ],
+ "fields": [
+  {
+   "fieldname": "sample_request",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sample Request",
+   "options": "Sample Request",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "display_qty",
+   "fieldtype": "Float",
+   "label": "Display Qty",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_dps",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Today",
+   "description": "Starts the monitoring clock (BRD C.10.2).",
+   "fieldname": "placement_date",
+   "fieldtype": "Date",
+   "label": "Placement Date",
+   "reqd": 1
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Active\nRemoved\nPulled Back",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_dps_condition",
+   "fieldtype": "Section Break",
+   "label": "Reconciliation & Pullback"
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Select",
+   "label": "Condition",
+   "options": "\nGood\nFair\nDamaged"
+  },
+  {
+   "fieldname": "photo",
+   "fieldtype": "Attach",
+   "label": "Photo"
+  },
+  {
+   "fieldname": "column_break_dps_pullback",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Set when this display is pulled back to the warehouse (BRD C.10.4).",
+   "fieldname": "pullback_decision",
+   "fieldtype": "Select",
+   "label": "Pullback Decision",
+   "options": "\nResell\nWrite-off\nClearance"
+  },
+  {
+   "fieldname": "section_break_dps_monitoring",
+   "fieldtype": "Section Break",
+   "label": "Monitoring"
+  },
+  {
+   "description": "Set by the daily monitoring job -- the last configurable reminder interval (3/6/12 months) actually sent, so a cycle is never re-sent.",
+   "fieldname": "last_reminder_sent",
+   "fieldtype": "Date",
+   "label": "Last Reminder Sent"
+  },
+  {
+   "fieldname": "last_reminder_interval_months",
+   "fieldtype": "Int",
+   "label": "Last Reminder Interval (Months)"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "Display Placement Slip",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Warehouse",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "DMS Sales",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

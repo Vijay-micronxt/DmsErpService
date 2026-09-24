@@ -18,15 +18,18 @@ doctype) and a Series only opts in by checking withdrawal_automation_enabled AND
 setting all three thresholds to a positive value — anything else (box unchecked, or
 any threshold left at 0) means this job never touches that series' items.
 
-Two of the three signals are proxies forced by what this build actually has:
-- "display duration" reads as days since the item's last Delivered sale — the
-  closest live signal to "how long has this been sitting without moving". The
-  BRD's own display-placement duration only becomes literal once the Sample &
-  Display Management module (BRD C.10, still unbuilt — see the backlog) exists.
-- "store count" reads as the number of distinct dealers whose Dealer Catalog
-  currently lists the item — again a stand-in for an actual store/display count,
-  which that same still-unbuilt module would track directly.
-"annual sales" is the one real signal: trailing-12-month boxes summed across
+One of the three signals is still a deliberate proxy:
+- "display duration" reads as days since the item's last Delivered sale — a
+  no-sale-idleness signal, not literally "how long has a specific display sat at a
+  dealer". Now that Sample & Display Management (BRD C.10) exists (see
+  catalog/sample_api.py), a raw display-placement age is available too, but
+  sale-idleness stays the signal here: an item can sit on display indefinitely
+  without that alone meaning it should be withdrawn, whereas genuinely not selling
+  is the actual business trigger the BRD's withdrawal language is getting at.
+"store count" is no longer a proxy: it now counts distinct dealers with an
+Active Display Placement Slip for the item — the real signal BRD C.10.5 names,
+not the Dealer Catalog-assignment stand-in this job used before that module existed.
+"annual sales" is the other real signal: trailing-12-month boxes summed across
 Delivered Sales Order Items.
 
 Deliberately conservative in one more way: this job only ever steps an item forward
@@ -85,9 +88,13 @@ def _days_since_last_sale(item_code: str) -> int | None:
 
 
 def _store_count(item_code: str) -> int:
+	"""Distinct dealers currently displaying this item -- an Active Display Placement
+	Slip (BRD C.10) is a real, physically-confirmed display, unlike Dealer Catalog
+	assignment (which only means "allowed to see it", not "actually on display")."""
 	return (
 		frappe.db.sql(
-			"select count(distinct dci.parent) from `tabDealer Catalog Item` dci where dci.item = %s",
+			"select count(distinct dps.dealer) from `tabDisplay Placement Slip` dps"
+			" where dps.item = %s and dps.status = 'Active'",
 			(item_code,),
 		)[0][0]
 		or 0
