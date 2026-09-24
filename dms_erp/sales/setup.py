@@ -150,6 +150,14 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.13 — WhatsApp + email follow-up (BRD C.2.6/C.10.2) and a future email-based dealer app login channel. Not used elsewhere in the app yet.",
 			"insert_after": "custom_price_visible",
 		},
+		{
+			"fieldname": "custom_out_of_station",
+			"fieldtype": "Check",
+			"label": "Out of Station",
+			"default": "0",
+			"description": "BRD C.1.4 — a dealer far enough from the warehouse that transport cost justifies at least Master Dealer pricing. Staff-set (no geocoding exists anywhere in this app); read by pricing.dealer_classification.recompute_dealer_classifications as a floor on top of the volume-based tier, never a client-specific location check — see that module for why.",
+			"insert_after": "custom_email",
+		},
 	],
 }
 
