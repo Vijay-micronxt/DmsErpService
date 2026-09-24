@@ -7,7 +7,8 @@
  "field_order": [
   "dealer",
   "customer_item_code",
-  "sample_issued"
+  "sample_issued",
+  "sample_issued_date"
  ],
  "fields": [
   {
@@ -32,6 +33,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Sample Issued"
+  },
+  {
+   "description": "Set automatically when sample_issued is turned on (catalog.sample_api._grant_dealer_item_sample) — display ageing, monitoring reminders and product-withdrawal logic key off this, not off when the row itself was created.",
+   "fieldname": "sample_issued_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Sample Issued Date"
   }
  ],
  "index_web_pages_for_search": 0,

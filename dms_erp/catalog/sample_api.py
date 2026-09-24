@@ -268,9 +268,37 @@ def _grant_dealer_item_sample(dealer: str, item: str):
 	row = next((r for r in item_doc.custom_dealer_codes if r.dealer == dealer), None)
 	if row:
 		row.sample_issued = 1
+		row.sample_issued_date = today()
 	else:
-		item_doc.append("custom_dealer_codes", {"dealer": dealer, "customer_item_code": item, "sample_issued": 1})
+		item_doc.append(
+			"custom_dealer_codes",
+			{"dealer": dealer, "customer_item_code": item, "sample_issued": 1, "sample_issued_date": today()},
+		)
 	item_doc.save(ignore_permissions=True)
+
+
+def _revoke_dealer_item_sample_if_no_active_placement(dealer: str, item: str):
+	"""BRD C.1.5's flip side, task 2.3 -- a dealer's catalog is driven by their
+	issued-sample list day to day, so pulling the last active Display Placement Slip
+	for a dealer+item back out of the field should revoke that visibility the same
+	way issuing one grants it. Guarded on "no active placement left" rather than
+	unconditional, since a dealer can have more than one Sample Request -> Display
+	Placement Slip for the same item over time (a second location, a replacement) --
+	pulling back one shouldn't hide the item while another is still genuinely out
+	there."""
+	still_active = frappe.db.exists(
+		"Display Placement Slip", {"dealer": dealer, "item": item, "status": "Active"}
+	)
+	if still_active:
+		return
+
+	item_doc = frappe.get_doc("Item", item)
+	row = next((r for r in item_doc.custom_dealer_codes if r.dealer == dealer), None)
+	if row and row.sample_issued:
+		row.sample_issued = 0
+		item_doc.save(ignore_permissions=True)
+
+	_set_product_visibility(dealer, item, False)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -350,7 +378,12 @@ def record_reconciliation(
 def pullback_display(placement_slip: str, condition: str, decision: str):
 	"""Records that a display was physically pulled back to the warehouse, its
 	condition, and the resell/write-off/clearance decision (BRD C.10.4). Does not
-	move stock -- see this module's docstring."""
+	move stock -- see this module's docstring.
+
+	BRD task 2.3 -- a Pulled Back placement is the definitive "no longer in the
+	field" signal, so it's also where catalog visibility (BRD C.1.5) gets revoked,
+	mirroring how issue_sample grants it. Guarded on no other active placement for
+	this dealer+item -- see _revoke_dealer_item_sample_if_no_active_placement."""
 	_assert_can_manage_display()
 
 	placement = frappe.get_doc("Display Placement Slip", placement_slip)
@@ -358,6 +391,9 @@ def pullback_display(placement_slip: str, condition: str, decision: str):
 	placement.condition = condition
 	placement.pullback_decision = decision
 	placement.save(ignore_permissions=True)
+
+	_revoke_dealer_item_sample_if_no_active_placement(placement.dealer, placement.item)
+
 	return _serialize_placement(placement)
 
 

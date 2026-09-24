@@ -63,6 +63,7 @@ class TestSampleApi(FrappeTestCase):
 		item_doc = frappe.get_doc("Item", self.item)
 		row = next(r for r in item_doc.custom_dealer_codes if r.dealer == self.dealer)
 		self.assertTrue(row.sample_issued)
+		self.assertEqual(row.sample_issued_date, frappe.utils.getdate(today()))
 
 	def test_qr_code_differs_per_dealer_for_the_same_item(self):
 		other_dealer = make_dealer("Sample Test Dealer Two")
@@ -123,6 +124,30 @@ class TestSampleApi(FrappeTestCase):
 		self.assertEqual(pulled["status"], "Pulled Back")
 		self.assertEqual(pulled["condition"], "Fair")
 		self.assertEqual(pulled["pullbackDecision"], "Clearance")
+
+	def test_pullback_display_revokes_catalog_visibility_when_no_placement_remains_active(self):
+		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
+		slip = result["placement"]["id"]
+		self.assertTrue(dealer_catalog_api.is_visible(self.dealer, self.item))
+
+		sample_api.pullback_display(slip, condition="Fair", decision="Clearance")
+
+		self.assertFalse(dealer_catalog_api.is_visible(self.dealer, self.item))
+		item_doc = frappe.get_doc("Item", self.item)
+		row = next(r for r in item_doc.custom_dealer_codes if r.dealer == self.dealer)
+		self.assertFalse(row.sample_issued)
+
+	def test_pullback_display_keeps_visibility_when_another_placement_is_still_active(self):
+		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+		first = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
+		second = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
+
+		sample_api.pullback_display(first["placement"]["id"], condition="Fair", decision="Clearance")
+
+		# The second placement for the same dealer+item is still Active -- visibility must stay on.
+		self.assertTrue(dealer_catalog_api.is_visible(self.dealer, self.item))
+		self.assertEqual(sample_api.get_display_placement(second["placement"]["id"])["status"], "Active")
 
 	def test_monitoring_reminders_fire_once_per_interval_crossed(self):
 		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
