@@ -86,6 +86,13 @@ class TestDealerWriteApi(FrappeTestCase):
 		shown = dealer_api.update_dealer("DW Price Toggle Co", {"priceVisible": True})
 		self.assertTrue(shown["priceVisible"])
 
+	def test_create_and_update_dealer_set_email(self):
+		created = dealer_api.create_dealer("DW Email Co", group=GROUP, email="buyer@example.com")
+		self.assertEqual(created["email"], "buyer@example.com")
+
+		updated = dealer_api.update_dealer("DW Email Co", {"email": "new@example.com"})
+		self.assertEqual(updated["email"], "new@example.com")
+
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

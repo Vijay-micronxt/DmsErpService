@@ -142,6 +142,14 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.13.1 — \"price (if enabled for that dealer)\". Gates price/dealerPrice in the dealer portal's own catalog and item-detail responses (sales.dealer_portal_api) only -- staff-facing screens always show price regardless of this flag.",
 			"insert_after": "custom_phone",
 		},
+		{
+			"fieldname": "custom_email",
+			"fieldtype": "Data",
+			"options": "Email",
+			"label": "Email",
+			"description": "BRD C.13 — WhatsApp + email follow-up (BRD C.2.6/C.10.2) and a future email-based dealer app login channel. Not used elsewhere in the app yet.",
+			"insert_after": "custom_price_visible",
+		},
 	],
 }
 
