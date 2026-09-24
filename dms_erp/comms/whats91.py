@@ -21,22 +21,13 @@ never raises, since request_otp's own generic response must not change shape
 just because WhatsApp delivery isn't set up on a given site yet.
 """
 
-import re
-
 import frappe
 import requests
 
+from dms_erp.phone_utils import clean_indian_mobile
+
 WHATS91_SEND_URL = "https://graph.whats91.com/api/v2/send"
 _REQUEST_TIMEOUT_SECONDS = 30
-
-
-def _clean_phone_number(phone: str) -> str | None:
-	digits = re.sub(r"\D", "", phone or "")
-	if digits.startswith("91") and len(digits) == 12:
-		digits = digits[2:]
-	if len(digits) == 10 and digits[0] in "6789":
-		return digits
-	return None
 
 
 def _is_send_successful(response) -> bool:
@@ -82,7 +73,7 @@ def send_otp_template(phone: str, otp_code: str) -> bool:
 		)
 		return False
 
-	clean_phone = _clean_phone_number(phone)
+	clean_phone = clean_indian_mobile(phone)
 	if not clean_phone:
 		frappe.logger().error(f"whats91 OTP send skipped -- invalid phone number: {phone!r}")
 		return False

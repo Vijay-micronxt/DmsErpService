@@ -58,6 +58,20 @@ class TestDealerWriteApi(FrappeTestCase):
 
 		self.assertTrue(dealer_api.update_dealer("DW Update Co", {"disabled": True})["disabled"])
 
+	def test_create_dealer_normalizes_the_phone_number(self):
+		dealer = dealer_api.create_dealer("DW Phone Co", group=GROUP, phone="+91 96202 04657")
+		self.assertEqual(dealer["phone"], "9620204657")
+		self.assertEqual(frappe.db.get_value("Customer", "DW Phone Co", "custom_phone"), "9620204657")
+
+	def test_create_dealer_rejects_an_invalid_phone_number(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer("DW Bad Phone Co", group=GROUP, phone="12345")
+
+	def test_update_dealer_normalizes_the_phone_number(self):
+		dealer_api.create_dealer("DW Phone Update Co", group=GROUP)
+		updated = dealer_api.update_dealer("DW Phone Update Co", {"phone": "09620204657"})
+		self.assertEqual(updated["phone"], "9620204657")
+
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

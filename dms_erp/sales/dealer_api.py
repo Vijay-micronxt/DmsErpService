@@ -28,6 +28,7 @@ MD-01): name, group, territory, dealer type, credit limit, salesperson, disabled
 import frappe
 from frappe import _
 
+from dms_erp.phone_utils import clean_indian_mobile
 from dms_erp.sales.order_channel import DEALER_TYPES
 from dms_erp.warehouse.utils import default_company
 
@@ -149,6 +150,19 @@ def _validate_dealer_type(dealer_type: str | None):
 		frappe.throw(_("Invalid dealer type: {0}").format(dealer_type), frappe.ValidationError)
 
 
+def _clean_phone_or_throw(phone: str) -> str:
+	"""Stored normalized (bare 10 digits — see phone_utils.clean_indian_mobile)
+	so auth.dealer_api._dealer_for_phone's lookup and comms.whats91's receiverId
+	both match this dealer regardless of how the number is typed here (+91,
+	spaces, a leading 0). Rejected outright rather than silently dropped, since
+	an un-normalizable phone here would otherwise let a dealer never be able to
+	log into the portal at all without anyone noticing until they tried."""
+	clean = clean_indian_mobile(phone)
+	if not clean:
+		frappe.throw(_("{0} is not a valid 10-digit Indian mobile number.").format(phone), frappe.ValidationError)
+	return clean
+
+
 def _set_credit_limit(doc, credit_limit: float | None):
 	company = default_company()
 	row = next((r for r in doc.get("credit_limits") or [] if r.company == company), None)
@@ -191,7 +205,7 @@ def create_dealer(
 	if salesperson:
 		values["custom_salesperson"] = salesperson
 	if phone:
-		values["custom_phone"] = phone
+		values["custom_phone"] = _clean_phone_or_throw(phone)
 
 	doc = frappe.get_doc(values)
 	if credit_limit is not None:
@@ -212,7 +226,6 @@ def update_dealer(dealer: str, patch: dict):
 		"territory": "territory",
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
-		"phone": "custom_phone",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
@@ -229,7 +242,9 @@ def update_dealer(dealer: str, patch: dict):
 			frappe.throw(_("A dealer named {0} already exists.").format(new_name), frappe.DuplicateEntryError)
 		patch = {**patch, "name": new_name}
 	for key, value in patch.items():
-		if key in field_map:
+		if key == "phone":
+			doc.set("custom_phone", _clean_phone_or_throw(value) if value else None)
+		elif key in field_map:
 			doc.set(field_map[key], value)
 		elif key == "creditLimit":
 			_set_credit_limit(doc, value)
