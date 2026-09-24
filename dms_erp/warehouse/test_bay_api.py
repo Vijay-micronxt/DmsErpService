@@ -111,6 +111,42 @@ class TestBayApi(FrappeTestCase):
 		codes = {b["code"] for b in bay_api.list_all_bays(search="ALL-B-")}
 		self.assertEqual(codes, {"ALL-B-01", "ALL-B-02", "ALL-B-03"})
 
+	def test_create_bay_accepts_a_linked_main_bay(self):
+		main = make_bay("LINK-MAIN-01", bay_type="main")
+		buffer_bay = bay_api.create_bay(
+			code="LINK-BUF-01",
+			bay_type="buffer",
+			dimensions="36x8",
+			parent_warehouse=frappe.db.get_value("Warehouse", main["id"], "parent_warehouse"),
+			zone="Zone-A",
+			row="R1",
+			linked_main_bay=main["id"],
+		)
+		self.assertEqual(buffer_bay["linkedMainBay"], main["id"])
+
+	def test_create_bay_rejects_a_linked_main_bay_that_is_not_type_main(self):
+		buffer_target = make_bay("LINK-NOTMAIN-01", bay_type="buffer")
+		with self.assertRaises(frappe.ValidationError):
+			bay_api.create_bay(
+				code="LINK-BUF-02",
+				bay_type="buffer",
+				dimensions="36x8",
+				parent_warehouse=frappe.db.get_value("Warehouse", buffer_target["id"], "parent_warehouse"),
+				zone="Zone-A",
+				row="R1",
+				linked_main_bay=buffer_target["id"],
+			)
+
+	def test_update_bay_sets_and_rejects_linked_main_bay(self):
+		main = make_bay("LINK-MAIN-02", bay_type="main")
+		buffer_bay = make_bay("LINK-BUF-03", bay_type="buffer")
+
+		updated = bay_api.update_bay("LINK-BUF-03", {"linkedMainBay": main["id"]})
+		self.assertEqual(updated["linkedMainBay"], main["id"])
+
+		with self.assertRaises(frappe.ValidationError):
+			bay_api.update_bay("LINK-BUF-03", {"linkedMainBay": buffer_bay["id"]})
+
 	def test_list_bays_filters_by_type_status_and_parent_warehouse(self):
 		main_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Main — Morbi")
 		buffer_warehouse = next(g["id"] for g in bay_api.list_warehouse_groups() if g["name"] == "Pacific Buffer — Wankaner")

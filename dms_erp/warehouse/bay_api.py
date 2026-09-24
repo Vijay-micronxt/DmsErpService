@@ -21,6 +21,16 @@ def _assert_can_manage_bays():
 		frappe.throw(_("Only Warehouse or Management can manage bays."), frappe.PermissionError)
 
 
+def _assert_valid_main_bay_link(linked_main_bay: str | None):
+	"""BRD 1.9 -- a buffer bay's habitual main-bay destination must actually be a
+	main bay, not any Warehouse (a group warehouse, or a damage/display bay)."""
+	if not linked_main_bay:
+		return
+	bay_type = frappe.db.get_value("Warehouse", linked_main_bay, "custom_bay_type")
+	if bay_type != "main":
+		frappe.throw(_("{0} is not a main bay.").format(linked_main_bay), frappe.ValidationError)
+
+
 @frappe.whitelist(methods=["GET"])
 def list_warehouse_groups(search: str | None = None):
 	# The other half of "bays are ERPNext Warehouses" (see module docstring):
@@ -132,11 +142,13 @@ def create_bay(
 	suitable_categories: list[str] | None = None,
 	capacity_boxes: int | None = None,
 	status: str = "active",
+	linked_main_bay: str | None = None,
 ):
 	_assert_can_manage_bays()
 
 	if frappe.db.exists("Warehouse", {"custom_bay_code": code}):
 		frappe.throw(_("Bay {0} already exists.").format(code), frappe.DuplicateEntryError)
+	_assert_valid_main_bay_link(linked_main_bay)
 
 	bay = frappe.get_doc(
 		{
@@ -153,6 +165,7 @@ def create_bay(
 			"custom_row": row,
 			"custom_bay_status": "blocked" if bay_type == "blocked" else status,
 			"custom_suitable_categories": ", ".join(suitable_categories or []),
+			"custom_linked_main_bay": linked_main_bay,
 		}
 	)
 	bay.insert(ignore_permissions=True)
@@ -204,7 +217,11 @@ def update_bay(code: str, patch: dict):
 		"zone": "custom_zone",
 		"row": "custom_row",
 		"warehouse": "parent_warehouse",
+		"linkedMainBay": "custom_linked_main_bay",
 	}
+
+	if "linkedMainBay" in patch:
+		_assert_valid_main_bay_link(patch["linkedMainBay"])
 
 	bay = get_bay(code)
 	for key, value in patch.items():

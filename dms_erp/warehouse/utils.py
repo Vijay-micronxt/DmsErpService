@@ -82,6 +82,7 @@ def serialize_bay(bay) -> dict:
 		"status": bay.custom_bay_status,
 		"zone": bay.custom_zone,
 		"row": bay.custom_row,
+		"linkedMainBay": bay.custom_linked_main_bay,
 		"occupiedBoxes": occ["current"],
 		"occupancyPct": occ["pct"],
 		"freeBoxes": occ["free"],
