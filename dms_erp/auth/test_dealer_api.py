@@ -6,7 +6,7 @@ from frappe.tests.utils import FrappeTestCase
 from dms_erp.auth import dealer_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer
 
-TEST_PHONE = "+919900011122"
+TEST_PHONE = "9900011122"
 
 
 class TestDealerAuthApi(FrappeTestCase):
@@ -15,6 +15,9 @@ class TestDealerAuthApi(FrappeTestCase):
 		super().setUpClass()
 		ensure_company()
 		cls.dealer = make_dealer("OTP Test Dealer")
+		# custom_phone is stored normalized (see phone_utils.clean_indian_mobile /
+		# sales.dealer_api._clean_phone_or_throw) -- bare 10 digits, exactly as
+		# create_dealer/update_dealer would actually store it.
 		frappe.db.set_value("Customer", cls.dealer, "custom_phone", TEST_PHONE)
 
 	def tearDown(self):
@@ -38,11 +41,29 @@ class TestDealerAuthApi(FrappeTestCase):
 		self.assertTrue(frappe.db.exists("Dealer Login OTP", {"dealer": self.dealer}))
 		self.assertTrue(frappe.db.exists("WhatsApp Message", {"dealer": self.dealer, "direction": "Outbound"}))
 
-	def test_request_otp_for_unknown_phone_returns_same_generic_response_and_sends_nothing(self):
-		result = dealer_api.request_otp(phone="+910000000000")
+	def test_request_otp_for_unregistered_phone_returns_same_generic_response_and_sends_nothing(self):
+		result = dealer_api.request_otp(phone="9999999999")
 		self.assertEqual(result, {"success": True})
 		self.assertEqual(frappe.db.count("Dealer Login OTP"), 0)
 		self.assertEqual(frappe.db.count("WhatsApp Message"), 0)
+
+	def test_request_otp_for_malformed_phone_returns_same_generic_response_and_sends_nothing(self):
+		result = dealer_api.request_otp(phone="not-a-phone-number")
+		self.assertEqual(result, {"success": True})
+		self.assertEqual(frappe.db.count("Dealer Login OTP"), 0)
+
+	def test_request_otp_matches_the_dealer_regardless_of_how_the_phone_is_formatted(self):
+		# The exact bug this normalization fixes: a phone typed with a +91 prefix
+		# and spaces must still resolve to the same dealer whose custom_phone is
+		# stored as bare digits.
+		for variant in ("+91 99000 11122", "0" + TEST_PHONE, "91" + TEST_PHONE, TEST_PHONE):
+			frappe.db.delete("Dealer Login OTP", {"dealer": self.dealer})
+			frappe.db.delete("WhatsApp Message", {"dealer": self.dealer})
+			dealer_api.request_otp(phone=variant)
+			self.assertTrue(
+				frappe.db.exists("Dealer Login OTP", {"dealer": self.dealer}),
+				f"phone variant {variant!r} did not resolve to the dealer",
+			)
 
 	def test_request_otp_respects_the_resend_cooldown(self):
 		dealer_api.request_otp(phone=TEST_PHONE)
