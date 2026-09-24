@@ -47,6 +47,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Inquiries](#inquiries)
 - [Quotations](#quotations)
 - [Orders](#orders)
+- [Dealer Portal](#dealer-portal)
 - [WhatsApp / Communications](#whatsapp-communications)
 - [Warehouse — Bay Master](#warehouse-bay-master)
 - [Warehouse — Stock / Lots](#warehouse-stock-lots)
@@ -73,11 +74,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 
 ## Auth
 
-Foundation — must work before anything else does. Staff username+password only; dealer-facing login (OTP or password) is not built.
-
-> **NOT BUILT** — Dealer OTP-over-WhatsApp (request + verify): Not built. The auth module's own docstring says so explicitly — reserved for a separate dealer-facing app, out of scope for the current staff-app backend.
-
-> **NOT BUILT** — Dealer password login: Not built. `login()` requires one of the four staff roles; a dealer account has none of them, so this isn't a config toggle away — it needs its own path.
+Foundation — must work before anything else does. Staff username+password; dealer-portal login is phone + OTP (BRD C.13), a completely separate path — see below.
 
 #### POST `dms_erp.auth.api.login` · `guest` (no Bearer token required)
 
@@ -192,6 +189,42 @@ _No parameters._
   "primary_role": "sales"
 }
 ```
+
+
+### Dealer-portal login (BRD C.13)
+
+Phone + OTP, never a password — a dealer account never gets one. `request_otp`/`verify_otp` always return/throw the same generic response whether or not the phone number is actually registered, so this login surface never leaks which numbers exist. The OTP is delivered over WhatsApp (the same `WhatsApp Message` log `dms_erp.comms.api` writes to). On first successful verify, a dealer-portal `User` account is created automatically (role `DMS Dealer`, linked back to the `Customer` via `User.custom_dealer`) — there is no separate dealer signup/registration endpoint. `auth.middleware` then confines that session to only the `dms_erp.auth.dealer_api.*` and `dms_erp.sales.dealer_portal_api.*` methods; every other endpoint in this app throws `PermissionError` for it.
+
+#### POST `dms_erp.auth.dealer_api.request_otp` · `guest` (no Bearer token required)
+
+**Request a login code** — looks up the `Customer` whose `custom_phone` matches, and (subject to a 60s resend cooldown) sends a 6-digit code over WhatsApp, valid 5 minutes.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `phone` | string | required | matched against `Customer.custom_phone` |
+
+**Response**
+
+```json
+{ "success": true }
+```
+
+> Always this same response — an unregistered phone number, and a request inside the cooldown window, both return it too, without sending anything new.
+
+#### POST `dms_erp.auth.dealer_api.verify_otp` · `guest` (no Bearer token required)
+
+**Verify the code** — Same access/refresh token pair shape as staff `login()`. Locked out after 5 wrong attempts against a given code (request a new one). `user.dealer` in the response is the `Customer` id this session is scoped to.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `phone` | string | required |  |
+| `otp` | string | required | the 6-digit code |
+| `device_id` | string | required |  |
+| `device_name` | string | optional |  |
+
+**Response** — same shape as staff `login()`, e.g. `"user": { "dealer": "CUST-0004", "roles": ["DMS Dealer"], ... }`.
+
+> raises AuthenticationError for a wrong/expired/already-used code, an unregistered phone, or a locked-out attempt count — always the same generic message, never revealing which case it was.
 
 
 ### User management
@@ -1371,6 +1404,156 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 ```
 
 > total is server-computed (native grand_total) — every line's rate came from get_price_for_dealer at creation, never a client-supplied value
+
+
+---
+
+## Dealer Portal
+
+BRD C.13 — the dealer-facing self-service portal. Every method here lives under `dms_erp.sales.dealer_portal_api.` — exactly the prefix `auth.middleware` confines a `DMS Dealer`-only session to. **None of these endpoints take a `dealer` parameter** — the caller's own dealer identity is always resolved server-side from the authenticated session (`frappe.session.user` → `User.custom_dealer` → `Customer`), never from anything client-supplied, so a dealer session can't ask for another dealer's data by passing a different id. Login is phone + OTP — see [Dealer-portal login](#dealer-portal-login-brd-c13) under Auth.
+
+#### GET `dms_erp.sales.dealer_portal_api.get_catalog`
+
+**Browse the catalog** — this dealer's own assigned-and-sellable items (same visibility rule as staff's Dealer Catalog), paginated.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | matches item name |
+| `category` | string | optional | Item Group |
+| `limit` / `offset` | int | optional | default 20 / 0, max 100 |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "PVT-6060", "code": "PVT-6060", "name": "...", "dealerCode": "MY-OWN-CODE",
+    "price": 627, "topBatches": [{"batchNumber": "B-2026-014", "boxes": 340}],
+    "stockQty": 900, "images": [], "...": "(same fields as Products / Item Master's get_product, minus dealerCodes)"
+  }],
+  "total": 42, "limit": 20, "offset": 0
+}
+```
+
+> `dealerCode` is this dealer's own mapped code only — the full per-dealer `dealerCodes` list `get_product` returns to staff is stripped before this response leaves the server, so one dealer's session can never see another dealer's code for the same item.
+
+
+#### GET `dms_erp.sales.dealer_portal_api.resolve_code`
+
+**Search by code** — BRD C.13.1: works with either the dealer's own mapped code, or the company's own item code — tries the dealer's own mapping first (`resolve_dealer_code`), falls back to a direct item-code lookup (still gated by this dealer's own catalog visibility + current sellability).
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `code` | string | required |  |
+
+**Response** — same shape as one `get_catalog` row, or `null` if the code doesn't resolve for this dealer.
+
+
+#### GET `dms_erp.sales.dealer_portal_api.get_item`
+
+**Item detail** — images, real-time stock, top-3 batches, price (BRD C.13.1). Throws `PermissionError` if the item isn't in this dealer's catalog.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+
+**Response** — same shape as one `get_catalog` row.
+
+
+#### GET `dms_erp.sales.dealer_portal_api.suggest_alternatives`
+
+**Recommended items** — BRD C.13.1's "see alternative/recommended items" when an item is out of stock. Same-Series items in this dealer's own catalog, ranked by on-hand stock (no dedicated recommendation engine exists elsewhere in this app either).
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required | the out-of-stock item |
+| `limit` | int | optional | default 5, max 100 |
+
+**Response** — array, same shape as `get_catalog` rows.
+
+
+#### POST `dms_erp.sales.dealer_portal_api.raise_inquiry`
+
+**Raise an enquiry / out-of-stock request** — BRD C.13.1. Always `source: "Web"`, always unassigned (staff triage picks it up) — same catalog-visibility and sellability gate as the staff `create_inquiry`.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `item` | string | required |  |
+| `qty` | float | required |  |
+| `remarks` | string | optional |  |
+
+**Response** — same shape as `Inquiries`' `create_inquiry`, including `duplicateOf` when a recent open duplicate exists.
+
+
+#### POST `dms_erp.sales.dealer_portal_api.convert_to_order`
+
+**Convert an in-stock enquiry straight to an order** — BRD C.13.1: the dealer enters their own PO number to tag/close it. Lines come from the inquiry itself (not caller-supplied), and only an inquiry this dealer actually owns and hasn't already been converted/rejected/closed can be converted.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `inquiry` | string | required | must belong to this dealer |
+| `expected_dispatch` | date | required |  |
+| `customer_po` | string | required | sets native `Sales Order.po_no` and `Inquiry.customer_po`; closes the inquiry |
+
+**Response** — same shape as `Orders`' `create_order`.
+
+> raises PermissionError if the inquiry belongs to another dealer; ValidationError if it's already Converted to Order / Rejected / Closed, or if `customer_po` is blank
+
+
+#### GET `dms_erp.sales.dealer_portal_api.list_my_inquiries`
+
+**My enquiries** — paginated, always scoped to this dealer regardless of any filter passed.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | optional |  |
+| `search` | string | optional |  |
+| `limit` / `offset` | int | optional | default 20 / 0 |
+
+**Response** — same shape as `Inquiries`' `list_inquiries`.
+
+#### GET `dms_erp.sales.dealer_portal_api.get_my_inquiry`
+
+Same shape as `get_inquiry`. Throws `PermissionError` for an inquiry that isn't this dealer's own.
+
+#### GET `dms_erp.sales.dealer_portal_api.list_my_orders`
+
+**My orders** — order/delivery status tracking (BRD C.13.1), paginated, always scoped to this dealer.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `stage` | string | optional |  |
+| `limit` / `offset` | int | optional | default 20 / 0 |
+
+**Response** — same shape as `Orders`' `list_orders`.
+
+#### GET `dms_erp.sales.dealer_portal_api.get_my_order`
+
+Same shape as `get_order`. Throws `PermissionError` for an order that isn't this dealer's own.
+
+
+#### GET `dms_erp.sales.dealer_portal_api.my_dues`
+
+**Outstanding dues** (BRD C.13.1).
+
+**Response**
+
+```json
+{ "outstanding": 0.0 }
+```
+
+> Real SQL against the native `Sales Invoice.outstanding_amount` — returns 0 today only because nothing in this app raises a Sales Invoice yet anywhere; starts returning real figures the moment invoicing exists, no code change needed here.
+
+
+#### GET `dms_erp.sales.dealer_portal_api.my_profile`
+
+**Dealer's own profile.**
+
+**Response**
+
+```json
+{ "id": "CUST-0004", "name": "Om Tiles", "phone": "+919900011122", "classification": "Standard Dealer" }
+```
 
 
 ---

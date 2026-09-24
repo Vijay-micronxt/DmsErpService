@@ -26,7 +26,7 @@ from dms_erp.sales.order_channel import DEALER_TYPES
 
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
-ORDER_SOURCE_TYPES = ["Inquiry", "Quotation"]
+ORDER_SOURCE_TYPES = ["Inquiry", "Quotation", "Direct"]
 ORDER_CHANNELS = ["Retail", "Bulk", "Project"]
 
 CUSTOM_FIELDS = {
@@ -126,6 +126,21 @@ CUSTOM_FIELDS = {
 			"options": "User",
 			"description": "BRD C.12.3 — ownership of the dealer relationship. Targets/performance-vs-target reporting is a separate follow-up once the team decides whether that needs its own doctype or just a number field; this is the field-only version.",
 			"insert_after": "custom_dealer_type",
+		},
+		{
+			"fieldname": "custom_phone",
+			"fieldtype": "Data",
+			"label": "Phone",
+			"description": "BRD C.13 — the dealer portal's login identifier and OTP delivery target (see auth.dealer_api). Not used elsewhere in the app.",
+			"insert_after": "custom_salesperson",
+		},
+		{
+			"fieldname": "custom_price_visible",
+			"fieldtype": "Check",
+			"label": "Show Price in Dealer Portal",
+			"default": "1",
+			"description": "BRD C.13.1 — \"price (if enabled for that dealer)\". Gates price/dealerPrice in the dealer portal's own catalog and item-detail responses (sales.dealer_portal_api) only -- staff-facing screens always show price regardless of this flag.",
+			"insert_after": "custom_phone",
 		},
 	],
 }

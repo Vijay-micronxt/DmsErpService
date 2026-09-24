@@ -47,6 +47,7 @@ def _serialize(doc) -> dict:
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
 		"stage": doc.custom_fulfillment_stage,
+		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
 		"owner": doc.owner,
@@ -68,7 +69,7 @@ def _serialize_line(row) -> dict:
 	}
 
 
-def finalize_new_order(so, source_type: str, source_ref: str, channel: str = "Retail") -> dict:
+def finalize_new_order(so, source_type: str, source_ref: str | None, channel: str = "Retail") -> dict:
 	"""Insert + submit a freshly-built (unsaved) Sales Order doc, stamping Pacific's
 	fulfillment-stage bookkeeping. Shared by create_order and quotation_api.convert_to_order."""
 	if channel not in ORDER_CHANNELS:
@@ -80,7 +81,8 @@ def finalize_new_order(so, source_type: str, source_ref: str, channel: str = "Re
 	so.custom_fulfillment_stage = "Confirmed"
 
 	now = now_datetime()
-	so.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": f"Converted from {source_ref}"})
+	created_note = f"Converted from {source_ref}" if source_ref else "Created directly, no source Inquiry/Quotation"
+	so.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": created_note})
 	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user})
 
 	so.insert(ignore_permissions=True)
@@ -117,20 +119,22 @@ def get_order(order: str):
 	return _serialize(frappe.get_doc("Sales Order", order))
 
 
-@frappe.whitelist(methods=["POST"])
-def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str, channel: str | None = None):
-	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
-	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
-	plain approved dealer-price rates). The Quotation-sourced path is
-	quotation_api.convert_to_order; there is no third, source-less way to create an
-	Order, mirroring the frontend's Order.sourceType being strictly "Inquiry" or
-	"Quotation".
-
-	`channel` left unset auto-classifies from the dealer's type / item Series
-	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
-	audit-locked manual override."""
-	_assert_can_manage_orders()
-
+def _create_order(
+	dealer: str,
+	lines: list[dict],
+	expected_dispatch,
+	inquiry: str | None = None,
+	channel: str | None = None,
+	customer_po: str | None = None,
+) -> dict:
+	"""Unguarded core of create_order -- also called directly by
+	sales.dealer_portal_api.convert_to_order, whose own DMS Dealer session (scoped
+	to its own dealer identity) is the authorization for that path, not
+	ORDER_WRITE_ROLES. `customer_po` (BRD C.13.1 — the dealer's own PO number) sets
+	the native Sales Order.po_no and closes the source Inquiry (BRD C.3.1) when
+	there is one. `inquiry` is optional -- a staff-raised order with no prior
+	Inquiry/Quotation behind it (a walk-in or phone sale) is source_type "Direct",
+	same rate/catalog rules as any other order, just nothing to close on creation."""
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
 	if channel is None:
@@ -151,14 +155,39 @@ def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str
 			"company": default_company(),
 			"transaction_date": today(),
 			"delivery_date": expected_dispatch,
+			"po_no": customer_po,
 			"items": items,
 		}
 	)
 
-	order = finalize_new_order(so, source_type="Inquiry", source_ref=inquiry, channel=channel)
-	frappe.db.set_value("Inquiry", inquiry, "status", "Converted to Order")
+	order = finalize_new_order(
+		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
+	)
+	if inquiry:
+		frappe.db.set_value(
+			"Inquiry", inquiry, {"status": "Converted to Order", "customer_po": customer_po} if customer_po else {"status": "Converted to Order"}
+		)
 
 	return order
+
+
+@frappe.whitelist(methods=["POST"])
+def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str | None = None, channel: str | None = None, customer_po: str | None = None):
+	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
+	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
+	plain approved dealer-price rates). The Quotation-sourced path is
+	quotation_api.convert_to_order.
+
+	`inquiry` left unset creates a standalone order with no Inquiry/Quotation
+	behind it (source_type "Direct") -- a walk-in or phone sale a dealer never
+	raised a formal enquiry for. `customer_po` is the caller's PO number
+	reference, same field an inquiry-sourced order sets via its own PO.
+
+	`channel` left unset auto-classifies from the dealer's type / item Series
+	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
+	audit-locked manual override."""
+	_assert_can_manage_orders()
+	return _create_order(dealer, lines, expected_dispatch, inquiry, channel, customer_po)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

@@ -1,0 +1,92 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-09-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dealer",
+  "issued_at",
+  "expires_at",
+  "consumed_at",
+  "column_break_dlo",
+  "otp_hash",
+  "attempts"
+ ],
+ "fields": [
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "default": "Now",
+   "fieldname": "issued_at",
+   "fieldtype": "Datetime",
+   "label": "Issued At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Expires At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "consumed_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Consumed At"
+  },
+  {
+   "fieldname": "column_break_dlo",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Never the plaintext code -- same hash_token() as Auth Session.refresh_token_hash.",
+   "fieldname": "otp_hash",
+   "fieldtype": "Data",
+   "label": "OTP Hash",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Failed verify_otp attempts against this code. Locked out at 5 (see auth.dealer_api).",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Auth",
+ "name": "Dealer Login OTP",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

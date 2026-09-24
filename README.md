@@ -110,6 +110,23 @@ the real WhatsApp middleware integration exists — see `dms_erp/comms/README.md
 bench --site <site-name> set-config dms_erp_whatsapp_webhook_secret "<a long random secret>"
 ```
 
+BRD C.13's dealer-portal OTP is delivered for real over WhatsApp via whats91's
+Meta-channel template send (`dms_erp/comms/whats91.py`) — not the placeholder
+webhook above, and independent of whether the separate `erpnext_enhancements`
+app's own WhatsApp integration is installed on the site. Needs a Meta
+Authentication-category template approved beforehand (single `{{1}}` body
+variable — the code — with a **Copy Code** button, not One-Tap Autofill):
+
+```bash
+bench --site <site-name> set-config dms_erp_whats91_auth_token "<whats91 Meta-channel auth token>"
+bench --site <site-name> set-config dms_erp_whats91_otp_template "<approved template name>"
+```
+
+Unset (either key), `request_otp` still succeeds and the code is still
+recorded, but nothing goes out over WhatsApp — this is logged, not raised, so
+a WhatsApp outage or a not-yet-configured site never changes the endpoint's
+response shape.
+
 ## Roles
 
 Four Frappe Roles are created automatically on install/migrate, all with

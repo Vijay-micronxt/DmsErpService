@@ -44,4 +44,8 @@ def build_user_profile(user: str) -> dict:
 		"roles": roles,
 		"app_roles": app_roles,
 		"primary_role": resolve_primary_role(roles),
+		# BRD C.13 — set only for a dealer-portal account (role DMS Dealer); None for
+		# every staff account. dealer_portal_api resolves its dealer identity from this
+		# same field directly rather than trusting anything client-supplied.
+		"dealer": doc.get("custom_dealer"),
 	}
