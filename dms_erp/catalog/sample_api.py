@@ -219,6 +219,12 @@ def issue_sample(request: str, bay: str, batch_no: str | None = None, photo: str
 					"qty": doc.qty,
 					"batch_no": batch_no or doc.batch,
 					"s_warehouse": bay_doc.name,
+					# A sample is a goodwill/marketing cost, not a costed sale -- an item with
+					# no resolvable valuation rate (never went through a costed Purchase
+					# Receipt) would otherwise hard-block ERPNext's own accounting-entry check
+					# on submit. This only tolerates a *missing* rate; it doesn't override a
+					# real one FIFO/moving-average can already resolve.
+					"allow_zero_valuation_rate": 1,
 				}
 			],
 		}
