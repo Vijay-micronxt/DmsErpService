@@ -28,10 +28,13 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 # BRD C.10.5: opted-in Series get their items' discontinuation status advanced
 # automatically once idle/store/sales signals all breach that Series' thresholds
 # (see catalog/withdrawal_api.py) -- a no-op for every Series that hasn't opted in.
+# BRD C.10.2: every Active Display Placement Slip gets a WhatsApp nudge once it
+# crosses the next 3/6/12-month monitoring interval (see catalog/sample_api.py).
 scheduler_events = {
 	"daily": [
 		"dms_erp.purchase.reorder_api.notify_reorder_review",
 		"dms_erp.pricing.dealer_classification.recompute_dealer_classifications",
 		"dms_erp.catalog.withdrawal_api.evaluate_product_withdrawals",
+		"dms_erp.catalog.sample_api.send_display_monitoring_reminders",
 	],
 }

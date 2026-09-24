@@ -1,0 +1,148 @@
+{
+ "actions": [],
+ "autoname": "SDR-.YYYY.-.#####",
+ "creation": "2026-09-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "placement_slip",
+  "dealer",
+  "item",
+  "recon_date",
+  "column_break_sdr",
+  "response",
+  "responded_via",
+  "responded_by",
+  "action",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "placement_slip",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Placement Slip",
+   "options": "Display Placement Slip",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "recon_date",
+   "fieldtype": "Date",
+   "label": "Reconciliation Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_sdr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "response",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Response",
+   "options": "Still Displayed\nRemoved\nLoose Not Shown",
+   "reqd": 1
+  },
+  {
+   "default": "Staff",
+   "fieldname": "responded_via",
+   "fieldtype": "Select",
+   "label": "Responded Via",
+   "options": "WhatsApp\nStaff"
+  },
+  {
+   "fieldname": "responded_by",
+   "fieldtype": "Link",
+   "label": "Responded By",
+   "options": "User"
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Action",
+   "options": "\nKeep\nPut-up Replacement\nPullback"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "Sample Display Reconciliation",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Warehouse",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Sales",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

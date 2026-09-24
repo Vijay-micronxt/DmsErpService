@@ -1,0 +1,159 @@
+{
+ "actions": [],
+ "autoname": "SR-.YYYY.-.#####",
+ "creation": "2026-09-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "dealer",
+  "qty",
+  "column_break_sr",
+  "requested_by",
+  "request_date",
+  "section_break_sr_approval",
+  "approval_status",
+  "approver",
+  "column_break_sr_approval",
+  "batch",
+  "sample_qr_code"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_sr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "label": "Requested By",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "request_date",
+   "fieldtype": "Date",
+   "label": "Request Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_sr_approval",
+   "fieldtype": "Section Break",
+   "label": "Approval & Issuance"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "approval_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Approval Status",
+   "options": "Pending\nApproved\nRejected\nIssued",
+   "reqd": 1
+  },
+  {
+   "fieldname": "approver",
+   "fieldtype": "Link",
+   "label": "Approver",
+   "options": "User"
+  },
+  {
+   "fieldname": "column_break_sr_approval",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Traceability only (BRD C.10.1) -- which batch the sample was drawn from. Not binding on any future sale of this item.",
+   "fieldname": "batch",
+   "fieldtype": "Link",
+   "label": "Batch",
+   "options": "Batch"
+  },
+  {
+   "description": "Dealer-specific unique code (BRD C.10.1) -- the same item issued to two different dealers gets two different codes. Set once, at issuance.",
+   "fieldname": "sample_qr_code",
+   "fieldtype": "Data",
+   "label": "Sample QR Code",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "Sample Request",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Sales",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "DMS Warehouse",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
