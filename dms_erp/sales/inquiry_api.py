@@ -34,6 +34,7 @@ from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.sales.utils import find_open_duplicate_inquiries
+from dms_erp.warehouse.utils import total_stock_for_item
 
 INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
@@ -138,6 +139,19 @@ def _create_inquiry(
 	# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
 	duplicates = find_open_duplicate_inquiries(dealer, item)
 
+	# Derived from real on-hand qty rather than always "Open" -- this is what
+	# feeds the reorder engine's missed-demand signal (purchase.reorder_api.
+	# MISSED_DEMAND_STATUSES): nothing else ever sets an Inquiry to Out of Stock.
+	# "Pre-order Required" has no stock-derivable signal of its own and stays a
+	# staff call via update_inquiry.
+	on_hand = total_stock_for_item(item)
+	if on_hand <= 0:
+		inquiry_status = "Out of Stock"
+	elif on_hand >= qty:
+		inquiry_status = "Available"
+	else:
+		inquiry_status = "Partially Available"
+
 	doc = frappe.get_doc(
 		{
 			"doctype": "Inquiry",
@@ -145,7 +159,7 @@ def _create_inquiry(
 			"item": item,
 			"qty": qty,
 			"source": source,
-			"status": "Open",
+			"status": inquiry_status,
 			"expected_delivery": expected_delivery,
 			"follow_up_date": follow_up_date,
 			"assigned_to": assigned_to,
