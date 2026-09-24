@@ -57,16 +57,31 @@ def _classification_for_total(total: float) -> str:
 def recompute_dealer_classifications() -> int:
 	"""Daily scheduled job (BRD C.1.4): reclassifies every Customer from confirmed
 	Sales Order value over the trailing window. Customers with zero qualifying
-	sales are classified Standard Dealer, same as a brand-new dealer. Returns the
-	number of Customers whose classification actually changed, so callers/tests
-	don't have to re-query to check whether anything happened."""
+	sales are classified Standard Dealer, same as a brand-new dealer.
+
+	custom_out_of_station (sales/setup.py) is a floor on top of the volume-based
+	tier, not a separate rule: an out-of-station dealer whose sales alone would
+	only earn Standard/Dealer still gets bumped to at least Master Dealer pricing
+	(BRD C.1.4 — transport cost justifies it), but a genuinely high-volume
+	out-of-station dealer is never bumped *down* to Master Dealer if their sales
+	already earned it on their own — there is nothing above Master Dealer today,
+	so in practice this only ever raises, never lowers.
+
+	Returns the number of Customers whose classification actually changed, so
+	callers/tests don't have to re-query to check whether anything happened."""
 	since = add_days(today(), -_classification_window_days())
 	totals = _confirmed_sales_value_by_customer(since)
 
-	customers = frappe.get_all("Customer", fields=["name", "custom_dealer_classification"])
+	customers = frappe.get_all(
+		"Customer", fields=["name", "custom_dealer_classification", "custom_out_of_station"]
+	)
 	changed = 0
 	for customer in customers:
 		new_classification = _classification_for_total(totals.get(customer.name, 0))
+		if customer.custom_out_of_station and DEALER_CLASSIFICATIONS.index(
+			new_classification
+		) < DEALER_CLASSIFICATIONS.index(DEALER_CLASSIFICATION_MASTER):
+			new_classification = DEALER_CLASSIFICATION_MASTER
 		if new_classification != customer.custom_dealer_classification:
 			frappe.db.set_value("Customer", customer.name, "custom_dealer_classification", new_classification)
 			changed += 1

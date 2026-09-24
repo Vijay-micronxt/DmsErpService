@@ -53,6 +53,13 @@ CUSTOM_FIELDS = {
 			"precision": "6",
 			"insert_after": "custom_latitude",
 		},
+		{
+			"fieldname": "custom_insurance_holder",
+			"fieldtype": "Data",
+			"label": "Insurance Holder / Policy Reference",
+			"description": "BRD C.1.6 — identifies which insurer a damage claim against this supplier should route to. Free text, not a Link (Insurer isn't its own master anywhere in this app); captured here only, not yet read by finance.claims_api.",
+			"insert_after": "custom_longitude",
+		},
 	],
 }
 

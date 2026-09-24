@@ -45,7 +45,9 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["sourceRef"], inquiry["id"])
 		self.assertEqual(order["stage"], "Confirmed")
 		self.assertEqual(order["channel"], "Retail")
-		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+		converted = inquiry_api.get_inquiry(inquiry["id"])
+		self.assertEqual(converted["status"], "Converted to Order")
+		self.assertEqual(converted["linkedSalesOrder"], order["id"])
 
 	def test_create_order_uses_the_dealers_tiered_price_not_the_flat_dealer_list(self):
 		series_api.create_series(
@@ -105,8 +107,41 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(updated["stage"], "Picking")
 		self.assertEqual(len(updated["history"]), 3)  # Created, Confirmed, Picking
 
+		order_api.confirm_advance_payment(order["id"])
 		updated = order_api.advance_order_stage(order["id"], "Ready to Dispatch")
 		self.assertEqual(updated["stage"], "Ready to Dispatch")
+
+	def test_advance_order_stage_refuses_ready_to_dispatch_without_advance_confirmed(self):
+		order = self._make_order()
+		order_api.advance_order_stage(order["id"], "Picking")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+
+	def test_confirm_advance_payment_unblocks_ready_to_dispatch(self):
+		order = self._make_order()
+		order_api.advance_order_stage(order["id"], "Picking")
+
+		confirmed = order_api.confirm_advance_payment(order["id"])
+		self.assertTrue(confirmed["advanceConfirmed"])
+
+		updated = order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+		self.assertEqual(updated["stage"], "Ready to Dispatch")
+
+	def test_confirm_advance_payment_requires_management_role(self):
+		order = self._make_order()
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			order_api.confirm_advance_payment(order["id"])
+
+	def test_confirm_advance_payment_can_be_reversed(self):
+		order = self._make_order()
+		order_api.confirm_advance_payment(order["id"])
+		reversed_order = order_api.confirm_advance_payment(order["id"], confirmed=False)
+		self.assertFalse(reversed_order["advanceConfirmed"])
+
+		order_api.advance_order_stage(order["id"], "Picking")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.advance_order_stage(order["id"], "Ready to Dispatch")
 
 	def test_advance_order_stage_rejects_skipping_ahead(self):
 		order = self._make_order()
@@ -119,6 +154,7 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(cancelled["stage"], "Cancelled")
 
 		order2 = self._make_order()
+		order_api.confirm_advance_payment(order2["id"])
 		for stage in ("Picking", "Ready to Dispatch", "Dispatched", "Delivered"):
 			order_api.advance_order_stage(order2["id"], stage)
 		with self.assertRaises(frappe.ValidationError):

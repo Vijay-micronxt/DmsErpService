@@ -91,6 +91,14 @@ CUSTOM_FIELDS = {
 			"in_standard_filter": 1,
 			"insert_after": "custom_stage_history",
 		},
+		{
+			"fieldname": "custom_advance_confirmed",
+			"fieldtype": "Check",
+			"label": "Advance Payment Confirmed",
+			"default": "0",
+			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
+			"insert_after": "custom_order_channel",
+		},
 	],
 	"Customer": [
 		{
@@ -141,6 +149,22 @@ CUSTOM_FIELDS = {
 			"default": "1",
 			"description": "BRD C.13.1 — \"price (if enabled for that dealer)\". Gates price/dealerPrice in the dealer portal's own catalog and item-detail responses (sales.dealer_portal_api) only -- staff-facing screens always show price regardless of this flag.",
 			"insert_after": "custom_phone",
+		},
+		{
+			"fieldname": "custom_email",
+			"fieldtype": "Data",
+			"options": "Email",
+			"label": "Email",
+			"description": "BRD C.13 — WhatsApp + email follow-up (BRD C.2.6/C.10.2) and a future email-based dealer app login channel. Not used elsewhere in the app yet.",
+			"insert_after": "custom_price_visible",
+		},
+		{
+			"fieldname": "custom_out_of_station",
+			"fieldtype": "Check",
+			"label": "Out of Station",
+			"default": "0",
+			"description": "BRD C.1.4 — a dealer far enough from the warehouse that transport cost justifies at least Master Dealer pricing. Staff-set (no geocoding exists anywhere in this app); read by pricing.dealer_classification.recompute_dealer_classifications as a floor on top of the volume-based tier, never a client-specific location check — see that module for why.",
+			"insert_after": "custom_email",
 		},
 	],
 }

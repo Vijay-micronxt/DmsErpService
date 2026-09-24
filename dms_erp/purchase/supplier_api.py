@@ -26,7 +26,14 @@ def _assert_can_manage_suppliers():
 
 
 def _serialize(
-	name: str, supplier_name: str, supplier_group: str | None, country: str | None, disabled: int, latitude=None, longitude=None
+	name: str,
+	supplier_name: str,
+	supplier_group: str | None,
+	country: str | None,
+	disabled: int,
+	latitude=None,
+	longitude=None,
+	insurance_holder: str | None = None,
 ) -> dict:
 	return {
 		"id": name,
@@ -36,6 +43,8 @@ def _serialize(
 		"disabled": bool(disabled),
 		"latitude": latitude,
 		"longitude": longitude,
+		# BRD C.1.6 — which insurer a damage claim against this supplier routes to.
+		"insuranceHolder": insurance_holder,
 	}
 
 
@@ -47,18 +56,46 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 	rows = frappe.get_all(
 		"Supplier",
 		filters=filters,
-		fields=["name", "supplier_name", "supplier_group", "country", "disabled", "custom_latitude", "custom_longitude"],
+		fields=[
+			"name",
+			"supplier_name",
+			"supplier_group",
+			"country",
+			"disabled",
+			"custom_latitude",
+			"custom_longitude",
+			"custom_insurance_holder",
+		],
 		order_by="supplier_name asc",
 	)
 	return [
-		_serialize(r.name, r.supplier_name, r.supplier_group, r.country, r.disabled, r.custom_latitude, r.custom_longitude) for r in rows
+		_serialize(
+			r.name,
+			r.supplier_name,
+			r.supplier_group,
+			r.country,
+			r.disabled,
+			r.custom_latitude,
+			r.custom_longitude,
+			r.custom_insurance_holder,
+		)
+		for r in rows
 	]
 
 
 @frappe.whitelist(methods=["GET"])
 def get_supplier(supplier: str):
 	doc = frappe.get_doc("Supplier", supplier)
-	return _serialize(doc.name, doc.supplier_name, doc.supplier_group, doc.country, doc.disabled, doc.custom_latitude, doc.custom_longitude)
+	return _serialize(
+		doc.name,
+		doc.supplier_name,
+		doc.supplier_group,
+		doc.country,
+		doc.disabled,
+		doc.custom_latitude,
+		doc.custom_longitude,
+		doc.custom_insurance_holder,
+	)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
@@ -69,7 +106,7 @@ def set_supplier_location(supplier: str, latitude: float, longitude: float):
 	doc.custom_latitude = latitude
 	doc.custom_longitude = longitude
 	doc.save(ignore_permissions=True)
-	return _serialize(doc.name, doc.supplier_name, doc.supplier_group, doc.country, doc.disabled, doc.custom_latitude, doc.custom_longitude)
+	return get_supplier(doc.name)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -79,6 +116,7 @@ def create_supplier(
 	country: str | None = None,
 	latitude: float | None = None,
 	longitude: float | None = None,
+	insurance_holder: str | None = None,
 ):
 	"""BRD MD-02 — create a supplier (a native Supplier). `group` falls back to the site's
 	Buying Settings default when omitted."""
@@ -100,6 +138,8 @@ def create_supplier(
 		values["custom_latitude"] = latitude
 	if longitude is not None:
 		values["custom_longitude"] = longitude
+	if insurance_holder:
+		values["custom_insurance_holder"] = insurance_holder.strip()
 
 	doc = frappe.get_doc(values)
 	doc.insert(ignore_permissions=True)
@@ -108,7 +148,7 @@ def create_supplier(
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_supplier(supplier: str, patch: dict):
-	"""Patch keys: name, group, country, latitude, longitude, disabled."""
+	"""Patch keys: name, group, country, latitude, longitude, disabled, insuranceHolder."""
 	_assert_can_manage_suppliers()
 
 	field_map = {
@@ -117,6 +157,7 @@ def update_supplier(supplier: str, patch: dict):
 		"country": "country",
 		"latitude": "custom_latitude",
 		"longitude": "custom_longitude",
+		"insuranceHolder": "custom_insurance_holder",
 	}
 
 	doc = frappe.get_doc("Supplier", supplier)

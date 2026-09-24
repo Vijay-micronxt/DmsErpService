@@ -25,12 +25,22 @@ from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.warehouse.utils import default_company
 
 ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
+# No DMS Finance role exists anywhere in this app's role model -- Management is the
+# closest fit for a payment sign-off gate, deliberately narrower than
+# ORDER_WRITE_ROLES (a salesperson shouldn't be able to self-certify their own
+# order's advance payment).
+ADVANCE_CONFIRM_ROLES = {"DMS Management", "System Manager"}
 FORWARD_FLOW = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered"]
 
 
 def _assert_can_manage_orders():
 	if not set(frappe.get_roles(frappe.session.user)) & ORDER_WRITE_ROLES:
 		frappe.throw(_("Only Sales or Management can manage orders."), frappe.PermissionError)
+
+
+def _assert_can_confirm_advance():
+	if not set(frappe.get_roles(frappe.session.user)) & ADVANCE_CONFIRM_ROLES:
+		frappe.throw(_("Only Management can confirm advance payment."), frappe.PermissionError)
 
 
 def _serialize(doc) -> dict:
@@ -50,6 +60,8 @@ def _serialize(doc) -> dict:
 		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
+		# BRD C.3.4 — interim manual gate ahead of VALS API. See advance_order_stage.
+		"advanceConfirmed": bool(doc.custom_advance_confirmed),
 		"owner": doc.owner,
 		"history": [
 			{"stage": row.stage, "at": row.at, "by": row.by, "note": row.note}
@@ -164,9 +176,10 @@ def _create_order(
 		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
 	)
 	if inquiry:
-		frappe.db.set_value(
-			"Inquiry", inquiry, {"status": "Converted to Order", "customer_po": customer_po} if customer_po else {"status": "Converted to Order"}
-		)
+		values = {"status": "Converted to Order", "linked_sales_order": order["id"]}
+		if customer_po:
+			values["customer_po"] = customer_po
+		frappe.db.set_value("Inquiry", inquiry, values)
 
 	return order
 
@@ -191,6 +204,19 @@ def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
+def confirm_advance_payment(order: str, confirmed: bool = True):
+	"""BRD C.3.4 — interim manual gate ahead of the real VALS API integration
+	(blocked on external credentials, not built here). No dealer-level "requires
+	advance" concept exists in this app -- Management confirms (or reverses)
+	per order, whenever, same as any other manual sign-off; advance_order_stage
+	is what actually enforces it against Ready to Dispatch."""
+	_assert_can_confirm_advance()
+
+	frappe.db.set_value("Sales Order", order, "custom_advance_confirmed", 1 if confirmed else 0)
+	return get_order(order)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
 def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 	_assert_can_manage_orders()
 
@@ -204,6 +230,12 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 	is_cancel = next_stage == "Cancelled" and current != "Delivered" and current != "Cancelled"
 	if not (is_forward_step or is_cancel):
 		frappe.throw(_("Cannot move an order from {0} to {1}.").format(current, next_stage), frappe.ValidationError)
+
+	if next_stage == "Ready to Dispatch" and not doc.custom_advance_confirmed:
+		frappe.throw(
+			_("{0}'s advance payment must be confirmed before it can move to Ready to Dispatch.").format(order),
+			frappe.ValidationError,
+		)
 
 	doc.custom_fulfillment_stage = next_stage
 	doc.append("custom_stage_history", {"stage": next_stage, "at": now_datetime(), "by": frappe.session.user, "note": note})

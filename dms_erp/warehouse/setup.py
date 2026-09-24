@@ -60,6 +60,14 @@ CUSTOM_FIELDS = {
 			"description": "Comma-separated Item Group names this bay is designated for. Empty = any category.",
 			"insert_after": "custom_row",
 		},
+		{
+			"fieldname": "custom_linked_main_bay",
+			"fieldtype": "Link",
+			"options": "Warehouse",
+			"label": "Linked Main Bay",
+			"description": "Only meaningful on a buffer bay -- its habitual main-bay replenishment destination (BRD 1.9). Buffer→Main transfers still suggest a bay algorithmically by free space/category when this is unset.",
+			"insert_after": "custom_suitable_categories",
+		},
 	],
 	"Stock Entry": [
 		{

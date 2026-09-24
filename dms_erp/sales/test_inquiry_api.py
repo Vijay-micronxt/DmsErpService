@@ -7,7 +7,9 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales import inquiry_api
 from dms_erp.sales.utils import DUPLICATE_INQUIRY_WINDOW_DAYS
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse import allocation_api
+from dms_erp.warehouse.setup import setup_warehouse
+from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
 
 
 class TestInquiryApi(FrappeTestCase):
@@ -17,19 +19,41 @@ class TestInquiryApi(FrappeTestCase):
 		ensure_company()
 		setup_catalog()
 		setup_purchase()
+		setup_warehouse()
 		cls.item = make_item("INQ-TEST-ITEM", "Vitrified")
 		cls.dealer = make_dealer("Inquiry Test Dealer")
 		cls.supplier = make_supplier("Inquiry Test Supplier")
+		cls.bay = make_bay("INQ-TEST-BAY-01", categories=["Vitrified"])
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
-	def test_create_inquiry_defaults_to_open(self):
-		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=100, source="WhatsApp")
-		self.assertEqual(inquiry["status"], "Open")
+	def test_create_inquiry_with_no_stock_is_out_of_stock(self):
+		# BRD C.2.4 / Phase 22 -- status is derived from real on-hand qty at creation
+		# (previously always hardcoded "Open"), which is what feeds the reorder
+		# engine's missed-demand signal (purchase.reorder_api.MISSED_DEMAND_STATUSES).
+		item = make_item("INQ-TEST-NO-STOCK", "Vitrified")
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=100, source="WhatsApp")
+		self.assertEqual(inquiry["status"], "Out of Stock")
 		self.assertEqual(inquiry["dealerId"], self.dealer)
 		self.assertEqual(inquiry["qty"], 100)
 		self.assertIsNone(inquiry["duplicateOf"])
+
+	def test_create_inquiry_fully_covered_by_stock_is_available(self):
+		item = make_item("INQ-TEST-FULL-STOCK", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="INQ-TEST-FULL-B1", total_qty=100, lines=[{"bay": self.bay["code"], "qty": 100}], supplier=self.supplier
+		)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
+		self.assertEqual(inquiry["status"], "Available")
+
+	def test_create_inquiry_partially_covered_by_stock_is_partially_available(self):
+		item = make_item("INQ-TEST-PARTIAL-STOCK", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="INQ-TEST-PARTIAL-B1", total_qty=20, lines=[{"bay": self.bay["code"], "qty": 20}], supplier=self.supplier
+		)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
+		self.assertEqual(inquiry["status"], "Partially Available")
 
 	def test_create_inquiry_flags_a_recent_open_duplicate(self):
 		dealer = make_dealer("Inquiry Duplicate Dealer")

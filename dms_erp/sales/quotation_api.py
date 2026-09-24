@@ -278,6 +278,8 @@ def convert_to_order(quotation: str, expected_dispatch=None):
 	order = finalize_new_order(so, source_type="Quotation", source_ref=quotation, channel=qtn.custom_order_channel)
 
 	if qtn.custom_inquiry:
-		frappe.db.set_value("Inquiry", qtn.custom_inquiry, "status", "Converted to Order")
+		frappe.db.set_value(
+			"Inquiry", qtn.custom_inquiry, {"status": "Converted to Order", "linked_sales_order": order["id"]}
+		)
 
 	return order

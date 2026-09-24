@@ -39,12 +39,15 @@ pullback_display only records the condition and resell/write-off/clearance
 decision (BRD C.10.4); it does not move stock.
 """
 
+from html import escape as _esc
+
 import frappe
 from frappe import _
 from frappe.utils import add_months, getdate, now_datetime, today
 
 from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
 from dms_erp.pagination import clamp
+from dms_erp.qr_utils import qr_data_uri
 from dms_erp.warehouse.utils import default_company, get_bay
 
 SAMPLE_REQUEST_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -258,6 +261,65 @@ def issue_sample(request: str, bay: str, batch_no: str | None = None, photo: str
 	return {"sampleRequest": _serialize_request(doc), "placement": _serialize_placement(placement)}
 
 
+_SAMPLE_STICKER_CSS = """
+	@page { size: 2in 1in; margin: 0.06in; }
+	* { box-sizing: border-box; }
+	body { margin: 0; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+	.sticker { width: 2in; height: 1in; padding: 0.08in; display: flex; gap: 0.08in; align-items: center; }
+	.sticker .qr { width: 0.82in; height: 0.82in; flex-shrink: 0; }
+	.sticker .info { font-size: 8pt; line-height: 1.3; overflow: hidden; }
+	.sticker .info .code { font-size: 10pt; font-weight: 700; }
+	.sticker .info .name { font-weight: 600; }
+"""
+
+
+@frappe.whitelist(methods=["GET"])
+def get_sample_sticker_data(request: str) -> dict:
+	"""BRD C.10/D.3 dealer sample sticker — dealer-specific QR + product name, no
+	batch/bay/PR fields (unlike warehouse.allocation_api's box stickers): a sample
+	sticker travels with the dealer, not the warehouse's own inward flow. Built on
+	sample_qr_code, the same "each dealer gets a unique QR for the same item"
+	identity issue_sample already generates, so the sticker payload is exactly
+	what a dealer's own copy uniquely resolves to. Only meaningful once a sample
+	has actually been issued (sample_qr_code is empty before that)."""
+	doc = frappe.get_doc("Sample Request", request)
+	if not doc.sample_qr_code:
+		frappe.throw(_("{0} has not been issued yet — no sticker to print.").format(request), frappe.ValidationError)
+
+	item_doc = frappe.get_cached_doc("Item", doc.item)
+	dealer_name = frappe.get_cached_value("Customer", doc.dealer, "customer_name") or doc.dealer
+	return {
+		"itemCode": doc.item,
+		"itemName": item_doc.item_name,
+		"dealer": doc.dealer,
+		"dealerName": dealer_name,
+		"qrPayload": doc.sample_qr_code,
+		"qrCode": qr_data_uri(doc.sample_qr_code),
+	}
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def render_sample_sticker_html(request: str) -> str:
+	"""Renders get_sample_sticker_data as a small printable HTML sheet sized to a
+	2x1in label via @page CSS -- same plain-HTML-in-the-ordinary-JSON-envelope
+	approach as warehouse.allocation_api.render_box_stickers_html (not a Desk
+	Print Format; this API-only app never redirects into /app), opened in a new
+	tab and handed to the browser's own Print / Save-as-PDF."""
+	data = get_sample_sticker_data(request)
+	card = f"""<div class="sticker">
+	<img class="qr" src="{data['qrCode']}" alt="QR">
+	<div class="info">
+		<div class="code">{_esc(data['itemCode'])}</div>
+		<div class="name">{_esc(data.get('itemName') or '')}</div>
+		<div class="row">{_esc(data.get('dealerName') or '')}</div>
+	</div>
+</div>"""
+	return (
+		f"<!doctype html><html><head><meta charset='utf-8'><title>Sample Sticker</title>"
+		f"<style>{_SAMPLE_STICKER_CSS}</style></head><body>{card}</body></html>"
+	)
+
+
 def _grant_dealer_item_sample(dealer: str, item: str):
 	"""Sets sample_issued on this dealer's Item Dealer Code row, creating one if this
 	dealer has never had a row for this item. customer_item_code is reqd on that
@@ -268,9 +330,37 @@ def _grant_dealer_item_sample(dealer: str, item: str):
 	row = next((r for r in item_doc.custom_dealer_codes if r.dealer == dealer), None)
 	if row:
 		row.sample_issued = 1
+		row.sample_issued_date = today()
 	else:
-		item_doc.append("custom_dealer_codes", {"dealer": dealer, "customer_item_code": item, "sample_issued": 1})
+		item_doc.append(
+			"custom_dealer_codes",
+			{"dealer": dealer, "customer_item_code": item, "sample_issued": 1, "sample_issued_date": today()},
+		)
 	item_doc.save(ignore_permissions=True)
+
+
+def _revoke_dealer_item_sample_if_no_active_placement(dealer: str, item: str):
+	"""BRD C.1.5's flip side, task 2.3 -- a dealer's catalog is driven by their
+	issued-sample list day to day, so pulling the last active Display Placement Slip
+	for a dealer+item back out of the field should revoke that visibility the same
+	way issuing one grants it. Guarded on "no active placement left" rather than
+	unconditional, since a dealer can have more than one Sample Request -> Display
+	Placement Slip for the same item over time (a second location, a replacement) --
+	pulling back one shouldn't hide the item while another is still genuinely out
+	there."""
+	still_active = frappe.db.exists(
+		"Display Placement Slip", {"dealer": dealer, "item": item, "status": "Active"}
+	)
+	if still_active:
+		return
+
+	item_doc = frappe.get_doc("Item", item)
+	row = next((r for r in item_doc.custom_dealer_codes if r.dealer == dealer), None)
+	if row and row.sample_issued:
+		row.sample_issued = 0
+		item_doc.save(ignore_permissions=True)
+
+	_set_product_visibility(dealer, item, False)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -350,7 +440,12 @@ def record_reconciliation(
 def pullback_display(placement_slip: str, condition: str, decision: str):
 	"""Records that a display was physically pulled back to the warehouse, its
 	condition, and the resell/write-off/clearance decision (BRD C.10.4). Does not
-	move stock -- see this module's docstring."""
+	move stock -- see this module's docstring.
+
+	BRD task 2.3 -- a Pulled Back placement is the definitive "no longer in the
+	field" signal, so it's also where catalog visibility (BRD C.1.5) gets revoked,
+	mirroring how issue_sample grants it. Guarded on no other active placement for
+	this dealer+item -- see _revoke_dealer_item_sample_if_no_active_placement."""
 	_assert_can_manage_display()
 
 	placement = frappe.get_doc("Display Placement Slip", placement_slip)
@@ -358,6 +453,9 @@ def pullback_display(placement_slip: str, condition: str, decision: str):
 	placement.condition = condition
 	placement.pullback_decision = decision
 	placement.save(ignore_permissions=True)
+
+	_revoke_dealer_item_sample_if_no_active_placement(placement.dealer, placement.item)
+
 	return _serialize_placement(placement)
 
 

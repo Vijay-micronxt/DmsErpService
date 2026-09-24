@@ -177,7 +177,9 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(len(order["history"]), 2)
 		self.assertEqual(order["history"][0]["stage"], "Created")
 		self.assertEqual(order["history"][1]["stage"], "Confirmed")
-		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+		converted = inquiry_api.get_inquiry(inquiry["id"])
+		self.assertEqual(converted["status"], "Converted to Order")
+		self.assertEqual(converted["linkedSalesOrder"], order["id"])
 
 	def test_list_quotations_is_paginated_and_searchable(self):
 		dealer = make_dealer("Quotation Pagination Dealer")
