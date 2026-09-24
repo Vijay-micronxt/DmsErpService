@@ -19,6 +19,11 @@ def top_batches(item: str, n: int = 3):
 
 
 @frappe.whitelist(methods=["GET"])
+def suggest_batch_combination(item: str, required_qty: float):
+	return utils.suggest_batch_combination(item, required_qty)
+
+
+@frappe.whitelist(methods=["GET"])
 def suggest_bays(category: str, qty: float, kind: str = "normal"):
 	return utils.suggest_bays(category, qty, kind)
 

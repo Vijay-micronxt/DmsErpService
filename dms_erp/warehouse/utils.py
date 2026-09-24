@@ -197,10 +197,11 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 	return out
 
 
-def top_batches(item: str, n: int = 3) -> list[dict]:
-	"""BRD C.6.2: the top-N batches by on-hand qty for a dealer-facing view (and the
-	future WhatsApp batch-combination reply) — aggregated across every bay a batch
-	is split over, since list_stock_lots' rows are per-bay-per-batch, not per-batch."""
+def _ranked_batches(item: str) -> list[dict]:
+	"""Every batch of an item, on-hand qty summed across every bay it's split over
+	(list_stock_lots' rows are per-bay-per-batch, not per-batch), ranked largest
+	first. Shared by top_batches (a capped view) and suggest_batch_combination
+	(which needs the full ranking, not just the top N)."""
 	lots = list_stock_lots(item=item)
 	by_batch: dict[str, dict] = {}
 	for lot in lots:
@@ -209,8 +210,38 @@ def top_batches(item: str, n: int = 3) -> list[dict]:
 			{"batchNumber": lot["batchNumber"], "itemCode": lot["itemCode"], "itemName": lot["itemName"], "boxes": 0},
 		)
 		row["boxes"] += lot["boxes"]
-	ranked = sorted(by_batch.values(), key=lambda r: r["boxes"], reverse=True)
-	return ranked[:n]
+	return sorted(by_batch.values(), key=lambda r: r["boxes"], reverse=True)
+
+
+def top_batches(item: str, n: int = 3) -> list[dict]:
+	"""BRD C.6.2: the top-N batches by on-hand qty for a dealer-facing view."""
+	return _ranked_batches(item)[:n]
+
+
+def suggest_batch_combination(item: str, required_qty: float) -> dict:
+	"""BRD C.2.2: reply suggests a batch meeting the required qty; if no single
+	batch suffices, suggest a 2-3 batch combination. Greedy, largest-first — not
+	an optimal subset-sum, since the BRD's own framing ("if no single batch
+	suffices...") describes reaching for the next-largest lot, not hunting for a
+	tighter-fitting smaller combination.
+
+	Returns {"sufficient", "batches", "totalBoxes"}. `sufficient` is False when even
+	the 3 largest batches combined fall short — `batches`/`totalBoxes` are still
+	returned as the closest available fallback, not withheld."""
+	ranked = _ranked_batches(item)
+
+	if ranked and ranked[0]["boxes"] >= required_qty:
+		return {"sufficient": True, "batches": [ranked[0]], "totalBoxes": ranked[0]["boxes"]}
+
+	combo: list[dict] = []
+	total = 0.0
+	for row in ranked[:3]:
+		combo.append(row)
+		total += row["boxes"]
+		if total >= required_qty:
+			break
+
+	return {"sufficient": total >= required_qty, "batches": combo, "totalBoxes": total}
 
 
 def ensure_batch(item_code: str, batch_no: str, weight_per_box_kg: float | None = None) -> str:
