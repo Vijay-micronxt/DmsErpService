@@ -31,7 +31,13 @@ import frappe
 from frappe import _
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable, item_pieces_per_box, item_sqft_per_box, item_weight_per_box_kg
+from dms_erp.catalog.utils import (
+	is_sellable,
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 from dms_erp.sales.utils import find_open_duplicate_inquiries
 from dms_erp.warehouse.utils import total_stock_for_item
@@ -49,6 +55,7 @@ def _serialize(doc) -> dict:
 	weight_per_box_kg = item_weight_per_box_kg(doc.item)
 	pieces_per_box = item_pieces_per_box(doc.item)
 	sqft_per_box = item_sqft_per_box(doc.item)
+	sqm_per_box = item_sqm_per_box(doc.item)
 	return {
 		"id": doc.name,
 		"number": doc.name,
@@ -62,6 +69,8 @@ def _serialize(doc) -> dict:
 		"totalPieces": (pieces_per_box or 0) * doc.qty if pieces_per_box is not None else None,
 		"sqftPerBox": sqft_per_box,
 		"totalSqft": (sqft_per_box or 0) * doc.qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * doc.qty, 4) if sqm_per_box is not None else None,
 		"status": doc.status,
 		"source": doc.source,
 		"expectedDelivery": doc.expected_delivery,

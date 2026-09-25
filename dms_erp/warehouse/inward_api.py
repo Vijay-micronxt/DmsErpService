@@ -8,7 +8,12 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime
 
-from dms_erp.catalog.utils import item_pieces_per_box, item_sqft_per_box, item_weight_per_box_kg
+from dms_erp.catalog.utils import (
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 
 INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
@@ -35,6 +40,7 @@ def _serialize(doc) -> dict:
 	weight_per_box_kg = _weight_per_box_kg(doc.item, doc.batch_no)
 	pieces_per_box = item_pieces_per_box(doc.item)
 	sqft_per_box = item_sqft_per_box(doc.item)
+	sqm_per_box = item_sqm_per_box(doc.item)
 	return {
 		"id": doc.name,
 		"lr": doc.lr_number,
@@ -48,6 +54,8 @@ def _serialize(doc) -> dict:
 		"totalPieces": (pieces_per_box or 0) * doc.boxes if pieces_per_box is not None else None,
 		"sqftPerBox": sqft_per_box,
 		"totalSqft": (sqft_per_box or 0) * doc.boxes if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * doc.boxes, 4) if sqm_per_box is not None else None,
 		"status": doc.status,
 		"item": doc.item,
 		"batchNumber": doc.batch_no,

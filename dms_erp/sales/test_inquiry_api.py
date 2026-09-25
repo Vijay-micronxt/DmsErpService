@@ -102,6 +102,9 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(inquiry["totalPieces"], 40)
 		self.assertEqual(inquiry["sqftPerBox"], 15.5)
 		self.assertEqual(inquiry["totalSqft"], 155)
+		# sqm is derived from sqft (1 sqft = 0.09290304 sqm exactly), not its own field.
+		self.assertAlmostEqual(inquiry["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(inquiry["totalSqm"], 14.4, places=2)
 
 	def test_update_inquiry_patches_status_and_remarks(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=50, source="Phone")

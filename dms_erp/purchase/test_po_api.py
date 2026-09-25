@@ -44,6 +44,8 @@ class TestPoApi(FrappeTestCase):
 		self.assertEqual(po["lines"][0]["totalPieces"], 4000)
 		self.assertEqual(po["lines"][0]["sqftPerBox"], 15.5)
 		self.assertEqual(po["lines"][0]["totalSqft"], 15500)
+		self.assertAlmostEqual(po["lines"][0]["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(po["lines"][0]["totalSqm"], 1440, places=2)
 
 	def test_set_line_ready_clamps_to_ordered_qty(self):
 		po = po_api.create_purchase_order(item=self.item, ordered_qty=500, supplier=self.supplier, expected_ready_date="2026-09-01")

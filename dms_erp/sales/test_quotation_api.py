@@ -57,6 +57,8 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(quotation["lines"][0]["totalPieces"], 40)
 		self.assertEqual(quotation["lines"][0]["sqftPerBox"], 15.5)
 		self.assertEqual(quotation["lines"][0]["totalSqft"], 155)
+		self.assertAlmostEqual(quotation["lines"][0]["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(quotation["lines"][0]["totalSqm"], 14.4, places=2)
 
 	def test_create_quotation_accepts_bulk_channel_and_carries_into_order(self):
 		quotation = quotation_api.create_quotation(

@@ -29,7 +29,13 @@ from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable, item_pieces_per_box, item_sqft_per_box, item_weight_per_box_kg
+from dms_erp.catalog.utils import (
+	is_sellable,
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
@@ -76,6 +82,7 @@ def _serialize_line(row) -> dict:
 	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
 	pieces_per_box = item_pieces_per_box(row.item_code)
 	sqft_per_box = item_sqft_per_box(row.item_code)
+	sqm_per_box = item_sqm_per_box(row.item_code)
 	return {
 		"itemCode": row.item_code,
 		"qty": row.qty,
@@ -92,6 +99,8 @@ def _serialize_line(row) -> dict:
 		"totalPieces": (pieces_per_box or 0) * row.qty if pieces_per_box is not None else None,
 		"sqftPerBox": sqft_per_box,
 		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * row.qty, 4) if sqm_per_box is not None else None,
 	}
 
 

@@ -85,6 +85,8 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(order["lines"][0]["totalPieces"], 40)
 		self.assertEqual(order["lines"][0]["sqftPerBox"], 15.5)
 		self.assertEqual(order["lines"][0]["totalSqft"], 155)
+		self.assertAlmostEqual(order["lines"][0]["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(order["lines"][0]["totalSqm"], 14.4, places=2)
 
 	def test_create_order_accepts_bulk_channel(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")

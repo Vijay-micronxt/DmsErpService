@@ -10,6 +10,7 @@ import frappe
 from frappe import _
 from frappe.utils import getdate, today
 
+from dms_erp.catalog.utils import SQFT_TO_SQM
 from dms_erp.pagination import clamp
 from dms_erp.warehouse.utils import default_company
 
@@ -26,6 +27,7 @@ def _serialize_line(row) -> dict:
 	weight_per_box_kg = item.custom_weight_per_box_kg
 	pieces_per_box = item.custom_pieces_per_box
 	sqft_per_box = item.custom_sqft_per_box
+	sqm_per_box = round(sqft_per_box * SQFT_TO_SQM, 4) if sqft_per_box is not None else None
 	return {
 		"id": row.name,
 		"itemCode": row.item_code,
@@ -39,6 +41,8 @@ def _serialize_line(row) -> dict:
 		"totalPieces": (pieces_per_box or 0) * row.qty if pieces_per_box is not None else None,
 		"sqftPerBox": sqft_per_box,
 		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * row.qty, 4) if sqm_per_box is not None else None,
 	}
 
 
