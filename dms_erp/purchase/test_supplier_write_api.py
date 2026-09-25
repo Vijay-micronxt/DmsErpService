@@ -39,6 +39,13 @@ class TestSupplierWriteApi(FrappeTestCase):
 		self.assertEqual(updated["latitude"], 21.5)
 		self.assertTrue(updated["disabled"])
 
+	def test_create_and_update_supplier_set_insurance_holder(self):
+		created = supplier_api.create_supplier("SW Insurance Co", insurance_holder="HDFC Ergo — POL-4471")
+		self.assertEqual(created["insuranceHolder"], "HDFC Ergo — POL-4471")
+
+		updated = supplier_api.update_supplier("SW Insurance Co", {"insuranceHolder": "ICICI Lombard — POL-9981"})
+		self.assertEqual(updated["insuranceHolder"], "ICICI Lombard — POL-9981")
+
 	def test_write_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

@@ -199,6 +199,15 @@ class TestClaimsApi(FrappeTestCase):
 		self.assertIsNone(claim["stockEntry"])
 		self.assertIsNone(claim["itemCode"])
 
+	def test_shortage_claim_does_not_touch_unrelated_stock_entries(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-SHORTAGE-GUARD")
+		existing_claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
+		self.assertEqual(frappe.db.get_value("Stock Entry", stock_entry, "custom_claim_ref"), existing_claim["id"])
+
+		claims_api.file_claim(claim_type="Shortage", claim_amount=500, supplier=self.supplier)
+
+		self.assertEqual(frappe.db.get_value("Stock Entry", stock_entry, "custom_claim_ref"), existing_claim["id"])
+
 	def test_update_claim_status_records_approved_amount_and_settlement_mode(self):
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-TYPE-2")
 		claim = claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)

@@ -208,6 +208,46 @@ class TestAllocation(FrappeTestCase):
 		self.assertEqual(len(top), 2)
 		self.assertEqual([b["boxes"] for b in top], [40, 30])
 
+	def test_suggest_batch_combination_returns_a_single_batch_when_it_suffices(self):
+		item = make_item("ALLOC-COMBO-SINGLE-ITEM", "Vitrified")
+		allocation_api.create_allocation(
+			item=item, batch_no="COMBO-BIG", total_qty=100, lines=[{"bay": "ALLOC-A-01", "qty": 100}], supplier=self.supplier
+		)
+		allocation_api.create_allocation(
+			item=item, batch_no="COMBO-SMALL", total_qty=10, lines=[{"bay": "ALLOC-A-02", "qty": 10}], supplier=self.supplier
+		)
+
+		result = stock_api.suggest_batch_combination(item, required_qty=80)
+		self.assertTrue(result["sufficient"])
+		self.assertEqual(len(result["batches"]), 1)
+		self.assertEqual(result["batches"][0]["batchNumber"], "COMBO-BIG")
+		self.assertEqual(result["totalBoxes"], 100)
+
+	def test_suggest_batch_combination_combines_largest_batches_first(self):
+		item = make_item("ALLOC-COMBO-MULTI-ITEM", "Vitrified")
+		for name, qty in [("COMBO-A", 40), ("COMBO-B", 30), ("COMBO-C", 20), ("COMBO-D", 5)]:
+			allocation_api.create_allocation(
+				item=item, batch_no=name, total_qty=qty, lines=[{"bay": "ALLOC-A-01", "qty": qty}], supplier=self.supplier
+			)
+
+		# No single batch covers 60; the two largest (40 + 30) do.
+		result = stock_api.suggest_batch_combination(item, required_qty=60)
+		self.assertTrue(result["sufficient"])
+		self.assertEqual([b["batchNumber"] for b in result["batches"]], ["COMBO-A", "COMBO-B"])
+		self.assertEqual(result["totalBoxes"], 70)
+
+	def test_suggest_batch_combination_flags_insufficient_when_even_top_3_fall_short(self):
+		item = make_item("ALLOC-COMBO-SHORT-ITEM", "Vitrified")
+		for name, qty in [("SHORT-A", 10), ("SHORT-B", 8), ("SHORT-C", 5), ("SHORT-D", 3)]:
+			allocation_api.create_allocation(
+				item=item, batch_no=name, total_qty=qty, lines=[{"bay": "ALLOC-A-01", "qty": qty}], supplier=self.supplier
+			)
+
+		result = stock_api.suggest_batch_combination(item, required_qty=100)
+		self.assertFalse(result["sufficient"])
+		self.assertEqual(len(result["batches"]), 3)  # capped at 3 even though a 4th batch exists
+		self.assertEqual(result["totalBoxes"], 23)  # 10 + 8 + 5, the top 3 only
+
 	def test_allocation_lifecycle_with_inward_truck(self):
 		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=20, lr_number="LR-ALLOC-1")
 		self.assertEqual(truck["status"], "Scheduled")

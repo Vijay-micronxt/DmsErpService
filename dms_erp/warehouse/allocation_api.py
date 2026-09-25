@@ -22,9 +22,7 @@ this app needs to add) rather than stored: the payload is fully determined by th
 allocation's own fields, so there's nothing here worth persisting.
 """
 
-import base64
 from html import escape as _esc
-from io import BytesIO
 
 import frappe
 from frappe import _
@@ -32,6 +30,7 @@ from frappe.utils import today
 
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_record
+from dms_erp.qr_utils import qr_data_uri
 from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
 from dms_erp.warehouse.utils import default_company, ensure_batch, get_bay, list_stock_lots, validate_allocation
 
@@ -210,15 +209,6 @@ def mark_allocation_printed(allocation: str):
 	return _serialize(doc)
 
 
-def _qr_data_uri(payload: str) -> str:
-	import qrcode
-
-	img = qrcode.make(payload)
-	buf = BytesIO()
-	img.save(buf, format="PNG")
-	return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
 @frappe.whitelist(methods=["GET"])
 def get_allocation_qr_codes(allocation: str):
 	"""One QR per bay split on this allocation slip — each encodes the same
@@ -234,7 +224,7 @@ def get_allocation_qr_codes(allocation: str):
 				"bayCode": bay_code,
 				"qty": row.qty,
 				"payload": payload,
-				"qrCode": _qr_data_uri(payload),
+				"qrCode": qr_data_uri(payload),
 			}
 		)
 	return out
@@ -250,8 +240,10 @@ def get_box_sticker_data(allocation: str):
 	whose label size/printer hardware the BRD itself leaves for setup-time
 	confirmation with Pacific, not something this endpoint can decide.
 
-	The dealer sample sticker (BRD C.10) is a separate layout gated on the Sample &
-	Display Management module, which doesn't exist yet — not built here."""
+	The dealer sample sticker (BRD C.10) is a separate layout — see
+	catalog.sample_api.render_sample_sticker_html — built against the Sample &
+	Display Management module instead of this one, since it has no batch/bay/PR
+	fields to speak of, just a dealer-specific QR and the product name."""
 	doc = frappe.get_doc("Bay Allocation", allocation)
 	item_doc = frappe.get_cached_doc("Item", doc.item)
 	batch = frappe.db.get_value("Batch", doc.batch_no, ["manufacturing_date", "custom_batch_weight_kg"], as_dict=True) or {}

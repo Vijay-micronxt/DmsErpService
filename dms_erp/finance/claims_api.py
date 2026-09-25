@@ -213,7 +213,8 @@ def file_claim(
 	)
 	doc.insert(ignore_permissions=True)
 
-	frappe.db.set_value("Stock Entry", stock_entry, "custom_claim_ref", doc.name)
+	if stock_entry:
+		frappe.db.set_value("Stock Entry", stock_entry, "custom_claim_ref", doc.name)
 
 	return _serialize(doc)
 

@@ -46,6 +46,7 @@ class TestWithdrawalApi(FrappeTestCase):
 		order = order_api.create_order(
 			dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=today(), inquiry=inquiry["id"]
 		)
+		order_api.confirm_advance_payment(order["id"])
 		for stage in ("Picking", "Ready to Dispatch", "Dispatched", "Delivered"):
 			order_api.advance_order_stage(order["id"], stage)
 		frappe.db.set_value("Sales Order", order["id"], "transaction_date", add_days(today(), -days_ago))

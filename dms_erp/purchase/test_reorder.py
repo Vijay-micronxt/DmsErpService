@@ -91,9 +91,12 @@ class TestReorder(FrappeTestCase):
 	def test_pending_and_missed_inquiry_qty_are_real(self):
 		item = make_item("REORDER-INQUIRY", "Vitrified")
 
-		open_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=30, source="Phone")
+		# Zero stock throughout -- create_inquiry now auto-derives "Out of Stock"
+		# from real on-hand qty (see inquiry_api._create_inquiry), so this covers
+		# that derivation feeding missedDemandQty without a manual status override.
+		pending_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=30, source="Phone")
+		inquiry_api.update_inquiry(pending_inquiry["id"], {"status": "Quoted"})  # staff quoted it manually
 		out_of_stock_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=15, source="WhatsApp")
-		inquiry_api.update_inquiry(out_of_stock_inquiry["id"], {"status": "Out of Stock"})
 		closed_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=999, source="Phone")
 		inquiry_api.update_inquiry(closed_inquiry["id"], {"status": "Closed"})
 
@@ -103,7 +106,7 @@ class TestReorder(FrappeTestCase):
 		self.assertEqual(suggestion["urgency"], "Critical")  # zero stock + missed demand
 		self.assertIn("15 boxes of missed/constrained retail demand", suggestion["reasons"])
 		self.assertIn("30 boxes in open retail inquiries", suggestion["reasons"])
-		self.assertEqual(open_inquiry["status"], "Open")
+		self.assertEqual(out_of_stock_inquiry["status"], "Out of Stock")
 
 	def test_recent_retail_sales_qty_feeds_lead_time_demand(self):
 		item = make_item("REORDER-VELOCITY", "Vitrified")

@@ -86,6 +86,27 @@ class TestDealerWriteApi(FrappeTestCase):
 		shown = dealer_api.update_dealer("DW Price Toggle Co", {"priceVisible": True})
 		self.assertTrue(shown["priceVisible"])
 
+	def test_create_and_update_dealer_set_email(self):
+		created = dealer_api.create_dealer("DW Email Co", group=GROUP, email="buyer@example.com")
+		self.assertEqual(created["email"], "buyer@example.com")
+
+		updated = dealer_api.update_dealer("DW Email Co", {"email": "new@example.com"})
+		self.assertEqual(updated["email"], "new@example.com")
+
+	def test_create_dealer_defaults_to_not_out_of_station_and_can_set_it(self):
+		default_dealer = dealer_api.create_dealer("DW Station Default Co", group=GROUP)
+		self.assertFalse(default_dealer["outOfStation"])
+
+		flagged_dealer = dealer_api.create_dealer("DW Station Flagged Co", group=GROUP, out_of_station=True)
+		self.assertTrue(flagged_dealer["outOfStation"])
+
+	def test_update_dealer_toggles_out_of_station(self):
+		dealer_api.create_dealer("DW Station Toggle Co", group=GROUP)
+		flagged = dealer_api.update_dealer("DW Station Toggle Co", {"outOfStation": True})
+		self.assertTrue(flagged["outOfStation"])
+		unflagged = dealer_api.update_dealer("DW Station Toggle Co", {"outOfStation": False})
+		self.assertFalse(unflagged["outOfStation"])
+
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

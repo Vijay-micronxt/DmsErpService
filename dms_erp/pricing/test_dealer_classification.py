@@ -77,6 +77,24 @@ class TestDealerClassification(FrappeTestCase):
 
 		self.assertEqual(frappe.db.get_value("Customer", dealer, "custom_dealer_classification"), DEALER_CLASSIFICATION_STANDARD)
 
+	def test_recompute_floors_out_of_station_dealer_to_master(self):
+		dealer = make_dealer("Classification Out Of Station Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_out_of_station", 1)
+		self._confirmed_order(dealer, 50_000)  # would otherwise stay Standard Dealer
+
+		recompute_dealer_classifications()
+
+		self.assertEqual(frappe.db.get_value("Customer", dealer, "custom_dealer_classification"), DEALER_CLASSIFICATION_MASTER)
+
+	def test_recompute_never_lowers_a_high_volume_out_of_station_dealer(self):
+		dealer = make_dealer("Classification Out Of Station High Volume Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_out_of_station", 1)
+		self._confirmed_order(dealer, 1_600_000)  # already earns Master Dealer on volume alone
+
+		recompute_dealer_classifications()
+
+		self.assertEqual(frappe.db.get_value("Customer", dealer, "custom_dealer_classification"), DEALER_CLASSIFICATION_MASTER)
+
 	def test_recompute_returns_the_number_of_customers_changed(self):
 		dealer = make_dealer("Classification Changed Count Dealer")
 		self._confirmed_order(dealer, 200_000)

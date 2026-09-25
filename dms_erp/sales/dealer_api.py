@@ -52,6 +52,8 @@ def _serialize(
 	salesperson: str | None = None,
 	phone: str | None = None,
 	price_visible: int = 1,
+	email: str | None = None,
+	out_of_station: int = 0,
 ) -> dict:
 	return {
 		"id": name,
@@ -68,6 +70,11 @@ def _serialize(
 		# BRD C.13.1 — "price (if enabled for that dealer)". Gates price in the
 		# dealer portal only (sales.dealer_portal_api); staff screens are unaffected.
 		"priceVisible": bool(price_visible),
+		# BRD C.13 — WhatsApp + email follow-up and a future email-login channel.
+		"email": email,
+		# BRD C.1.4 — a floor on classification (at least Master Dealer), applied by
+		# pricing.dealer_classification.recompute_dealer_classifications, not here.
+		"outOfStation": bool(out_of_station),
 	}
 
 
@@ -101,6 +108,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_salesperson",
 			"custom_phone",
 			"custom_price_visible",
+			"custom_email",
+			"custom_out_of_station",
 		],
 		order_by="customer_name asc",
 	)
@@ -118,6 +127,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_salesperson,
 			r.custom_phone,
 			r.custom_price_visible,
+			r.custom_email,
+			r.custom_out_of_station,
 		)
 		for r in rows
 	]
@@ -139,6 +150,8 @@ def get_dealer(dealer: str):
 		doc.custom_salesperson,
 		doc.custom_phone,
 		doc.custom_price_visible,
+		doc.custom_email,
+		doc.custom_out_of_station,
 	)
 
 
@@ -189,11 +202,14 @@ def create_dealer(
 	salesperson: str | None = None,
 	phone: str | None = None,
 	price_visible: bool | None = None,
+	email: str | None = None,
+	out_of_station: bool | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
 	rejected by ERPNext itself, so pass a real leaf group. `price_visible` left unset
-	takes the field's own default (visible — BRD C.13.1)."""
+	takes the field's own default (visible — BRD C.13.1). `out_of_station` only takes
+	effect at the next classification recompute (BRD C.1.4), not immediately."""
 	_assert_can_manage_dealers()
 
 	name = (name or "").strip()
@@ -217,6 +233,10 @@ def create_dealer(
 		values["custom_phone"] = _clean_phone_or_throw(phone)
 	if price_visible is not None:
 		values["custom_price_visible"] = 1 if price_visible else 0
+	if email:
+		values["custom_email"] = email.strip()
+	if out_of_station is not None:
+		values["custom_out_of_station"] = 1 if out_of_station else 0
 
 	doc = frappe.get_doc(values)
 	if credit_limit is not None:
@@ -228,8 +248,8 @@ def create_dealer(
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible. Anything else — including `classification`, which is recomputed
-	nightly — is ignored."""
+	phone, priceVisible, email, outOfStation. Anything else — including `classification`,
+	which is recomputed nightly — is ignored."""
 	_assert_can_manage_dealers()
 
 	field_map = {
@@ -238,6 +258,7 @@ def update_dealer(dealer: str, patch: dict):
 		"territory": "territory",
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
+		"email": "custom_email",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
@@ -258,6 +279,8 @@ def update_dealer(dealer: str, patch: dict):
 			doc.set("custom_phone", _clean_phone_or_throw(value) if value else None)
 		elif key == "priceVisible":
 			doc.set("custom_price_visible", 1 if value else 0)
+		elif key == "outOfStation":
+			doc.set("custom_out_of_station", 1 if value else 0)
 		elif key in field_map:
 			doc.set(field_map[key], value)
 		elif key == "creditLimit":
