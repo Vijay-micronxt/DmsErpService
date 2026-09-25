@@ -426,6 +426,24 @@ class TestProducts(FrappeTestCase):
 		)
 		self.assertEqual(product["defaultSupplier"], self.supplier)
 
+	def test_create_product_accepts_a_default_supplier_independent_of_the_launch_supplier(self):
+		other_supplier = make_supplier("Product Test Other Launch Supplier")
+		product = catalog_api.create_product(
+			code="PROD-TEST-SUPPLIER",
+			name="Independently Sourced Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			default_supplier=other_supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		self.assertEqual(product["defaultSupplier"], other_supplier)
+		# The launch supplier still seeded the pricing proposal, unaffected by default_supplier.
+		price_record = pricing_api.get_price_record("PROD-TEST-SUPPLIER")
+		self.assertEqual(price_record["supplier"], self.supplier)
+
 	def test_default_supplier_falls_back_to_the_series_supplier(self):
 		series_api.create_series(series_name="Product Test Series", supplier=self.supplier)
 		catalog_api.create_product(
