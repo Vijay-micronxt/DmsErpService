@@ -34,6 +34,7 @@ from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS
+from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
 
 QUOTATION_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -58,6 +59,15 @@ def _serialize(doc) -> dict:
 		"channel": doc.custom_order_channel,
 		"lines": [_serialize_line(row) for row in doc.items],
 		"total": doc.grand_total,
+		"netTotal": doc.net_total,
+		# See order_api._serialize's matching fields -- same "never computed here,
+		# only ever copied from the template and totalled by ERPNext" contract.
+		"taxesAndCharges": doc.taxes_and_charges,
+		"taxes": [
+			{"accountHead": row.account_head, "description": row.description, "rate": row.rate, "amount": row.tax_amount}
+			for row in doc.taxes
+		],
+		"totalTaxesAndCharges": doc.total_taxes_and_charges,
 		"status": doc.status,
 	}
 
@@ -67,7 +77,13 @@ def _serialize_line(row) -> dict:
 	return {
 		"itemCode": row.item_code,
 		"qty": row.qty,
+		# priceListRate is the pre-discount marked-up rate (dealer_price * (1 +
+		# markup_pct/100)); rate is what's actually quoted after discountPercentage.
+		"priceListRate": row.price_list_rate,
+		"discountPercentage": row.discount_percentage,
 		"rate": row.rate,
+		"amount": row.amount,
+		"deliveryDate": row.delivery_date,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
@@ -85,9 +101,40 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 		dealer_price = get_price_for_dealer(item, dealer)
 		if dealer_price is None:
 			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
-		rate = round(dealer_price * (1 + float(markup_pct) / 100))
-		items.append({"item_code": item, "qty": line["qty"], "rate": rate})
+		price_list_rate = round(dealer_price * (1 + float(markup_pct) / 100))
+		discount_pct = float(line.get("discount_percentage") or 0)
+		if not 0 <= discount_pct <= 100:
+			frappe.throw(_("Discount for {0} must be between 0 and 100%.").format(item), frappe.ValidationError)
+		rate = round(price_list_rate * (1 - discount_pct / 100))
+		items.append(
+			{
+				"item_code": item,
+				"qty": line["qty"],
+				"price_list_rate": price_list_rate,
+				"discount_percentage": discount_pct,
+				"rate": rate,
+				"delivery_date": line.get("delivery_date"),
+			}
+		)
 	return items
+
+
+def _lines_from_items(rows) -> list[dict]:
+	"""Reconstructs an editable `lines` list from a Quotation's current items --
+	used by add/remove/update_quotation_line_qty before calling _amend_with_lines,
+	which reprices from scratch. Rate/price_list_rate are deliberately NOT carried
+	over (that's the whole point of re-pricing on every edit), but
+	discount_percentage and delivery_date are a viewer's own choice, not something
+	editing an unrelated line should silently reset to 0/unset."""
+	return [
+		{
+			"item": row.item_code,
+			"qty": row.qty,
+			"discount_percentage": row.discount_percentage,
+			"delivery_date": row.delivery_date,
+		}
+		for row in rows
+	]
 
 
 def _guard_editable(doc):
@@ -150,13 +197,40 @@ def create_quotation(
 	markup_pct: float,
 	freight: float = 0,
 	validity_days: int = 7,
-	inquiry: str | None = None,
+	inquiries: list[str] | None = None,
 	channel: str | None = None,
+	taxes_and_charges: str | None = None,
 ):
+	"""Each line in `lines` may carry `discount_percentage` (0-100) and/or
+	`delivery_date` -- see _priced_items. `taxes_and_charges` names an existing
+	Sales Taxes and Charges Template; see sales.utils.apply_tax_template. Both
+	carry forward automatically into the resulting Sales Order on
+	convert_to_order, via ERPNext's own make_sales_order field mapper.
+
+	`inquiries` closes out every Inquiry passed (status -> "Quoted",
+	linked_quotation -> this quotation's name, mirroring order_api's
+	linked_sales_order pattern in the opposite direction) -- lets several
+	inquiries for the same dealer merge into one quotation, not just one. Every
+	inquiry must belong to `dealer`: a Quotation has exactly one party, so a
+	mixed-dealer selection can't be merged and is rejected outright rather than
+	silently dropped or split. custom_inquiry (a single Link, unchanged) keeps
+	pointing at the first inquiry in the list, for existing single-inquiry
+	callers/reports."""
 	_assert_can_manage_quotations()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if inquiries:
+		mismatched = [
+			i for i in inquiries if frappe.db.get_value("Inquiry", i, "dealer") != dealer
+		]
+		if mismatched:
+			frappe.throw(
+				_("{0} do not belong to {1} -- a quotation can only merge inquiries from one dealer.").format(
+					", ".join(mismatched), dealer
+				),
+				frappe.ValidationError,
+			)
 	# BRD C.4.3: an explicit channel (including "Retail") is the audit-locked manual
 	# override and always wins; only an unset channel triggers auto-classification.
 	if channel is None:
@@ -176,16 +250,18 @@ def create_quotation(
 			"valid_till": add_days(today(), int(validity_days)),
 			"custom_markup_pct": markup_pct,
 			"custom_freight": freight,
-			"custom_inquiry": inquiry,
+			"custom_inquiry": inquiries[0] if inquiries else None,
 			"custom_order_channel": channel,
 			"items": items,
 		}
 	)
+	apply_tax_template(doc, taxes_and_charges)
 	doc.insert(ignore_permissions=True)
+	clear_unrequested_default_tax(doc)
 	doc.submit()
 
-	if inquiry:
-		frappe.db.set_value("Inquiry", inquiry, "status", "Quoted")
+	for inquiry in inquiries or []:
+		frappe.db.set_value("Inquiry", inquiry, {"status": "Quoted", "linked_quotation": doc.name})
 
 	return _serialize(doc)
 
@@ -199,7 +275,7 @@ def add_quotation_line(quotation: str, item: str, qty: float):
 	if any(row.item_code == item for row in doc.items):
 		frappe.throw(_("{0} is already a line on this quotation — use update_quotation_line_qty.").format(item), frappe.ValidationError)
 
-	lines = [{"item": row.item_code, "qty": row.qty} for row in doc.items] + [{"item": item, "qty": qty}]
+	lines = _lines_from_items(doc.items) + [{"item": item, "qty": qty}]
 	return _amend_with_lines(doc, lines)
 
 
@@ -209,7 +285,7 @@ def remove_quotation_line(quotation: str, item: str):
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
-	lines = [{"item": row.item_code, "qty": row.qty} for row in doc.items if row.item_code != item]
+	lines = [l for l in _lines_from_items(doc.items) if l["item"] != item]
 	if not lines:
 		frappe.throw(_("A quotation must have at least one line — cancel it instead of removing the last one."), frappe.ValidationError)
 	if len(lines) == len(doc.items):
@@ -227,7 +303,10 @@ def update_quotation_line_qty(quotation: str, item: str, qty: float):
 	if not any(row.item_code == item for row in doc.items):
 		frappe.throw(_("{0} is not a line on this quotation.").format(item), frappe.ValidationError)
 
-	lines = [{"item": row.item_code, "qty": qty if row.item_code == item else row.qty} for row in doc.items]
+	lines = _lines_from_items(doc.items)
+	for l in lines:
+		if l["item"] == item:
+			l["qty"] = qty
 	return _amend_with_lines(doc, lines)
 
 
@@ -270,10 +349,22 @@ def convert_to_order(quotation: str, expected_dispatch=None):
 
 	qtn = frappe.get_doc("Quotation", quotation)
 	so = make_sales_order(quotation)
+	# make_sales_order carries taxes_and_charges/taxes across from the quotation
+	# verbatim -- if the quotation was itself untaxed, this new Sales Order's taxes
+	# table starts empty too, and is just as exposed to ERPNext's own validate()-time
+	# default-template auto-population as a directly-created order. See
+	# sales.utils.apply_tax_template's docstring.
+	if not so.get("taxes_and_charges"):
+		so.flags.dont_auto_add_taxes = True
 	if expected_dispatch:
 		so.delivery_date = expected_dispatch
+		# Only fills the gap for a line that never had its own delivery_date on
+		# the Quotation -- a line the dealer already committed to a specific date
+		# for shouldn't get silently overwritten just because the order-level
+		# date was set.
 		for row in so.items:
-			row.delivery_date = expected_dispatch
+			if not row.delivery_date:
+				row.delivery_date = expected_dispatch
 
 	order = finalize_new_order(so, source_type="Quotation", source_ref=quotation, channel=qtn.custom_order_channel)
 

@@ -22,6 +22,7 @@ from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
+from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
 
 ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -56,6 +57,16 @@ def _serialize(doc) -> dict:
 		# Server-computed only — every line's rate came from get_price_for_dealer at
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
+		"netTotal": doc.net_total,
+		# Which Sales Taxes and Charges Template (if any) priced the tax rows below —
+		# never computed here, only ever copied from that template (see sales.utils.
+		# apply_tax_template) and totalled by ERPNext's own calculate_taxes_and_totals.
+		"taxesAndCharges": doc.taxes_and_charges,
+		"taxes": [
+			{"accountHead": row.account_head, "description": row.description, "rate": row.rate, "amount": row.tax_amount}
+			for row in doc.taxes
+		],
+		"totalTaxesAndCharges": doc.total_taxes_and_charges,
 		"stage": doc.custom_fulfillment_stage,
 		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
@@ -75,7 +86,16 @@ def _serialize_line(row) -> dict:
 	return {
 		"itemCode": row.item_code,
 		"qty": row.qty,
+		# priceListRate is the undiscounted dealer-tier rate get_price_for_dealer
+		# resolved; rate is what's actually charged after discountPercentage.
+		# Both are always server-derived — discountPercentage is the only
+		# caller-supplied number in this line, and it only ever scales the
+		# already-approved rate down, never replaces it.
+		"priceListRate": row.price_list_rate,
+		"discountPercentage": row.discount_percentage,
 		"rate": row.rate,
+		"amount": row.amount,
+		"deliveryDate": row.delivery_date,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 	}
@@ -98,6 +118,7 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user})
 
 	so.insert(ignore_permissions=True)
+	clear_unrequested_default_tax(so)
 	so.submit()
 	return _serialize(so)
 
@@ -131,6 +152,33 @@ def get_order(order: str):
 	return _serialize(frappe.get_doc("Sales Order", order))
 
 
+def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date) -> dict:
+	"""discount_percentage (0-100, optional) only ever scales down the server-
+	resolved dealer-tier rate -- it's never a substitute for it. price_list_rate
+	keeps the undiscounted rate on the row (native Sales Order Item field, same
+	as ERPNext's own discount UI) so the discount is always auditable against
+	what the dealer's tier actually approved. delivery_date (optional) overrides
+	the order-level expected_dispatch for just this line -- a part shipment on a
+	different date than the rest of the order."""
+	price_list_rate = get_price_for_dealer(item, dealer)
+	if price_list_rate is None:
+		frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
+	discount_pct = float(line.get("discount_percentage") or 0)
+	if not 0 <= discount_pct <= 100:
+		frappe.throw(_("Discount for {0} must be between 0 and 100%.").format(item), frappe.ValidationError)
+	# No discount -> pass the approved rate through byte-for-byte, same as before
+	# discount existed here; only an actual discount introduces new rounding.
+	rate = round(price_list_rate * (1 - discount_pct / 100), 2) if discount_pct else price_list_rate
+	return {
+		"item_code": item,
+		"qty": line["qty"],
+		"price_list_rate": price_list_rate,
+		"discount_percentage": discount_pct,
+		"rate": rate,
+		"delivery_date": line.get("delivery_date") or default_delivery_date,
+	}
+
+
 def _create_order(
 	dealer: str,
 	lines: list[dict],
@@ -138,6 +186,7 @@ def _create_order(
 	inquiry: str | None = None,
 	channel: str | None = None,
 	customer_po: str | None = None,
+	taxes_and_charges: str | None = None,
 ) -> dict:
 	"""Unguarded core of create_order -- also called directly by
 	sales.dealer_portal_api.convert_to_order, whose own DMS Dealer session (scoped
@@ -146,19 +195,16 @@ def _create_order(
 	the native Sales Order.po_no and closes the source Inquiry (BRD C.3.1) when
 	there is one. `inquiry` is optional -- a staff-raised order with no prior
 	Inquiry/Quotation behind it (a walk-in or phone sale) is source_type "Direct",
-	same rate/catalog rules as any other order, just nothing to close on creation."""
+	same rate/catalog rules as any other order, just nothing to close on creation.
+	`taxes_and_charges` (optional) names an existing Sales Taxes and Charges
+	Template -- see sales.utils.apply_tax_template; left unset, the order is
+	simply untaxed, same as any ERPNext site with no GST template configured."""
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
 	if channel is None:
 		channel = auto_classify_channel(dealer, lines)
 
-	items = []
-	for line in lines:
-		item = line["item"]
-		rate = get_price_for_dealer(item, dealer)
-		if rate is None:
-			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
-		items.append({"item_code": item, "qty": line["qty"], "rate": rate, "delivery_date": expected_dispatch})
+	items = [_priced_order_line(line["item"], dealer, line, expected_dispatch) for line in lines]
 
 	so = frappe.get_doc(
 		{
@@ -171,6 +217,7 @@ def _create_order(
 			"items": items,
 		}
 	)
+	apply_tax_template(so, taxes_and_charges)
 
 	order = finalize_new_order(
 		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
@@ -185,7 +232,15 @@ def _create_order(
 
 
 @frappe.whitelist(methods=["POST"])
-def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str | None = None, channel: str | None = None, customer_po: str | None = None):
+def create_order(
+	dealer: str,
+	lines: list[dict],
+	expected_dispatch,
+	inquiry: str | None = None,
+	channel: str | None = None,
+	customer_po: str | None = None,
+	taxes_and_charges: str | None = None,
+):
 	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
 	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
 	plain approved dealer-price rates). The Quotation-sourced path is
@@ -198,9 +253,13 @@ def create_order(dealer: str, lines: list[dict], expected_dispatch, inquiry: str
 
 	`channel` left unset auto-classifies from the dealer's type / item Series
 	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
-	audit-locked manual override."""
+	audit-locked manual override.
+
+	Each line in `lines` may carry `discount_percentage` (0-100) and/or
+	`delivery_date` -- see _priced_order_line. `taxes_and_charges` names an
+	existing Sales Taxes and Charges Template; see sales.utils.apply_tax_template."""
 	_assert_can_manage_orders()
-	return _create_order(dealer, lines, expected_dispatch, inquiry, channel, customer_po)
+	return _create_order(dealer, lines, expected_dispatch, inquiry, channel, customer_po, taxes_and_charges)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
