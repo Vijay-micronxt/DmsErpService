@@ -93,6 +93,23 @@ class TestDealerWriteApi(FrappeTestCase):
 		updated = dealer_api.update_dealer("DW Email Co", {"email": "new@example.com"})
 		self.assertEqual(updated["email"], "new@example.com")
 
+	def test_create_and_update_dealer_set_gstin_and_address(self):
+		created = dealer_api.create_dealer(
+			"DW GSTIN Co",
+			group=GROUP,
+			gstin="24aaaaa0000a1z5",
+			address="12 MG Road, Bengaluru, Karnataka",
+		)
+		self.assertEqual(created["gstin"], "24AAAAA0000A1Z5")
+		self.assertEqual(created["address"], "12 MG Road, Bengaluru, Karnataka")
+
+		updated = dealer_api.update_dealer(
+			"DW GSTIN Co",
+			{"gstin": "29bbbbb1111b2z6", "address": "45 Residency Road, Bengaluru, Karnataka"},
+		)
+		self.assertEqual(updated["gstin"], "29BBBBB1111B2Z6")
+		self.assertEqual(updated["address"], "45 Residency Road, Bengaluru, Karnataka")
+
 	def test_create_dealer_defaults_to_not_out_of_station_and_can_set_it(self):
 		default_dealer = dealer_api.create_dealer("DW Station Default Co", group=GROUP)
 		self.assertFalse(default_dealer["outOfStation"])

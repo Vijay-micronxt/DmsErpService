@@ -21,8 +21,13 @@ follow-up, not built here — see sales/setup.py's custom_salesperson field desc
 for why.
 
 `create_dealer` / `update_dealer` cover the rest of the master-data write side (BRD
-MD-01): name, group, territory, dealer type, credit limit, salesperson, disabled.
-`classification` is deliberately not settable here — it is recomputed nightly.
+MD-01): name, group, territory, dealer type, credit limit, salesperson, GSTIN,
+address, disabled. `classification` is deliberately not settable here — it is
+recomputed nightly.
+
+`gstin`/`address` are plain Customer custom fields (sales/setup.py), free text like
+`phone`/`email` — GSTIN isn't validated against the checksum format, and address
+isn't a linked Address doctype record.
 """
 
 import frappe
@@ -54,6 +59,8 @@ def _serialize(
 	price_visible: int = 1,
 	email: str | None = None,
 	out_of_station: int = 0,
+	gstin: str | None = None,
+	address: str | None = None,
 ) -> dict:
 	return {
 		"id": name,
@@ -75,6 +82,8 @@ def _serialize(
 		# BRD C.1.4 — a floor on classification (at least Master Dealer), applied by
 		# pricing.dealer_classification.recompute_dealer_classifications, not here.
 		"outOfStation": bool(out_of_station),
+		"gstin": gstin,
+		"address": address,
 	}
 
 
@@ -110,6 +119,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_price_visible",
 			"custom_email",
 			"custom_out_of_station",
+			"custom_gstin",
+			"custom_address",
 		],
 		order_by="customer_name asc",
 	)
@@ -129,6 +140,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_price_visible,
 			r.custom_email,
 			r.custom_out_of_station,
+			r.custom_gstin,
+			r.custom_address,
 		)
 		for r in rows
 	]
@@ -152,6 +165,8 @@ def get_dealer(dealer: str):
 		doc.custom_price_visible,
 		doc.custom_email,
 		doc.custom_out_of_station,
+		doc.custom_gstin,
+		doc.custom_address,
 	)
 
 
@@ -204,6 +219,8 @@ def create_dealer(
 	price_visible: bool | None = None,
 	email: str | None = None,
 	out_of_station: bool | None = None,
+	gstin: str | None = None,
+	address: str | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -237,6 +254,10 @@ def create_dealer(
 		values["custom_email"] = email.strip()
 	if out_of_station is not None:
 		values["custom_out_of_station"] = 1 if out_of_station else 0
+	if gstin:
+		values["custom_gstin"] = gstin.strip().upper()
+	if address:
+		values["custom_address"] = address.strip()
 
 	doc = frappe.get_doc(values)
 	if credit_limit is not None:
@@ -248,8 +269,8 @@ def create_dealer(
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible, email, outOfStation. Anything else — including `classification`,
-	which is recomputed nightly — is ignored."""
+	phone, priceVisible, email, outOfStation, gstin, address. Anything else — including
+	`classification`, which is recomputed nightly — is ignored."""
 	_assert_can_manage_dealers()
 
 	field_map = {
@@ -259,6 +280,7 @@ def update_dealer(dealer: str, patch: dict):
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
 		"email": "custom_email",
+		"address": "custom_address",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
@@ -277,6 +299,8 @@ def update_dealer(dealer: str, patch: dict):
 	for key, value in patch.items():
 		if key == "phone":
 			doc.set("custom_phone", _clean_phone_or_throw(value) if value else None)
+		elif key == "gstin":
+			doc.set("custom_gstin", value.strip().upper() if value else None)
 		elif key == "priceVisible":
 			doc.set("custom_price_visible", 1 if value else 0)
 		elif key == "outOfStation":
