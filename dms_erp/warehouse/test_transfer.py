@@ -52,6 +52,31 @@ class TestTransfer(FrappeTestCase):
 		self.assertEqual(by_bay[main_name], 70)
 		self.assertEqual(by_bay[buf_name], 30)
 
+	def test_transfer_carries_the_items_uom_conversions(self):
+		# XFER-BATCH-1 already exists (created in setUpClass, before any weight was
+		# set on the item) -- set its own weight directly rather than the item's,
+		# same as the batch-overrides-item-standard fallback transfer_api reads.
+		frappe.db.set_value("Batch", "XFER-BATCH-1", "custom_batch_weight_kg", 28)
+		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
+		result = transfer_api.transfer_stock(
+			from_bay="XFER-MAIN-01",
+			to_bay="XFER-BUF-01",
+			item=self.item,
+			batch_no="XFER-BATCH-1",
+			qty=10,
+			transfer_type="Main→Buffer",
+			reason="Consolidation",
+		)
+		self.assertEqual(result["weightPerBoxKg"], 28)
+		self.assertEqual(result["totalWeightKg"], 280)
+		self.assertEqual(result["piecesPerBox"], 4)
+		self.assertEqual(result["totalPieces"], 40)
+		self.assertEqual(result["sqftPerBox"], 15.5)
+		self.assertEqual(result["totalSqft"], 155)
+		self.assertAlmostEqual(result["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(result["totalSqm"], 14.4, places=2)
+
 	def test_transfer_rejects_insufficient_source_stock(self):
 		with self.assertRaises(frappe.ValidationError):
 			transfer_api.transfer_stock(
