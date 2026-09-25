@@ -247,19 +247,25 @@ class TestOrderApi(FrappeTestCase):
 		order = self._make_order()
 		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
 
-	def _make_tax_template(self, name_suffix: str, rate: float = 18) -> str:
+	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
 		company = ensure_company()
 		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
 		if not account:
 			self.skipTest("Test company has no Chart of Accounts to pick a leaf account from.")
 		template_name = f"Order Test GST {name_suffix}"
 		if frappe.db.exists("Sales Taxes and Charges Template", {"title": template_name, "company": company}):
-			return frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+			existing = frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+			if is_default:
+				existing_doc = frappe.get_doc("Sales Taxes and Charges Template", existing)
+				existing_doc.is_default = 1
+				existing_doc.save(ignore_permissions=True)
+			return existing
 		template = frappe.get_doc(
 			{
 				"doctype": "Sales Taxes and Charges Template",
 				"title": template_name,
 				"company": company,
+				"is_default": 1 if is_default else 0,
 				"taxes": [
 					{
 						"charge_type": "On Net Total",
@@ -296,6 +302,21 @@ class TestOrderApi(FrappeTestCase):
 		order = self._make_order()
 		self.assertFalse(order["taxesAndCharges"])
 		self.assertEqual(order["taxes"], [])
+		self.assertEqual(order["total"], order["netTotal"])
+
+	def test_create_order_without_a_tax_template_ignores_the_companys_default_template(self):
+		"""Regression for the "hardcoded 18% for all customers" QA report: on a site
+		with a default Sales Taxes and Charges Template configured, ERPNext's own
+		validate()-time logic (Accounts Settings > "Add taxes from Taxes and Charges/
+		Item Tax Template") would otherwise silently apply it to any new order whose
+		taxes table is still empty -- regardless of what the caller asked for. An
+		order created with no taxes_and_charges must stay genuinely untaxed even when
+		a default exists, not just when the test company happens to have none."""
+		self._make_tax_template("Default", rate=18, is_default=True)
+		order = self._make_order()
+		self.assertFalse(order["taxesAndCharges"])
+		self.assertEqual(order["taxes"], [])
+		self.assertEqual(order["totalTaxesAndCharges"], 0)
 		self.assertEqual(order["total"], order["netTotal"])
 
 	def test_list_tax_templates_surfaces_the_sites_own_configured_templates(self):

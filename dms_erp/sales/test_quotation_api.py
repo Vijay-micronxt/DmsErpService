@@ -267,19 +267,25 @@ class TestQuotationApi(FrappeTestCase):
 
 		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
 
-	def _make_tax_template(self, name_suffix: str, rate: float = 18) -> str:
+	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
 		company = ensure_company()
 		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
 		if not account:
 			self.skipTest("Test company has no Chart of Accounts to pick a leaf account from.")
 		template_name = f"Quotation Test GST {name_suffix}"
 		if frappe.db.exists("Sales Taxes and Charges Template", {"title": template_name, "company": company}):
-			return frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+			existing = frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+			if is_default:
+				existing_doc = frappe.get_doc("Sales Taxes and Charges Template", existing)
+				existing_doc.is_default = 1
+				existing_doc.save(ignore_permissions=True)
+			return existing
 		template = frappe.get_doc(
 			{
 				"doctype": "Sales Taxes and Charges Template",
 				"title": template_name,
 				"company": company,
+				"is_default": 1 if is_default else 0,
 				"taxes": [
 					{
 						"charge_type": "On Net Total",
@@ -310,3 +316,34 @@ class TestQuotationApi(FrappeTestCase):
 		)
 		self.assertFalse(quotation["taxesAndCharges"])
 		self.assertEqual(quotation["taxes"], [])
+
+	def test_create_quotation_without_a_tax_template_ignores_the_companys_default_template(self):
+		"""Regression for the "hardcoded 18% for all customers" QA report: on a site
+		with a default Sales Taxes and Charges Template configured, ERPNext's own
+		validate()-time logic (Accounts Settings > "Add taxes from Taxes and Charges/
+		Item Tax Template") would otherwise silently apply it to any new quotation
+		whose taxes table is still empty -- regardless of what the caller asked for."""
+		self._make_tax_template("Default", rate=18, is_default=True)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+		self.assertEqual(quotation["taxes"], [])
+		self.assertEqual(quotation["totalTaxesAndCharges"], 0)
+		self.assertEqual(quotation["total"], quotation["netTotal"])
+
+	def test_convert_to_order_of_an_untaxed_quotation_ignores_the_companys_default_template(self):
+		"""Same regression, for the Quotation -> Sales Order conversion path: ERPNext's
+		make_sales_order mapper carries the source quotation's (empty) taxes across
+		verbatim, and the resulting Sales Order's own insert() is just as exposed to
+		the company's default-template auto-population as a directly-created order."""
+		self._make_tax_template("Default Convert", rate=18, is_default=True)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		self.assertFalse(order["taxesAndCharges"])
+		self.assertEqual(order["taxes"], [])
+		self.assertEqual(order["total"], order["netTotal"])

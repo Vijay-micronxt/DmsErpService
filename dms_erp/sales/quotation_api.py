@@ -34,7 +34,7 @@ from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS
-from dms_erp.sales.utils import apply_tax_template
+from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
 
 QUOTATION_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -236,6 +236,7 @@ def create_quotation(
 	)
 	apply_tax_template(doc, taxes_and_charges)
 	doc.insert(ignore_permissions=True)
+	clear_unrequested_default_tax(doc)
 	doc.submit()
 
 	if inquiry:
@@ -327,6 +328,13 @@ def convert_to_order(quotation: str, expected_dispatch=None):
 
 	qtn = frappe.get_doc("Quotation", quotation)
 	so = make_sales_order(quotation)
+	# make_sales_order carries taxes_and_charges/taxes across from the quotation
+	# verbatim -- if the quotation was itself untaxed, this new Sales Order's taxes
+	# table starts empty too, and is just as exposed to ERPNext's own validate()-time
+	# default-template auto-population as a directly-created order. See
+	# sales.utils.apply_tax_template's docstring.
+	if not so.get("taxes_and_charges"):
+		so.flags.dont_auto_add_taxes = True
 	if expected_dispatch:
 		so.delivery_date = expected_dispatch
 		# Only fills the gap for a line that never had its own delivery_date on

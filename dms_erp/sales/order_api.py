@@ -22,7 +22,7 @@ from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
-from dms_erp.sales.utils import apply_tax_template
+from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
 
 ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -118,6 +118,7 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user})
 
 	so.insert(ignore_permissions=True)
+	clear_unrequested_default_tax(so)
 	so.submit()
 	return _serialize(so)
 
