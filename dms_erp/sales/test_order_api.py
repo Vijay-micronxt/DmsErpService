@@ -7,6 +7,7 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
+from dms_erp.sales import utils as sales_utils
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
@@ -199,3 +200,105 @@ class TestOrderApi(FrappeTestCase):
 		found = order_api.list_orders(dealer=dealer, search=created[0]["id"])
 		self.assertEqual(found["total"], 1)
 		self.assertEqual(found["items"][0]["id"], created[0]["id"])
+
+	def test_create_order_with_no_discount_passes_the_approved_rate_through_unrounded(self):
+		# Regression guard: discount support must not introduce new rounding for
+		# the (still overwhelmingly common) zero-discount line.
+		order = self._make_order()
+		self.assertEqual(order["lines"][0]["priceListRate"], 360)
+		self.assertEqual(order["lines"][0]["discountPercentage"], 0)
+		self.assertEqual(order["lines"][0]["rate"], 360)
+
+	def test_create_order_applies_line_level_discount(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10, "discount_percentage": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		line = order["lines"][0]
+		self.assertEqual(line["priceListRate"], 360)
+		self.assertEqual(line["discountPercentage"], 10)
+		self.assertEqual(line["rate"], 324)  # 360 * 0.9
+
+	def test_create_order_rejects_an_out_of_range_discount(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.create_order(
+				dealer=self.dealer,
+				lines=[{"item": self.item, "qty": 10, "discount_percentage": 150}],
+				expected_dispatch="2026-09-01",
+				inquiry=inquiry["id"],
+			)
+
+	def test_create_order_respects_a_per_line_delivery_date_override(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10, "delivery_date": "2026-09-15"}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-15")
+		self.assertEqual(order["expectedDispatch"], "2026-09-01")
+
+	def test_create_order_falls_back_to_the_order_level_delivery_date(self):
+		order = self._make_order()
+		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
+
+	def _make_tax_template(self, name_suffix: str, rate: float = 18) -> str:
+		company = ensure_company()
+		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
+		if not account:
+			self.skipTest("Test company has no Chart of Accounts to pick a leaf account from.")
+		template_name = f"Order Test GST {name_suffix}"
+		if frappe.db.exists("Sales Taxes and Charges Template", {"title": template_name, "company": company}):
+			return frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+		template = frappe.get_doc(
+			{
+				"doctype": "Sales Taxes and Charges Template",
+				"title": template_name,
+				"company": company,
+				"taxes": [
+					{
+						"charge_type": "On Net Total",
+						"account_head": account[0],
+						"description": template_name,
+						"rate": rate,
+					}
+				],
+			}
+		)
+		template.insert(ignore_permissions=True)
+		return template.name
+
+	def test_create_order_applies_a_tax_template_and_lets_erpnext_compute_the_total(self):
+		template_name = self._make_tax_template("A", rate=18)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+			taxes_and_charges=template_name,
+		)
+		self.assertEqual(order["taxesAndCharges"], template_name)
+		self.assertEqual(len(order["taxes"]), 1)
+		self.assertEqual(order["taxes"][0]["rate"], 18)
+		# 10 boxes * 360/box = 3600 net; 18% of that is exactly what ERPNext's own
+		# calculate_taxes_and_totals should have computed, not anything this app derived.
+		self.assertEqual(order["netTotal"], 3600)
+		self.assertEqual(order["totalTaxesAndCharges"], 648)
+		self.assertEqual(order["total"], 4248)
+
+	def test_create_order_without_a_tax_template_stays_untaxed(self):
+		order = self._make_order()
+		self.assertFalse(order["taxesAndCharges"])
+		self.assertEqual(order["taxes"], [])
+		self.assertEqual(order["total"], order["netTotal"])
+
+	def test_list_tax_templates_surfaces_the_sites_own_configured_templates(self):
+		template_name = self._make_tax_template("B", rate=12)
+		templates = sales_utils.list_tax_templates()
+		self.assertIn(template_name, [t["id"] for t in templates])

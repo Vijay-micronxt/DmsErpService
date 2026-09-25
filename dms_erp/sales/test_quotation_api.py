@@ -199,3 +199,114 @@ class TestQuotationApi(FrappeTestCase):
 		found = quotation_api.list_quotations(dealer=dealer, search=created[0]["id"])
 		self.assertEqual(found["total"], 1)
 		self.assertEqual(found["items"][0]["id"], created[0]["id"])
+
+	def test_create_quotation_applies_line_level_discount(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
+			markup_pct=12,
+		)
+		line = quotation["lines"][0]
+		self.assertEqual(line["priceListRate"], 560)  # round(500 * 1.12)
+		self.assertEqual(line["discountPercentage"], 10)
+		self.assertEqual(line["rate"], 504)  # round(560 * 0.9)
+
+	def test_create_quotation_rejects_an_out_of_range_discount(self):
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": -5}],
+				markup_pct=12,
+			)
+
+	def test_create_quotation_respects_a_per_line_delivery_date(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+		self.assertEqual(quotation["lines"][0]["deliveryDate"], "2026-09-20")
+
+	def test_add_quotation_line_preserves_discount_and_delivery_date_on_untouched_lines(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+
+		amended = quotation_api.add_quotation_line(quotation["id"], self.second_item, 20)
+
+		by_item = {l["itemCode"]: l for l in amended["lines"]}
+		# The untouched line's own discount/date must survive the reprice, not
+		# silently reset to 0/None just because a different line was added.
+		self.assertEqual(by_item[self.priced_item]["discountPercentage"], 10)
+		self.assertEqual(by_item[self.priced_item]["deliveryDate"], "2026-09-20")
+		self.assertEqual(by_item[self.priced_item]["rate"], 504)  # round(560 * 0.9), rebuilt not stale
+
+	def test_convert_to_order_carries_discount_and_delivery_date_via_native_mapper(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		line = order["lines"][0]
+		self.assertEqual(line["discountPercentage"], 10)
+		self.assertEqual(line["rate"], 504)
+		# The quotation line's own date wins over the order-level expected_dispatch.
+		self.assertEqual(line["deliveryDate"], "2026-09-20")
+
+	def test_convert_to_order_only_fills_the_gap_for_lines_with_no_own_delivery_date(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
+
+	def _make_tax_template(self, name_suffix: str, rate: float = 18) -> str:
+		company = ensure_company()
+		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
+		if not account:
+			self.skipTest("Test company has no Chart of Accounts to pick a leaf account from.")
+		template_name = f"Quotation Test GST {name_suffix}"
+		if frappe.db.exists("Sales Taxes and Charges Template", {"title": template_name, "company": company}):
+			return frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+		template = frappe.get_doc(
+			{
+				"doctype": "Sales Taxes and Charges Template",
+				"title": template_name,
+				"company": company,
+				"taxes": [
+					{
+						"charge_type": "On Net Total",
+						"account_head": account[0],
+						"description": template_name,
+						"rate": rate,
+					}
+				],
+			}
+		)
+		template.insert(ignore_permissions=True)
+		return template.name
+
+	def test_create_quotation_applies_a_tax_template_and_lets_erpnext_compute_the_total(self):
+		template_name = self._make_tax_template("A", rate=18)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=0, taxes_and_charges=template_name
+		)
+		self.assertEqual(quotation["taxesAndCharges"], template_name)
+		self.assertEqual(len(quotation["taxes"]), 1)
+		self.assertEqual(quotation["netTotal"], 5000)  # 10 * 500
+		self.assertEqual(quotation["totalTaxesAndCharges"], 900)  # 18% of 5000
+		self.assertEqual(quotation["total"], 5900)
+
+	def test_create_quotation_without_a_tax_template_stays_untaxed(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+		self.assertEqual(quotation["taxes"], [])
