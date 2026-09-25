@@ -79,6 +79,15 @@ class TestReorder(FrappeTestCase):
 		self.assertEqual(suggestion["suggestedQty"], 0)
 		self.assertEqual(suggestion["urgency"], "Healthy")
 
+	def test_suggestion_carries_the_items_default_supplier(self):
+		item = make_item("REORDER-DEFAULT-SUPPLIER", "Vitrified")
+		suggestion = self._suggestion_for(item)
+		self.assertIsNone(suggestion["defaultSupplier"])
+
+		frappe.db.set_value("Item", item, "custom_default_supplier", self.supplier)
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["defaultSupplier"], self.supplier)
+
 	def test_non_reorderable_item_never_gets_a_suggestion(self):
 		item = make_item("REORDER-PULLED", "Vitrified")
 		catalog_api.update_product(item, {"status": "Pulled Back"})

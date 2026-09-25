@@ -43,7 +43,7 @@ list_all_products (unpaginated, internal-only) instead of the whitelisted endpoi
 import frappe
 from frappe import _
 
-from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable
+from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable, item_default_supplier
 from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
 from dms_erp.warehouse.utils import total_stock_for_item
@@ -147,6 +147,9 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"piecesPerBox": item_doc.custom_pieces_per_box,
 		"sqftPerBox": item_doc.custom_sqft_per_box,
 		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
+		# BRD D.2 -- the item's own custom_default_supplier if set, else its Series'
+		# supplier (see catalog.utils.item_default_supplier).
+		"defaultSupplier": item_default_supplier(item_doc.name),
 		"leadTimeDays": item_doc.lead_time_days,
 		"altItemId": _get_alt_item(item_doc.name),
 		"dealerCodes": [_serialize_dealer_code(row) for row in item_doc.custom_dealer_codes],
@@ -299,6 +302,11 @@ def create_product(
 			"custom_pieces_per_box": pieces_per_box,
 			"custom_sqft_per_box": sqft_per_box,
 			"custom_weight_per_box_kg": weight_per_box_kg,
+			# BRD D.2 -- the supplier this launch price came from is this item's
+			# default supplier until Purchase explicitly re-sources it (update_product's
+			# "defaultSupplier" patch); every item created through this endpoint always
+			# gets one, no separate default-supplier param needed.
+			"custom_default_supplier": supplier,
 			"lead_time_days": lead_time_days,
 			# Only meaningful (and only mandatory) when india_compliance is
 			# installed -- harmless to set on a site without it (Frappe just
@@ -348,6 +356,7 @@ def update_product(item: str, patch: dict):
 		"seriesRef": "custom_series_ref",
 		"bulkQtyThreshold": "custom_bulk_qty_threshold",
 		"retailQtyThreshold": "custom_retail_qty_threshold",
+		"defaultSupplier": "custom_default_supplier",
 	}
 
 	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Product Series", patch["seriesRef"]):

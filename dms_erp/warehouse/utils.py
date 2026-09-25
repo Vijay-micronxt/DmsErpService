@@ -6,6 +6,8 @@ batch), not a doctype of its own.
 
 import frappe
 
+from dms_erp.catalog.utils import SQFT_TO_SQM
+
 CAPACITY_FOR = {"36x8": 900, "36x6": 700, "32x8": 800, "32x6": 600}
 DAMAGE_BAY_TYPES = {"damage", "insurance_claim"}
 
@@ -176,6 +178,9 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 		weight_per_box_kg = frappe.db.get_value("Batch", row.batch_no, "custom_batch_weight_kg") if row.batch_no else None
 		if weight_per_box_kg is None:
 			weight_per_box_kg = item_doc.custom_weight_per_box_kg
+		pieces_per_box = item_doc.custom_pieces_per_box
+		sqft_per_box = item_doc.custom_sqft_per_box
+		sqm_per_box = round(sqft_per_box * SQFT_TO_SQM, 4) if sqft_per_box is not None else None
 		out.append(
 			{
 				# No dedicated "lot" doctype exists (see module docstring) — this is a
@@ -190,6 +195,12 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 				"boxes": row.boxes,
 				"weightPerBoxKg": weight_per_box_kg,
 				"totalWeightKg": (weight_per_box_kg or 0) * row.boxes if weight_per_box_kg is not None else None,
+				"piecesPerBox": pieces_per_box,
+				"totalPieces": (pieces_per_box or 0) * row.boxes if pieces_per_box is not None else None,
+				"sqftPerBox": sqft_per_box,
+				"totalSqft": (sqft_per_box or 0) * row.boxes if sqft_per_box is not None else None,
+				"sqmPerBox": sqm_per_box,
+				"totalSqm": round((sqm_per_box or 0) * row.boxes, 4) if sqm_per_box is not None else None,
 				"storedAt": str(row.stored_at),
 				"damageType": bay_type if is_damage_bay else None,
 				"claimRef": claim_ref_for_lot(row.bay, row.item_code, row.batch_no) if is_damage_bay else None,

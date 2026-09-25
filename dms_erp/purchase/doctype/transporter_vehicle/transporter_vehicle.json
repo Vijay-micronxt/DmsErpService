@@ -1,0 +1,97 @@
+{
+ "actions": [],
+ "creation": "2026-09-25 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "owner_name",
+  "vehicle_number",
+  "vehicle_type",
+  "mode",
+  "capacity_tonnes",
+  "column_break_1",
+  "transit_days",
+  "standard_rate_basis",
+  "driver_name",
+  "driver_mobile"
+ ],
+ "fields": [
+  {
+   "fieldname": "owner_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Owner Name"
+  },
+  {
+   "fieldname": "vehicle_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Vehicle Number",
+   "reqd": 1
+  },
+  {
+   "description": "BRD C.1.7 — e.g. Truck / Container. Free text (not Select/Link) so a future vehicle type beyond the confirmed fleet doesn't need a schema change.",
+   "fieldname": "vehicle_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Vehicle Type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Mode",
+   "options": "Road\nRail + Road\nShip + Road",
+   "reqd": 1
+  },
+  {
+   "description": "BRD C.1.7 confirmed fleet (tonnes): 43.5/42/41/40.5/35/31/25 trucks; 32.5/31 rail containers; 28/31 ship containers -- reference values, not an enforced list.",
+   "fieldname": "capacity_tonnes",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Capacity (Tonnes)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Indicative transit time (BRD C.1.7).",
+   "fieldname": "transit_days",
+   "fieldtype": "Int",
+   "label": "Transit Days"
+  },
+  {
+   "description": "Largely standard across transporters for a given vehicle type (BRD C.1.7).",
+   "fieldname": "standard_rate_basis",
+   "fieldtype": "Currency",
+   "label": "Standard Rate Basis"
+  },
+  {
+   "description": "BRD C.1.7/D.2 — assigned on a pickup plan, not a permanent Vehicle-Driver link; no Driver master exists elsewhere in this app (same free-text precedent as Supplier.custom_insurance_holder).",
+   "fieldname": "driver_name",
+   "fieldtype": "Data",
+   "label": "Driver Name"
+  },
+  {
+   "fieldname": "driver_mobile",
+   "fieldtype": "Data",
+   "label": "Driver Mobile"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Purchase",
+ "name": "Transporter Vehicle",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

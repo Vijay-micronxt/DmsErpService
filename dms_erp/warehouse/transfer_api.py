@@ -7,6 +7,12 @@ Custom Fields on Stock Entry (see warehouse/setup.py).
 import frappe
 from frappe import _
 
+from dms_erp.catalog.utils import (
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
 from dms_erp.warehouse.utils import bay_occupancy, default_company, get_bay, list_stock_lots
@@ -17,8 +23,23 @@ def _assert_can_transfer():
 		frappe.throw(_("Only Warehouse or Management can move stock between bays."), frappe.PermissionError)
 
 
+def _weight_per_box_kg(item: str, batch_no: str | None) -> float | None:
+	# Same batch-overrides-item-standard fallback as inward_api/allocation_api
+	# (BRD C.1.3/C.6.1) -- a transfer moves a specific batch, so its own weight
+	# (once known) is the best figure, not the item's generic standard.
+	if batch_no:
+		batch_weight = frappe.db.get_value("Batch", batch_no, "custom_batch_weight_kg")
+		if batch_weight is not None:
+			return batch_weight
+	return item_weight_per_box_kg(item)
+
+
 def _serialize(doc) -> dict:
 	row = doc.items[0]
+	weight_per_box_kg = _weight_per_box_kg(row.item_code, row.batch_no)
+	pieces_per_box = item_pieces_per_box(row.item_code)
+	sqft_per_box = item_sqft_per_box(row.item_code)
+	sqm_per_box = item_sqm_per_box(row.item_code)
 	return {
 		"id": doc.name,
 		"ref": doc.name,
@@ -27,6 +48,14 @@ def _serialize(doc) -> dict:
 		"fromBayId": row.s_warehouse,
 		"toBayId": row.t_warehouse,
 		"qty": row.qty,
+		"weightPerBoxKg": weight_per_box_kg,
+		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
+		"piecesPerBox": pieces_per_box,
+		"totalPieces": (pieces_per_box or 0) * row.qty if pieces_per_box is not None else None,
+		"sqftPerBox": sqft_per_box,
+		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * row.qty, 4) if sqm_per_box is not None else None,
 		"transferType": doc.custom_transfer_type,
 		"reason": doc.custom_transfer_reason,
 		"damageType": doc.custom_damage_type,

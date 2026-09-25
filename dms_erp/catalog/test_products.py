@@ -50,7 +50,15 @@ class TestProducts(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for code in ("PROD-TEST-A", "PROD-TEST-B", "PROD-TEST-C", "PROD-TEST-D", "PROD-TEST-IMG-1", "PROD-TEST-IMG-2"):
+		for code in (
+			"PROD-TEST-A",
+			"PROD-TEST-B",
+			"PROD-TEST-C",
+			"PROD-TEST-D",
+			"PROD-TEST-IMG-1",
+			"PROD-TEST-IMG-2",
+			"PROD-TEST-SUPPLIER",
+		):
 			if frappe.db.exists("Item Price Proposal", code):
 				frappe.delete_doc("Item Price Proposal", code, force=True, ignore_permissions=True)
 			if frappe.db.exists("Item", code):
@@ -404,6 +412,55 @@ class TestProducts(FrappeTestCase):
 
 		self.assertEqual(product["finish"], "Matte")
 		self.assertEqual(product["piecesPerBox"], 4)
+
+	def test_create_product_sets_the_launch_supplier_as_the_default_supplier(self):
+		product = catalog_api.create_product(
+			code="PROD-TEST-SUPPLIER",
+			name="Default Supplier Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		self.assertEqual(product["defaultSupplier"], self.supplier)
+
+	def test_default_supplier_falls_back_to_the_series_supplier(self):
+		series_api.create_series(series_name="Product Test Series", supplier=self.supplier)
+		catalog_api.create_product(
+			code="PROD-TEST-SUPPLIER",
+			name="Series Default Supplier Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref="Product Test Series",
+		)
+		# Simulates an item created before custom_default_supplier existed (or one
+		# never given its own override) -- the Series it's linked to should still
+		# resolve a default.
+		frappe.db.set_value("Item", "PROD-TEST-SUPPLIER", "custom_default_supplier", None)
+
+		product = catalog_api.get_product("PROD-TEST-SUPPLIER")
+		self.assertEqual(product["defaultSupplier"], self.supplier)
+
+	def test_update_product_overrides_the_default_supplier(self):
+		catalog_api.create_product(
+			code="PROD-TEST-SUPPLIER",
+			name="Overridden Supplier Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		other_supplier = make_supplier("Product Test Other Supplier")
+
+		updated = catalog_api.update_product("PROD-TEST-SUPPLIER", {"defaultSupplier": other_supplier})
+		self.assertEqual(updated["defaultSupplier"], other_supplier)
 
 	def test_update_product_series_ref_rederives_the_label(self):
 		other_series = series_api.create_series(series_name="Product Test Other Series", finish="Matte")["id"]
