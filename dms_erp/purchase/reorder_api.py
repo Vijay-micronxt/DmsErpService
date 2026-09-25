@@ -35,7 +35,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, today
 
-from dms_erp.catalog.utils import is_reorderable
+from dms_erp.catalog.utils import is_reorderable, item_default_supplier
 from dms_erp.warehouse.utils import total_stock_for_item
 
 SAFETY_STOCK_BOXES = 100
@@ -191,6 +191,9 @@ def _suggestion_for(
 
 	return {
 		"productId": item.name,
+		# BRD D.2 -- who a raised PO would default to; see catalog.utils.item_default_supplier.
+		# None here means Purchase must pick one by hand when acting on this suggestion.
+		"defaultSupplier": item_default_supplier(item.name),
 		"currentStock": current_stock,
 		"missedDemandQty": missed_demand_qty,
 		"pendingInquiryQty": pending_inquiry_qty,

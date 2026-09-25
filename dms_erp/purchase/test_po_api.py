@@ -1,6 +1,7 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.purchase import po_api
 from dms_erp.purchase.setup import setup_purchase
@@ -73,6 +74,34 @@ class TestPoApi(FrappeTestCase):
 		self.assertEqual(progress["plannedQty"], 300)
 		self.assertEqual(progress["status"], "Partially planned")
 		self.assertEqual(progress["remainingToPlan"], 300)
+
+	def test_create_purchase_order_falls_back_to_the_items_default_supplier(self):
+		item = make_item("PO-DEFAULT-SUPPLIER-ITEM", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_default_supplier", self.supplier)
+
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
+		self.assertEqual(po["supplier"], self.supplier)
+
+	def test_create_purchase_order_falls_back_to_the_series_supplier(self):
+		item = make_item("PO-SERIES-SUPPLIER-ITEM", "Vitrified")
+		series = series_api.create_series(series_name="PO Test Series", supplier=self.supplier)
+		frappe.db.set_value("Item", item, "custom_series_ref", series["id"])
+
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
+		self.assertEqual(po["supplier"], self.supplier)
+
+	def test_create_purchase_order_explicit_supplier_wins_over_the_default(self):
+		item = make_item("PO-EXPLICIT-SUPPLIER-ITEM", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_default_supplier", self.supplier)
+		other_supplier = make_supplier("PO Other Explicit Supplier")
+
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, supplier=other_supplier, expected_ready_date="2026-09-01")
+		self.assertEqual(po["supplier"], other_supplier)
+
+	def test_create_purchase_order_requires_a_supplier_when_none_can_be_resolved(self):
+		item = make_item("PO-NO-SUPPLIER-ITEM", "Vitrified")
+		with self.assertRaises(frappe.ValidationError):
+			po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
 
 	def test_write_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")

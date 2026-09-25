@@ -4,13 +4,17 @@ submitted immediately on creation (the frontend has no separate draft/approval s
 ERPNext equivalent and is a Custom Field; `receivedQty` is ERPNext's own native
 `received_qty` on the PO Item, kept accurate by warehouse/allocation_api.py linking
 Purchase Receipts back to the PO line it fulfills.
+
+`create_purchase_order`'s `supplier` is optional (BRD D.2): when omitted, it falls
+back to the item's own default supplier (see catalog.utils.item_default_supplier),
+and only throws if neither the item nor its Series has one set.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import getdate, today
 
-from dms_erp.catalog.utils import SQFT_TO_SQM
+from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier
 from dms_erp.pagination import clamp
 from dms_erp.warehouse.utils import default_company
 
@@ -84,12 +88,22 @@ def get_purchase_order(po: str):
 def create_purchase_order(
 	item: str,
 	ordered_qty: float,
-	supplier: str,
 	expected_ready_date,
+	supplier: str | None = None,
 	remarks: str | None = None,
 	source_inquiry: str | None = None,
 ):
 	_assert_can_manage_purchase()
+
+	# BRD D.2 -- fall back to the item's own default supplier (its Series' supplier,
+	# unless the item overrides it) when the caller doesn't name one explicitly.
+	if not supplier:
+		supplier = item_default_supplier(item)
+	if not supplier:
+		frappe.throw(
+			_("{0} has no default supplier set — specify one, or set a default supplier on the item or its Series.").format(item),
+			frappe.ValidationError,
+		)
 
 	po = frappe.get_doc(
 		{

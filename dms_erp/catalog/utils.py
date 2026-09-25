@@ -62,3 +62,16 @@ def item_sqm_per_box(item_code: str) -> float | None:
 	Item."""
 	sqft_per_box = item_sqft_per_box(item_code)
 	return round(sqft_per_box * SQFT_TO_SQM, 4) if sqft_per_box is not None else None
+
+
+def item_default_supplier(item_code: str) -> str | None:
+	"""BRD D.2: a Series carries the supplier/manufacturer that makes it (one Series
+	= one supplier). An item's own custom_default_supplier -- settable independently
+	of its Series, e.g. when Purchase re-sources just this one item elsewhere --
+	always wins when set; only an item with neither (including one created before
+	this field existed and never given a Series either) resolves to None."""
+	default_supplier = frappe.get_cached_value("Item", item_code, "custom_default_supplier")
+	if default_supplier:
+		return default_supplier
+	series_ref = frappe.get_cached_value("Item", item_code, "custom_series_ref")
+	return frappe.get_cached_value("Product Series", series_ref, "supplier") if series_ref else None
