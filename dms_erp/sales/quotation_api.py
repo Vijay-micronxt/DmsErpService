@@ -197,7 +197,7 @@ def create_quotation(
 	markup_pct: float,
 	freight: float = 0,
 	validity_days: int = 7,
-	inquiry: str | None = None,
+	inquiries: list[str] | None = None,
 	channel: str | None = None,
 	taxes_and_charges: str | None = None,
 ):
@@ -205,11 +205,32 @@ def create_quotation(
 	`delivery_date` -- see _priced_items. `taxes_and_charges` names an existing
 	Sales Taxes and Charges Template; see sales.utils.apply_tax_template. Both
 	carry forward automatically into the resulting Sales Order on
-	convert_to_order, via ERPNext's own make_sales_order field mapper."""
+	convert_to_order, via ERPNext's own make_sales_order field mapper.
+
+	`inquiries` closes out every Inquiry passed (status -> "Quoted",
+	linked_quotation -> this quotation's name, mirroring order_api's
+	linked_sales_order pattern in the opposite direction) -- lets several
+	inquiries for the same dealer merge into one quotation, not just one. Every
+	inquiry must belong to `dealer`: a Quotation has exactly one party, so a
+	mixed-dealer selection can't be merged and is rejected outright rather than
+	silently dropped or split. custom_inquiry (a single Link, unchanged) keeps
+	pointing at the first inquiry in the list, for existing single-inquiry
+	callers/reports."""
 	_assert_can_manage_quotations()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if inquiries:
+		mismatched = [
+			i for i in inquiries if frappe.db.get_value("Inquiry", i, "dealer") != dealer
+		]
+		if mismatched:
+			frappe.throw(
+				_("{0} do not belong to {1} -- a quotation can only merge inquiries from one dealer.").format(
+					", ".join(mismatched), dealer
+				),
+				frappe.ValidationError,
+			)
 	# BRD C.4.3: an explicit channel (including "Retail") is the audit-locked manual
 	# override and always wins; only an unset channel triggers auto-classification.
 	if channel is None:
@@ -229,7 +250,7 @@ def create_quotation(
 			"valid_till": add_days(today(), int(validity_days)),
 			"custom_markup_pct": markup_pct,
 			"custom_freight": freight,
-			"custom_inquiry": inquiry,
+			"custom_inquiry": inquiries[0] if inquiries else None,
 			"custom_order_channel": channel,
 			"items": items,
 		}
@@ -239,8 +260,8 @@ def create_quotation(
 	clear_unrequested_default_tax(doc)
 	doc.submit()
 
-	if inquiry:
-		frappe.db.set_value("Inquiry", inquiry, "status", "Quoted")
+	for inquiry in inquiries or []:
+		frappe.db.set_value("Inquiry", inquiry, {"status": "Quoted", "linked_quotation": doc.name})
 
 	return _serialize(doc)
 

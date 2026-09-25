@@ -99,10 +99,39 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_from_inquiry_marks_it_quoted(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=50, source="Phone")
-		quotation_api.create_quotation(
-			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiry=inquiry["id"]
+		created = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiries=[inquiry["id"]]
 		)
-		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Quoted")
+		updated = inquiry_api.get_inquiry(inquiry["id"])
+		self.assertEqual(updated["status"], "Quoted")
+		self.assertEqual(updated["linkedQuotation"], created["id"])
+
+	def test_create_quotation_merges_two_inquiries_from_the_same_dealer(self):
+		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.second_item, qty=15, source="Phone")
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
+			markup_pct=10,
+			inquiries=[i1["id"], i2["id"]],
+		)
+		self.assertEqual(len(quotation["lines"]), 2)
+		self.assertEqual(inquiry_api.get_inquiry(i1["id"])["status"], "Quoted")
+		self.assertEqual(inquiry_api.get_inquiry(i2["id"])["status"], "Quoted")
+		self.assertEqual(inquiry_api.get_inquiry(i1["id"])["linkedQuotation"], quotation["id"])
+		self.assertEqual(inquiry_api.get_inquiry(i2["id"])["linkedQuotation"], quotation["id"])
+
+	def test_create_quotation_rejects_inquiries_from_a_different_dealer(self):
+		other_dealer = make_dealer("Quotation Test Other Dealer")
+		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=other_dealer, item=self.second_item, qty=15, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
+				markup_pct=10,
+				inquiries=[i1["id"], i2["id"]],
+			)
 
 	def test_add_quotation_line_amends_and_reprices_every_line(self):
 		quotation = quotation_api.create_quotation(

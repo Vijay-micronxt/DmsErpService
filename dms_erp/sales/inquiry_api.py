@@ -65,6 +65,7 @@ def _serialize(doc) -> dict:
 		"whatsappReplied": bool(doc.whatsapp_replied),
 		"customerPo": doc.customer_po,
 		"linkedSalesOrder": doc.linked_sales_order,
+		"linkedQuotation": doc.linked_quotation,
 	}
 
 
