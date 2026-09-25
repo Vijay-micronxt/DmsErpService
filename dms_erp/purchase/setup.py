@@ -60,6 +60,20 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.1.6 — identifies which insurer a damage claim against this supplier should route to. Free text, not a Link (Insurer isn't its own master anywhere in this app); captured here only, not yet read by finance.claims_api.",
 			"insert_after": "custom_longitude",
 		},
+		{
+			"fieldname": "custom_address",
+			"fieldtype": "Small Text",
+			"label": "Factory Address",
+			"description": "BRD C.1.6 — factory location/address, for pickup stop identification (BRD C.5). Free text rather than a linked Address doctype record, matching this app's other Supplier custom fields.",
+			"insert_after": "custom_insurance_holder",
+		},
+		{
+			"fieldname": "custom_contact_person",
+			"fieldtype": "Data",
+			"label": "Material-Ready Contact",
+			"description": "BRD C.1.6 — who to reach for vendor enquiry and material-ready follow-up. Free text (name and/or phone), not a Link to Contact.",
+			"insert_after": "custom_address",
+		},
 	],
 }
 
