@@ -34,3 +34,16 @@ def item_weight_per_box_kg(item_code: str) -> float | None:
 	document uses before a real batch (with its own possibly-different
 	custom_batch_weight_kg, see warehouse.utils.ensure_batch) is known."""
 	return frappe.get_cached_value("Item", item_code, "custom_weight_per_box_kg")
+
+
+def item_pieces_per_box(item_code: str) -> float | None:
+	"""BRD C.1.3: Box->Pieces conversion factor. Unlike weight, this is a fixed
+	geometric property of the tile/box (not something a batch can vary), so
+	there's no batch-level override to check."""
+	return frappe.get_cached_value("Item", item_code, "custom_pieces_per_box")
+
+
+def item_sqft_per_box(item_code: str) -> float | None:
+	"""BRD C.1.3: Box->Sq Ft conversion factor, same fixed-per-item reasoning as
+	item_pieces_per_box."""
+	return frappe.get_cached_value("Item", item_code, "custom_sqft_per_box")

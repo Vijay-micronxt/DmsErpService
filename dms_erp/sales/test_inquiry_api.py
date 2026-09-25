@@ -94,6 +94,15 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(inquiry["weightPerBoxKg"], 28)
 		self.assertEqual(inquiry["totalWeightKg"], 280)
 
+	def test_inquiry_carries_the_items_pieces_and_sqft(self):
+		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="WhatsApp")
+		self.assertEqual(inquiry["piecesPerBox"], 4)
+		self.assertEqual(inquiry["totalPieces"], 40)
+		self.assertEqual(inquiry["sqftPerBox"], 15.5)
+		self.assertEqual(inquiry["totalSqft"], 155)
+
 	def test_update_inquiry_patches_status_and_remarks(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=50, source="Phone")
 		updated = inquiry_api.update_inquiry(inquiry["id"], {"status": "Available", "remarks": "Confirmed in stock"})

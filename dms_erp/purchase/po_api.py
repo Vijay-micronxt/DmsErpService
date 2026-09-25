@@ -24,6 +24,8 @@ def _assert_can_manage_purchase():
 def _serialize_line(row) -> dict:
 	item = frappe.get_cached_doc("Item", row.item_code)
 	weight_per_box_kg = item.custom_weight_per_box_kg
+	pieces_per_box = item.custom_pieces_per_box
+	sqft_per_box = item.custom_sqft_per_box
 	return {
 		"id": row.name,
 		"itemCode": row.item_code,
@@ -33,6 +35,10 @@ def _serialize_line(row) -> dict:
 		"receivedQty": row.received_qty or 0,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
+		"piecesPerBox": pieces_per_box,
+		"totalPieces": (pieces_per_box or 0) * row.qty if pieces_per_box is not None else None,
+		"sqftPerBox": sqft_per_box,
+		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
 	}
 
 
