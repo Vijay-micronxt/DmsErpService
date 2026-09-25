@@ -127,6 +127,22 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(po["sourceInquiry"], inquiry["id"])
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Mapped to PO")
 
+	def test_convert_to_purchase_requirement_falls_back_to_the_items_default_supplier(self):
+		frappe.db.set_value("Item", self.item, "custom_default_supplier", self.supplier)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
+
+		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
+
+		self.assertEqual(po["supplier"], self.supplier)
+
+	def test_convert_to_purchase_requirement_requires_a_supplier_when_none_can_be_resolved(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
+
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
+
 	def test_convert_to_purchase_requirement_rejects_ineligible_status(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 		inquiry_api.update_inquiry(inquiry["id"], {"status": "Converted to Order"})
