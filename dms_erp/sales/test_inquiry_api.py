@@ -28,6 +28,12 @@ class TestInquiryApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
+	def test_create_inquiry_exposes_created_at_timestamp(self):
+		# Inquiry.date is a plain Date field (no time-of-day) -- createdAt is the
+		# actual creation Datetime, for tables that need to show time alongside date.
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=5, source="WhatsApp")
+		self.assertIsNotNone(inquiry["createdAt"])
+
 	def test_create_inquiry_with_no_stock_is_out_of_stock(self):
 		# BRD C.2.4 / Phase 22 -- status is derived from real on-hand qty at creation
 		# (previously always hardcoded "Open"), which is what feeds the reorder

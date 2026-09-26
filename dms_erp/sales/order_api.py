@@ -54,6 +54,7 @@ def _serialize(doc) -> dict:
 		"id": doc.name,
 		"number": doc.name,
 		"date": doc.transaction_date,
+		"createdAt": doc.creation,
 		"dealerId": doc.customer,
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,

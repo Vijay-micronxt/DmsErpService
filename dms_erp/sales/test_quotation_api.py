@@ -36,6 +36,15 @@ class TestQuotationApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
+	def test_create_quotation_exposes_created_at_timestamp(self):
+		# Quotation.transaction_date is a plain Date field (no time-of-day) --
+		# createdAt is the actual creation Datetime, for tables that need to show
+		# time alongside date.
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+		self.assertIsNotNone(quotation["createdAt"])
+
 	def test_create_quotation_applies_markup_to_approved_price(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12

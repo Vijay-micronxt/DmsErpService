@@ -35,6 +35,13 @@ class TestOrderApi(FrappeTestCase):
 			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
 		)
 
+	def test_create_order_exposes_created_at_timestamp(self):
+		# Sales Order.transaction_date is a plain Date field (no time-of-day) --
+		# createdAt is the actual creation Datetime, for tables that need to show
+		# time alongside date.
+		order = self._make_order()
+		self.assertIsNotNone(order["createdAt"])
+
 	def test_create_order_from_inquiry_uses_approved_price_directly(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
 		order = order_api.create_order(
