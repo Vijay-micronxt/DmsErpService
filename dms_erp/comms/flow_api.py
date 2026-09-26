@@ -12,9 +12,9 @@ Each Flow node POSTs:
 and reads the reply from Frappe's own `{"message": {...}}` auto-wrap of a whitelisted
 method's return value -- the Flow's own templates expect `erpnext_response.message.message`,
 so each function here returns a plain dict (`{"message": "<reply text>"}`, plus an
-`item_code` key on get_item_info/get_item_price -- see _resolve_and_track_items'
-own docstring for why) rather than unwrapping it the way comms.whats91 does for its
-own, different caller.
+`item_code` key on get_item_info -- see _resolve_and_track_items' own docstring for
+why) rather than unwrapping it the way comms.whats91 does for its own, different
+caller.
 
 Each endpoint is registered under a short, dotted-free name (get_item_info, not
 dms_erp.comms.flow_api.get_item_info) via hooks.py's override_whitelisted_methods,
@@ -33,10 +33,11 @@ Every call also logs the dealer's turn and our reply as a genuine WhatsApp Messa
 so a Flow-driven conversation shows up in Communications exactly like a free-text one
 does, not as a second, invisible channel (see comms/api.py's own docstring).
 
-get_item_info also raises a real Inquiry (source "WhatsApp") for every resolved item,
-same as comms.api._maybe_auto_reply already does for the free-text path -- without it,
-a Flow-driven "is this in stock" check is invisible to purchase.reorder_api's
-missedDemandQty (Inquiry qty already Out of Stock/Pre-order Required at creation, per
+get_item_info raises a real Inquiry (source "WhatsApp") for every resolved item,
+same as comms.api._maybe_auto_reply already does for the free-text path (which
+treats availability and price checks identically) -- without it, a Flow-driven
+"is this in stock" check is invisible to purchase.reorder_api's missedDemandQty
+(Inquiry qty already Out of Stock/Pre-order Required at creation, per
 sales.inquiry_api's own status-from-stock derivation), which is the actual reorder
 signal a dealer typing "Royal Glass" into the Flow is supposed to feed. Unlike
 _maybe_auto_reply, a failure to create one (not in this dealer's catalog, not
@@ -47,24 +48,11 @@ A dealer prompted once for "the item code" often answers with several at once
 ("RUSTIC-GREY, Royal Glossy", or "RUSTIC-GREY और Royal Glossy" in Hindi) --
 _split_item_mentions splits on the obvious list delimiters (comma, "and"/"aur"/"और",
 "&", newline) and each segment is resolved independently (one line, one Inquiry
-each), rather than treating the whole message as a single lookup that only ever
-finds the first item and silently drops the rest. Deterministic splitting, not an
-LLM call -- this is a list-parsing problem, not an intent-understanding one, and the
-free-text LLM path's own item_mention is deliberately single-item already (see
-comms/intent.py).
-
-get_item_info and get_item_price share that same split-resolve-track shape
-(_resolve_and_track_items) -- only the per-item reply line differs (stock count vs.
-price), so it's factored out once rather than duplicated per endpoint. Both raise a
-real Inquiry (source "WhatsApp") for every resolved item, same as comms.api's
-_maybe_auto_reply already does for the free-text path (which treats availability and
-price checks identically): without it, a Flow-driven check is invisible to
-purchase.reorder_api's missedDemandQty (Inquiry qty already Out of Stock/Pre-order
-Required at creation, per sales.inquiry_api's own status-from-stock derivation),
-which is the actual reorder signal these checks are supposed to feed. Unlike
-_maybe_auto_reply, a failure to create one (not in this dealer's catalog, not
-sellable) doesn't cancel the reply -- the dealer asked a direct question and gets a
-direct answer either way; only the internal demand-tracking side effect is skipped.
+each) via the shared _resolve_and_track_items core, rather than treating the whole
+message as a single lookup that only ever finds the first item and silently drops
+the rest. Deterministic splitting, not an LLM call -- this is a list-parsing
+problem, not an intent-understanding one, and the free-text LLM path's own
+item_mention is deliberately single-item already (see comms/intent.py).
 
 get_order_status/get_delivery_status/get_outstanding_due/get_recent_orders are the
 account-lookup half of the Flow (own Sales Order data, not the catalog) -- no item
@@ -130,20 +118,20 @@ def _split_item_mentions(text: str) -> list[str]:
 def _resolve_and_track_items(
 	dealer: str, text: str, describe_item: Callable[[dict], str]
 ) -> tuple[str, str, str | None, str | None]:
-	"""Shared core of get_item_info/get_item_price -- see this module's own docstring
-	for why. `describe_item(item)` builds the one reply line for a single resolved
-	item; everything else (splitting, resolution, Inquiry-raising, and picking
-	related_type/related_reference for the eventual WhatsApp Message) is identical
-	between callers. Returns (reply_text, related_type, related_reference, item_code).
+	"""Core of get_item_info -- factored out on its own so the split/resolve/Inquiry-
+	raising logic (the part that's genuinely reusable) stays separate from the
+	reply-building logic (the part that isn't, once availability and price were
+	merged into one endpoint). `describe_item(item)` builds the one reply line for a
+	single resolved item. Returns (reply_text, related_type, related_reference, item_code).
 
 	item_code is the first successfully resolved item's code, or None -- the Flow's
-	own pre-existing n_set_stock_order_ref/n_set_price_order_ref nodes read this back
-	as erpnext_response.message.item_code/price_response.message.item_code to carry
-	the item forward into "🛒 Place Order" (see create_dealer_opportunity, which
-	consumes it as lead.variables.order_item_code). Without it in the response,
-	that template silently resolves to nothing and whats91 falls back to whatever
-	text was actually on hand -- observed in production as the literal button label
-	("🛒 Place Order") being treated as the item code all the way through to order
+	own pre-existing n_set_stock_order_ref node reads this back as
+	erpnext_response.message.item_code to carry the item forward into "🛒 Place
+	Order" (see create_dealer_opportunity, which consumes it as
+	lead.variables.order_item_code). Without it in the response, that template
+	silently resolves to nothing and whats91 falls back to whatever text was
+	actually on hand -- observed in production as the literal button label ("🛒
+	Place Order") being treated as the item code all the way through to order
 	creation. A multi-item request only ever carries one order forward regardless,
 	so "the first resolved item" is the only sane choice here, not a compromise."""
 	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
@@ -187,9 +175,19 @@ def _resolve_and_track_items(
 
 @frappe.whitelist()
 def get_item_info(lead=None, **kwargs):
-	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability" step):
-	`lead.message` is the item code(s) the dealer typed after being prompted for one --
-	see this module's own docstring for how more than one is handled."""
+	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability & Price"
+	step): `lead.message` is the item code(s) the dealer typed after being prompted
+	for one -- see this module's own docstring for how more than one is handled.
+
+	A single combined reply (availability + size/finish + price) per BRD C.2.2's own
+	illustrated exchange -- item availability and price used to be two separate menu
+	steps/endpoints (get_item_price), which was just a shape mismatch against the
+	one-reply BRD conversation, not a missing capability; merged here rather than
+	keeping a second endpoint alive that would otherwise go unused. custom_price_visible
+	still gates the price line the same way it already gates price display in the
+	dealer-portal catalog (sales/dealer_api.py) -- a dealer whose account has prices
+	hidden sees stock/size/finish only, no price line at all, never a placeholder."""
+	from dms_erp.pricing.api import get_price_for_dealer
 	from dms_erp.warehouse.utils import total_stock_for_item
 
 	phone, text = _lead_fields(lead)
@@ -197,15 +195,27 @@ def get_item_info(lead=None, **kwargs):
 	if not dealer:
 		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
 	if not text:
-		return {"message": "Please enter an item code to check availability."}
+		return {"message": "Please enter an item code to check availability and price."}
 
 	_log_inbound_message(dealer, text, related_type="General")
 
+	price_visible = bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
+
 	def describe(item):
+		label = f"{item['name']} ({item['code']})"
+		if item.get("size") or item.get("finish"):
+			label += f" — {item.get('size') or '—'} / {item.get('finish') or '—'}"
+
 		on_hand = total_stock_for_item(item["id"])
-		if on_hand > 0:
-			return f"{item['name']} ({item['code']}) is in stock — {int(on_hand)} boxes available."
-		return f"{item['name']} ({item['code']}) is currently out of stock."
+		if on_hand <= 0:
+			return f"{label} is currently out of stock."
+
+		line = f"{label} is in stock — {int(on_hand)} boxes available."
+		if price_visible:
+			rate = get_price_for_dealer(item["id"], dealer)
+			if rate is not None:
+				line += f" Price: ₹{rate:,.2f} per box."
+		return line
 
 	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
@@ -338,41 +348,6 @@ def get_recent_orders(lead=None, **kwargs):
 	return {"message": reply}
 
 
-@frappe.whitelist()
-def get_item_price(lead=None, **kwargs):
-	"""Flow event `price.lookup` (Dealer Portal flow's "5. Item Price" step):
-	`lead.message` is the item code(s) the dealer typed after being prompted for one.
-
-	custom_price_visible gates this the same way it already gates price display in
-	the dealer-portal catalog (sales/dealer_api.py) -- a dealer whose account has
-	prices hidden must not see one over WhatsApp either, even though they can still
-	ask "is this in stock" via get_item_info."""
-	from dms_erp.pricing.api import get_price_for_dealer
-
-	phone, text = _lead_fields(lead)
-	dealer = dealer_for_phone(phone)
-	if not dealer:
-		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
-	if not text:
-		return {"message": "Please enter an item code to check its price."}
-
-	_log_inbound_message(dealer, text, related_type="General")
-
-	price_visible = bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
-
-	def describe(item):
-		if not price_visible:
-			return f"{item['name']} ({item['code']}): pricing isn't available on your account -- please contact your Pacific representative."
-		rate = get_price_for_dealer(item["id"], dealer)
-		if rate is None:
-			return f"{item['name']} ({item['code']}): no price is published for your account yet -- please contact your Pacific representative."
-		return f"{item['name']} ({item['code']}): ₹{rate:,.2f} per box."
-
-	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
-	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
-	return {"message": reply, "item_code": item_code}
-
-
 # Approximate order qty for a Place Order request -- the Flow only collects a range
 # ("10 - 50 units"), not an exact figure; BRD C.2.2's own sample conversation shows a
 # real Sales Order being created straight from this WhatsApp exchange with no further
@@ -405,12 +380,12 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	number that doesn't exist).
 
 	item is resolved from lead.variables.order_item_code (set earlier in the Flow
-	session by whichever check -- stock or price -- the dealer came from), not
-	lead.message -- unlike every other endpoint in this module, whose lead.message
-	IS the dealer's direct answer to a single question. By the time this node fires,
-	lead.message reflects whatever was typed/tapped at the qty/note step instead, so
-	order_item_code (a value this Flow's own action.set_variable nodes set
-	specifically for this purpose) is the reliable source."""
+	session by the availability/price check the dealer came from -- get_item_info),
+	not lead.message -- unlike every other endpoint in this module, whose
+	lead.message IS the dealer's direct answer to a single question. By the time
+	this node fires, lead.message reflects whatever was typed/tapped at the qty/note
+	step instead, so order_item_code (a value this Flow's own action.set_variable
+	nodes set specifically for this purpose) is the reliable source."""
 	from dms_erp.sales.inquiry_api import _create_inquiry
 	from dms_erp.sales.order_api import _create_order
 
