@@ -57,6 +57,7 @@ def _serialize(doc) -> dict:
 		"id": doc.name,
 		"number": doc.name,
 		"date": doc.transaction_date,
+		"createdAt": doc.creation,
 		"dealerId": doc.party_name,
 		"validTill": doc.valid_till,
 		"markupPct": doc.custom_markup_pct,
