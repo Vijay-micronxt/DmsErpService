@@ -23,6 +23,27 @@ class TestSplitItemMentions(FrappeTestCase):
 		self.assertEqual(flow_api._split_item_mentions("GVT-6013"), ["GVT-6013"])
 
 
+class TestExtractQty(FrappeTestCase):
+	"""BRD C.2.2's own sample conversation folds a quantity into the same message as
+	the item code ("White tiles 40 boxes available?") -- an explicit unit word is
+	required so an item code that itself ends in digits (GVT-6013, AAS-001) is never
+	misread as carrying a quantity."""
+
+	def test_extracts_a_quantity_with_an_explicit_unit_word(self):
+		self.assertEqual(flow_api._extract_qty("GVT-6013 40 boxes"), ("GVT-6013", 40.0))
+		self.assertEqual(flow_api._extract_qty("Nordic Oak 15 pcs"), ("Nordic Oak", 15.0))
+		self.assertEqual(flow_api._extract_qty("White tiles 40 boxes"), ("White tiles", 40.0))
+
+	def test_leaves_a_bare_item_code_untouched(self):
+		self.assertEqual(flow_api._extract_qty("GVT-6013"), ("GVT-6013", None))
+		self.assertEqual(flow_api._extract_qty("AAS-001"), ("AAS-001", None))
+
+	def test_does_not_treat_bare_trailing_digits_as_a_quantity(self):
+		# No unit word -- "GVT-6013 40" is left completely alone rather than guessing
+		# whether "40" is a quantity or just part of what the dealer typed.
+		self.assertEqual(flow_api._extract_qty("GVT-6013 40"), ("GVT-6013 40", None))
+
+
 class TestGetItemInfo(FrappeTestCase):
 	"""resolve_item_mention/total_stock_for_item have their own tests elsewhere
 	(catalog.test_products, warehouse tests) -- these only verify this endpoint's own
@@ -130,6 +151,130 @@ class TestGetItemInfo(FrappeTestCase):
 
 		self.assertIn("600x1200", result["message"])
 		self.assertIn("Glossy", result["message"])
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_names_the_specific_batch_when_a_quantity_is_given_and_one_batch_suffices(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_combo, mock_price
+	):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0020"}
+		mock_stock.return_value = 45.0
+		mock_combo.return_value = {
+			"sufficient": True,
+			"batches": [{"batchNumber": "A030", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 25.0}],
+			"totalBoxes": 25.0,
+		}
+		mock_price.return_value = None
+
+		result = flow_api.get_item_info(
+			lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013 20 boxes"}
+		)
+
+		mock_combo.assert_called_once_with("GVT-6013", 20.0)
+		self.assertIn("Batch A030 (25)", result["message"])
+		self.assertIn("your 20 boxes", result["message"])
+		# The quantity the dealer actually asked for feeds the Inquiry's own qty too,
+		# not the hardcoded placeholder used when no quantity was given.
+		mock_create_inquiry.assert_called_once_with(dealer=self.dealer, item="GVT-6013", qty=20.0, source="WhatsApp")
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_names_a_batch_combination_when_no_single_batch_suffices(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_combo, mock_price
+	):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0021"}
+		mock_stock.return_value = 45.0
+		mock_combo.return_value = {
+			"sufficient": True,
+			"batches": [
+				{"batchNumber": "A030", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 25.0},
+				{"batchNumber": "B012", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 20.0},
+			],
+			"totalBoxes": 45.0,
+		}
+		mock_price.return_value = None
+
+		result = flow_api.get_item_info(
+			lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013 40 boxes"}
+		)
+
+		self.assertIn("Batch A030 (25) + Batch B012 (20)", result["message"])
+		self.assertIn("45 boxes total", result["message"])
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_reports_a_shortfall_when_even_the_top_batches_dont_cover_the_quantity(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_combo, mock_price
+	):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0022"}
+		mock_stock.return_value = 45.0
+		mock_combo.return_value = {
+			"sufficient": False,
+			"batches": [{"batchNumber": "A030", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 45.0}],
+			"totalBoxes": 45.0,
+		}
+		mock_price.return_value = None
+
+		result = flow_api.get_item_info(
+			lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013 100 boxes"}
+		)
+
+		self.assertIn("only has 45 boxes", result["message"])
+		self.assertIn("short of your 100", result["message"])
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_quantity_in_the_message_does_not_prevent_the_item_from_resolving(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_combo, mock_price
+	):
+		# The item resolver must see the code with the quantity already stripped off,
+		# not "GVT-6013 40 boxes" as one blob.
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0023"}
+		mock_stock.return_value = 45.0
+		mock_combo.return_value = {"sufficient": True, "batches": [], "totalBoxes": 0.0}
+		mock_price.return_value = None
+
+		flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013 40 boxes"})
+
+		mock_resolve.assert_called_once_with(self.dealer, "GVT-6013")
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_falls_back_to_the_flat_total_when_quantity_is_given_but_no_batch_lots_exist(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_combo, mock_price
+	):
+		# A data inconsistency (real Bin stock with no matching Batch lots) must never
+		# produce a broken "we suggest  -- 0 boxes total" reply.
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0024"}
+		mock_stock.return_value = 45.0
+		mock_combo.return_value = {"sufficient": False, "batches": [], "totalBoxes": 0.0}
+		mock_price.return_value = None
+
+		result = flow_api.get_item_info(
+			lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013 40 boxes"}
+		)
+
+		self.assertIn("is in stock — 45 boxes available", result["message"])
 
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")

@@ -74,6 +74,12 @@ from dms_erp.phone_utils import dealer_for_phone
 
 _ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b|\baur\b|और)\s*", re.IGNORECASE)
 
+# BRD C.2.2's own sample conversation folds a quantity into the same message as the
+# item ("White tiles 40 boxes available?") -- requires an explicit unit word, never
+# bare trailing digits, since this app's own item codes routinely end in digits
+# (GVT-6013, AAS-001) and would otherwise be misread as a quantity.
+_QTY_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:box(?:es)?|pcs?|pieces?|units?)\s*$", re.IGNORECASE)
+
 
 def _parse_lead_dict(lead) -> dict:
 	if isinstance(lead, str):
@@ -115,14 +121,28 @@ def _split_item_mentions(text: str) -> list[str]:
 	return segments or [text.strip()]
 
 
+def _extract_qty(segment: str) -> tuple[str, float | None]:
+	"""Strips a trailing "<n> boxes/pcs/units" quantity off a single item-lookup
+	segment, e.g. "GVT-6013 40 boxes" -> ("GVT-6013", 40.0) -- see _QTY_UNIT_RE's own
+	comment for why bare trailing digits are deliberately left alone. Returns the
+	segment unchanged with qty=None when no unit word is present, so every message
+	that predates this (a bare code or name) resolves exactly as it always has."""
+	m = _QTY_UNIT_RE.search(segment)
+	if not m:
+		return segment, None
+	return segment[: m.start()].strip(), float(m.group(1))
+
+
 def _resolve_and_track_items(
-	dealer: str, text: str, describe_item: Callable[[dict], str]
+	dealer: str, text: str, describe_item: Callable[[dict, float | None], str]
 ) -> tuple[str, str, str | None, str | None]:
 	"""Core of get_item_info -- factored out on its own so the split/resolve/Inquiry-
 	raising logic (the part that's genuinely reusable) stays separate from the
 	reply-building logic (the part that isn't, once availability and price were
-	merged into one endpoint). `describe_item(item)` builds the one reply line for a
-	single resolved item. Returns (reply_text, related_type, related_reference, item_code).
+	merged into one endpoint). `describe_item(item, qty)` builds the one reply line
+	for a single resolved item -- qty is whatever _extract_qty pulled off that same
+	segment, or None when the dealer didn't include one. Returns (reply_text,
+	related_type, related_reference, item_code).
 
 	item_code is the first successfully resolved item's code, or None -- the Flow's
 	own pre-existing n_set_stock_order_ref node reads this back as
@@ -140,7 +160,8 @@ def _resolve_and_track_items(
 	lines = []
 	created_inquiry_ids = []
 	item_code = None
-	for segment in _split_item_mentions(text):
+	for raw_segment in _split_item_mentions(text):
+		segment, qty = _extract_qty(raw_segment)
 		# A dealer prompted for "the item code" often types the item's name instead,
 		# sometimes with a typo -- the exact code match is tried first since it's the
 		# intended, unambiguous path; the fuzzy name match is only a fallback for when
@@ -155,7 +176,7 @@ def _resolve_and_track_items(
 			item_code = item["id"]
 
 		try:
-			inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=1, source="WhatsApp")
+			inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=qty or 1, source="WhatsApp")
 			created_inquiry_ids.append(inquiry["id"])
 		except (frappe.PermissionError, frappe.ValidationError):
 			# Not in this dealer's assigned catalog, or no longer sellable -- the
@@ -163,7 +184,7 @@ def _resolve_and_track_items(
 			# demand-tracking side effect is skipped (see this module's docstring).
 			pass
 
-		lines.append(describe_item(item))
+		lines.append(describe_item(item, qty))
 
 	reply = "\n".join(lines)
 	# A single reference field can't point at more than one Inquiry -- only tag the
@@ -218,9 +239,18 @@ def get_item_info(lead=None, **kwargs):
 	Out of stock also surfaces the item's own lead_time_days and, when a real one
 	is available, a suggested alternative (see _alt_item_suggestion) -- BRD C.2.2's
 	out-of-stock reply is "expected lead time and a suggested alternative", not just
-	a bare "out of stock"."""
+	a bare "out of stock".
+
+	When the dealer's message also carried a quantity (see _extract_qty -- BRD
+	C.2.2's own sample conversation folds one in: "White tiles 40 boxes available?"),
+	an in-stock reply names the specific batch (or 2-3 batch combination,
+	suggest_batch_combination) that covers it, rather than just the flat total
+	across every batch -- a dealer asking for 40 boxes doesn't actually learn
+	anything useful from "45 available" if that's scattered across five different
+	lots. No quantity given -- the dealer just typed a code/name -- falls back to
+	that same flat total exactly as before this was added."""
 	from dms_erp.pricing.api import get_price_for_dealer
-	from dms_erp.warehouse.utils import total_stock_for_item
+	from dms_erp.warehouse.utils import suggest_batch_combination, total_stock_for_item
 
 	phone, text = _lead_fields(lead)
 	dealer = dealer_for_phone(phone)
@@ -233,7 +263,7 @@ def get_item_info(lead=None, **kwargs):
 
 	price_visible = bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
 
-	def describe(item):
+	def describe(item, qty):
 		label = f"{item['name']} ({item['code']})"
 		if item.get("size") or item.get("finish"):
 			label += f" — {item.get('size') or '—'} / {item.get('finish') or '—'}"
@@ -249,7 +279,19 @@ def get_item_info(lead=None, **kwargs):
 				line += f" You may also consider {alt}."
 			return line
 
-		line = f"{label} is in stock — {int(on_hand)} boxes available."
+		combo = suggest_batch_combination(item["id"], qty) if qty else None
+		if combo and combo["batches"]:
+			parts = " + ".join(f"Batch {b['batchNumber']} ({int(b['boxes'])})" for b in combo["batches"])
+			if combo["sufficient"]:
+				line = f"{label} is in stock. For your {int(qty)} boxes, we suggest {parts} — {int(combo['totalBoxes'])} boxes total."
+			else:
+				line = f"{label} only has {int(combo['totalBoxes'])} boxes across its available batches — short of your {int(qty)}."
+		else:
+			# No quantity given, or on_hand is real Bin stock with no matching Batch
+			# lots to break it down by (a data inconsistency, not the common case) --
+			# either way the flat total is the only thing there's data for.
+			line = f"{label} is in stock — {int(on_hand)} boxes available."
+
 		if price_visible:
 			rate = get_price_for_dealer(item["id"], dealer)
 			if rate is not None:
