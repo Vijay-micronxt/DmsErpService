@@ -142,6 +142,76 @@ class TestGetItemInfo(FrappeTestCase):
 		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
 
 		self.assertIn("out of stock", result["message"])
+
+	@patch("dms_erp.catalog.dealer_catalog_api.catalog_for")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_out_of_stock_reply_includes_lead_time_and_a_real_alternative(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_catalog_for
+	):
+		alt_code = make_item("FLOW-ALT-ITEM", "Vitrified")
+		frappe.db.set_value("Item", alt_code, "item_name", "Nordic Ash")
+
+		mock_resolve.return_value = {
+			"id": "GVT-6013",
+			"code": "GVT-6013",
+			"name": "Nordic Oak",
+			"leadTimeDays": 14,
+			"altItemId": alt_code,
+		}
+		mock_create_inquiry.return_value = {"id": "INQ-0016"}
+		mock_stock.side_effect = [0.0, 15.0]  # main item out of stock, alternative in stock
+		mock_catalog_for.return_value = ["GVT-6013", alt_code]
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		self.assertIn("out of stock", result["message"])
+		self.assertIn("14 day", result["message"])
+		self.assertIn("Nordic Ash", result["message"])
+		self.assertIn(alt_code, result["message"])
+
+	@patch("dms_erp.catalog.dealer_catalog_api.catalog_for")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_alternative_omitted_when_outside_the_dealers_catalog(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_catalog_for
+	):
+		mock_resolve.return_value = {
+			"id": "GVT-6013",
+			"code": "GVT-6013",
+			"name": "Nordic Oak",
+			"altItemId": "GVT-6020",
+		}
+		mock_create_inquiry.return_value = {"id": "INQ-0017"}
+		mock_stock.return_value = 0.0
+		mock_catalog_for.return_value = ["GVT-6013"]  # GVT-6020 not assigned to this dealer
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		self.assertNotIn("consider", result["message"])
+
+	@patch("dms_erp.catalog.dealer_catalog_api.catalog_for")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_alternative_omitted_when_it_is_also_out_of_stock(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_catalog_for
+	):
+		mock_resolve.return_value = {
+			"id": "GVT-6013",
+			"code": "GVT-6013",
+			"name": "Nordic Oak",
+			"altItemId": "GVT-6020",
+		}
+		mock_create_inquiry.return_value = {"id": "INQ-0018"}
+		mock_stock.side_effect = [0.0, 0.0]  # both the item and its alternative are out of stock
+		mock_catalog_for.return_value = ["GVT-6013", "GVT-6020"]
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		self.assertNotIn("consider", result["message"])
 		mock_create_inquiry.assert_called_once_with(dealer=self.dealer, item="GVT-6013", qty=1, source="WhatsApp")
 
 	@patch("dms_erp.pricing.api.get_price_for_dealer")

@@ -173,6 +173,33 @@ def _resolve_and_track_items(
 	return reply, "General", None, item_code
 
 
+def _alt_item_suggestion(dealer: str, item: dict) -> str | None:
+	"""BRD C.2.2's out-of-stock reply includes "a suggested alternative" --
+	catalog.api._get_alt_item (already surfaced as item['altItemId'] by
+	resolve_item_mention/resolve_item_by_name, both of which return catalog.api's
+	own _serialize) is the existing two-way Item Alternative link. Only worth
+	mentioning when it's both actually in this dealer's own catalog (never
+	recommend an item they can't even see/order, same visibility boundary as the
+	item lookup itself) and itself has real stock -- suggesting another dead end
+	isn't an alternative at all. Returns None (not a placeholder) whenever either
+	check fails, same "don't guess, say nothing" convention as elsewhere in this
+	module."""
+	alt_id = item.get("altItemId")
+	if not alt_id:
+		return None
+
+	from dms_erp.catalog.dealer_catalog_api import catalog_for
+	from dms_erp.warehouse.utils import total_stock_for_item
+
+	if alt_id not in catalog_for(dealer):
+		return None
+	if total_stock_for_item(alt_id) <= 0:
+		return None
+
+	alt_name = frappe.db.get_value("Item", alt_id, "item_name")
+	return f"{alt_name} ({alt_id})"
+
+
 @frappe.whitelist()
 def get_item_info(lead=None, **kwargs):
 	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability & Price"
@@ -186,7 +213,12 @@ def get_item_info(lead=None, **kwargs):
 	keeping a second endpoint alive that would otherwise go unused. custom_price_visible
 	still gates the price line the same way it already gates price display in the
 	dealer-portal catalog (sales/dealer_api.py) -- a dealer whose account has prices
-	hidden sees stock/size/finish only, no price line at all, never a placeholder."""
+	hidden sees stock/size/finish only, no price line at all, never a placeholder.
+
+	Out of stock also surfaces the item's own lead_time_days and, when a real one
+	is available, a suggested alternative (see _alt_item_suggestion) -- BRD C.2.2's
+	out-of-stock reply is "expected lead time and a suggested alternative", not just
+	a bare "out of stock"."""
 	from dms_erp.pricing.api import get_price_for_dealer
 	from dms_erp.warehouse.utils import total_stock_for_item
 
@@ -208,7 +240,14 @@ def get_item_info(lead=None, **kwargs):
 
 		on_hand = total_stock_for_item(item["id"])
 		if on_hand <= 0:
-			return f"{label} is currently out of stock."
+			line = f"{label} is currently out of stock."
+			lead_time = item.get("leadTimeDays")
+			if lead_time:
+				line += f" Expected lead time: {int(lead_time)} day{'s' if lead_time != 1 else ''}."
+			alt = _alt_item_suggestion(dealer, item)
+			if alt:
+				line += f" You may also consider {alt}."
+			return line
 
 		line = f"{label} is in stock — {int(on_hand)} boxes available."
 		if price_visible:
