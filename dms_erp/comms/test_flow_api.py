@@ -442,3 +442,114 @@ class TestGetDeliveryStatus(FrappeTestCase):
 		)
 
 		self.assertIn("couldn't find an order", result["message"])
+
+
+class TestLeadVariables(FrappeTestCase):
+	def test_parses_variables_given_as_a_json_string(self):
+		lead = {"variables": '{"order_qty_band": "10 - 50 units"}'}
+		self.assertEqual(flow_api._lead_variables(lead), {"order_qty_band": "10 - 50 units"})
+
+	def test_returns_empty_dict_for_missing_or_malformed_variables(self):
+		self.assertEqual(flow_api._lead_variables({}), {})
+		self.assertEqual(flow_api._lead_variables({"variables": "not json"}), {})
+		self.assertEqual(flow_api._lead_variables({"variables": None}), {})
+
+	def test_lead_itself_as_a_json_string_still_works(self):
+		lead = '{"phone": "919620204657", "variables": {"order_item_code": "GVT-6013"}}'
+		self.assertEqual(flow_api._lead_variables(lead), {"order_item_code": "GVT-6013"})
+
+
+class TestCreateDealerOpportunity(FrappeTestCase):
+	"""opportunity.create is used for both "Request More Info" (no PO number in
+	lead.variables -- raises an Inquiry) and "Place Order" (a PO number present --
+	creates a real Sales Order per BRD C.2.2). The Flow doesn't collect a PO number
+	anywhere yet, so in practice only the Inquiry branch fires today; both are
+	tested here so the Order branch is already correct once the Flow is updated."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Flow API Opportunity Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204665")
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.create_dealer_opportunity(
+			lead={"event": "opportunity.create", "phone": "919999999999", "variables": {"order_item_code": "GVT-6013"}}
+		)
+
+		self.assertIn("dealer account", result["message"])
+
+	def test_replies_safely_when_no_item_code_is_available(self):
+		result = flow_api.create_dealer_opportunity(
+			lead={"event": "opportunity.create", "phone": "919620204665", "variables": {}}
+		)
+
+		self.assertIn("couldn't tell which item", result["message"])
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	def test_raises_an_inquiry_when_no_po_number_is_present(self, mock_create_inquiry):
+		mock_create_inquiry.return_value = {"id": "INQ-0020"}
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919620204665",
+				"message": "Need 500 units by end of month",
+				"variables": {"order_item_code": "GVT-6013"},
+			}
+		)
+
+		mock_create_inquiry.assert_called_once_with(
+			dealer=self.dealer, item="GVT-6013", qty=1, source="WhatsApp", remarks="Need 500 units by end of month"
+		)
+		self.assertIn("noted your enquiry", result["message"])
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	def test_inquiry_rejection_still_replies_safely(self, mock_create_inquiry):
+		mock_create_inquiry.side_effect = frappe.PermissionError("not in catalog")
+
+		result = flow_api.create_dealer_opportunity(
+			lead={"event": "opportunity.create", "phone": "919620204665", "variables": {"order_item_code": "GVT-6013"}}
+		)
+
+		self.assertIn("couldn't raise this enquiry", result["message"])
+
+	@patch("dms_erp.sales.order_api._create_order")
+	def test_places_a_real_order_when_a_po_number_is_present(self, mock_create_order):
+		mock_create_order.return_value = {"id": "SAL-ORD-2026-00099", "number": "SAL-ORD-2026-00099"}
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919620204665",
+				"variables": {
+					"order_item_code": "GVT-6013",
+					"order_qty_band": "100 - 200 units",
+					"order_note": "Urgent - please prioritize",
+					"po_number": "PO-1234",
+				},
+			}
+		)
+
+		mock_create_order.assert_called_once()
+		_args, kwargs = mock_create_order.call_args
+		self.assertEqual(kwargs["dealer"], self.dealer)
+		self.assertEqual(kwargs["lines"], [{"item": "GVT-6013", "qty": 150}])
+		self.assertEqual(kwargs["customer_po"], "PO-1234")
+		self.assertIn("SAL-ORD-2026-00099", result["message"])
+		self.assertIn("PO-1234", result["message"])
+
+	@patch("dms_erp.sales.order_api._create_order")
+	def test_order_creation_failure_replies_safely(self, mock_create_order):
+		mock_create_order.side_effect = frappe.ValidationError("GVT-6013 has no approved dealer price yet.")
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919620204665",
+				"variables": {"order_item_code": "GVT-6013", "po_number": "PO-1234"},
+			}
+		)
+
+		self.assertIn("couldn't place this order", result["message"])

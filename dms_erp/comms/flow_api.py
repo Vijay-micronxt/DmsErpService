@@ -85,16 +85,39 @@ from dms_erp.phone_utils import dealer_for_phone
 _ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b|\baur\b|और)\s*", re.IGNORECASE)
 
 
-def _lead_fields(lead) -> tuple[str | None, str]:
+def _parse_lead_dict(lead) -> dict:
 	if isinstance(lead, str):
 		try:
 			lead = json.loads(lead)
 		except ValueError:
 			lead = {}
-	lead = lead or {}
+	return lead or {}
+
+
+def _lead_fields(lead) -> tuple[str | None, str]:
+	lead = _parse_lead_dict(lead)
 	phone = lead.get("phone")
 	text = (lead.get("message") or "").strip()
 	return phone, text
+
+
+def _lead_variables(lead) -> dict:
+	"""whats91's payload_template embeds {{lead.variables}} as a single string slot
+	inside the outer JSON body -- whats91's own serialization of everything an
+	action.set_variable node has stored so far in this Flow session (order_qty_band,
+	order_note, order_item_code, ...). Parses it defensively: only lead.message/phone
+	have actually been confirmed against real whats91 traffic so far (see this
+	module's own history -- more than one "per the docs" assumption about this
+	platform turned out wrong until checked against a real payload), so an
+	unparseable or missing value here just means no extra context was available,
+	not an error."""
+	variables = _parse_lead_dict(lead).get("variables")
+	if isinstance(variables, str):
+		try:
+			variables = json.loads(variables)
+		except ValueError:
+			variables = {}
+	return variables if isinstance(variables, dict) else {}
 
 
 def _split_item_mentions(text: str) -> list[str]:
@@ -328,4 +351,90 @@ def get_item_price(lead=None, **kwargs):
 
 	reply, related_type, related_reference = _resolve_and_track_items(dealer, text, describe)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
+	return {"message": reply}
+
+
+# Approximate order qty for a Place Order request -- the Flow only collects a range
+# ("10 - 50 units"), not an exact figure; BRD C.2.2's own sample conversation shows a
+# real Sales Order being created straight from this WhatsApp exchange with no further
+# quantity negotiation step, so a documented midpoint is the pragmatic reading of "how
+# many" until/unless the Flow is changed to ask for an exact number instead.
+_QTY_BAND_MIDPOINT = {
+	"10 - 50 units": 30,
+	"50 - 100 units": 75,
+	"100 - 200 units": 150,
+	"200 - 500 units": 350,
+	"500+ units": 500,
+}
+
+
+@frappe.whitelist()
+def create_dealer_opportunity(lead=None, **kwargs):
+	"""Flow event `opportunity.create` -- used by BOTH the "🔔 Request More Info" step
+	(after a stock/price check) and the "🛒 Place Order" step (after quantity-band +
+	note selection); the Flow routes both to this same node.
+
+	Per BRD C.2.2's own WhatsApp inquiry flow ("Please share your PO number to
+	confirm... Sales Order created; confirmation sent"), placing an order is meant to
+	create a real Sales Order once the dealer supplies their own PO number as
+	confirmation -- not just another enquiry. The Flow doesn't collect a PO number
+	anywhere yet (no node sets one into lead.variables) -- until it's updated with an
+	"Ask PO Number" step in the Place-Order branch that stores it as
+	lead.variables.po_number, this always takes the Inquiry branch below, which is
+	the correct, safe behavior in the meantime (an Inquiry is exactly BRD C.2.2's own
+	"item out of stock"/general-enquiry outcome, and nothing here should invent a PO
+	number that doesn't exist).
+
+	item is resolved from lead.variables.order_item_code (set earlier in the Flow
+	session by whichever check -- stock or price -- the dealer came from), not
+	lead.message -- unlike every other endpoint in this module, whose lead.message
+	IS the dealer's direct answer to a single question. By the time this node fires,
+	lead.message reflects whatever was typed/tapped at the qty/note step instead, so
+	order_item_code (a value this Flow's own action.set_variable nodes set
+	specifically for this purpose) is the reliable source."""
+	from dms_erp.sales.inquiry_api import _create_inquiry
+	from dms_erp.sales.order_api import _create_order
+
+	phone, text = _lead_fields(lead)
+	variables = _lead_variables(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+
+	item_code = variables.get("order_item_code")
+	if not item_code:
+		return {"message": "We couldn't tell which item this enquiry is for. Please start again from the main menu."}
+
+	if text:
+		_log_inbound_message(dealer, text, related_type="General")
+
+	po_number = variables.get("po_number")
+	note = variables.get("order_note") or text or None
+
+	if po_number:
+		from frappe.utils import add_days, today
+
+		qty = _QTY_BAND_MIDPOINT.get(variables.get("order_qty_band"), 1)
+		try:
+			order = _create_order(
+				dealer=dealer, lines=[{"item": item_code, "qty": qty}], expected_dispatch=add_days(today(), 7), customer_po=po_number
+			)
+		except (frappe.PermissionError, frappe.ValidationError) as e:
+			reply = f"We couldn't place this order: {e}. Please contact your Pacific representative."
+			_send_message(dealer, reply, related_type="General")
+			return {"message": reply}
+
+		reply = f"Order {order['number']} has been placed against your PO {po_number}. We'll confirm dispatch shortly."
+		_send_message(dealer, reply, related_type="Order", related_reference=order["number"])
+		return {"message": reply}
+
+	try:
+		inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=1, source="WhatsApp", remarks=note)
+	except (frappe.PermissionError, frappe.ValidationError):
+		reply = "We couldn't raise this enquiry against your account. Please contact your Pacific representative."
+		_send_message(dealer, reply, related_type="General")
+		return {"message": reply}
+
+	reply = "Thanks — we've noted your enquiry and someone from our team will follow up shortly."
+	_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
 	return {"message": reply}

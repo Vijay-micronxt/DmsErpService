@@ -30,6 +30,7 @@ override_whitelisted_methods = {
 	"get_delivery_status": "dms_erp.comms.flow_api.get_delivery_status",
 	"get_outstanding_due": "dms_erp.comms.flow_api.get_outstanding_due",
 	"get_recent_orders": "dms_erp.comms.flow_api.get_recent_orders",
+	"create_dealer_opportunity": "dms_erp.comms.flow_api.create_dealer_opportunity",
 }
 
 after_install = "dms_erp.setup.install.after_install"
