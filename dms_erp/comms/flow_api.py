@@ -11,8 +11,10 @@ Each Flow node POSTs:
               "variables": "{{lead.variables}}"}}
 and reads the reply from Frappe's own `{"message": {...}}` auto-wrap of a whitelisted
 method's return value -- the Flow's own templates expect `erpnext_response.message.message`,
-so each function here returns a plain `{"message": "<reply text>"}` rather than
-unwrapping it the way comms.whats91 does for its own, different caller.
+so each function here returns a plain dict (`{"message": "<reply text>"}`, plus an
+`item_code` key on get_item_info/get_item_price -- see _resolve_and_track_items'
+own docstring for why) rather than unwrapping it the way comms.whats91 does for its
+own, different caller.
 
 Each endpoint is registered under a short, dotted-free name (get_item_info, not
 dms_erp.comms.flow_api.get_item_info) via hooks.py's override_whitelisted_methods,
@@ -125,17 +127,31 @@ def _split_item_mentions(text: str) -> list[str]:
 	return segments or [text.strip()]
 
 
-def _resolve_and_track_items(dealer: str, text: str, describe_item: Callable[[dict], str]) -> tuple[str, str, str | None]:
+def _resolve_and_track_items(
+	dealer: str, text: str, describe_item: Callable[[dict], str]
+) -> tuple[str, str, str | None, str | None]:
 	"""Shared core of get_item_info/get_item_price -- see this module's own docstring
 	for why. `describe_item(item)` builds the one reply line for a single resolved
 	item; everything else (splitting, resolution, Inquiry-raising, and picking
 	related_type/related_reference for the eventual WhatsApp Message) is identical
-	between callers. Returns (reply_text, related_type, related_reference)."""
+	between callers. Returns (reply_text, related_type, related_reference, item_code).
+
+	item_code is the first successfully resolved item's code, or None -- the Flow's
+	own pre-existing n_set_stock_order_ref/n_set_price_order_ref nodes read this back
+	as erpnext_response.message.item_code/price_response.message.item_code to carry
+	the item forward into "🛒 Place Order" (see create_dealer_opportunity, which
+	consumes it as lead.variables.order_item_code). Without it in the response,
+	that template silently resolves to nothing and whats91 falls back to whatever
+	text was actually on hand -- observed in production as the literal button label
+	("🛒 Place Order") being treated as the item code all the way through to order
+	creation. A multi-item request only ever carries one order forward regardless,
+	so "the first resolved item" is the only sane choice here, not a compromise."""
 	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
 	from dms_erp.sales.inquiry_api import _create_inquiry
 
 	lines = []
 	created_inquiry_ids = []
+	item_code = None
 	for segment in _split_item_mentions(text):
 		# A dealer prompted for "the item code" often types the item's name instead,
 		# sometimes with a typo -- the exact code match is tried first since it's the
@@ -146,6 +162,9 @@ def _resolve_and_track_items(dealer: str, text: str, describe_item: Callable[[di
 		if not item:
 			lines.append(f"We couldn't find an item matching '{segment}'. Please check the item code and try again.")
 			continue
+
+		if item_code is None:
+			item_code = item["id"]
 
 		try:
 			inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=1, source="WhatsApp")
@@ -162,8 +181,8 @@ def _resolve_and_track_items(dealer: str, text: str, describe_item: Callable[[di
 	# A single reference field can't point at more than one Inquiry -- only tag the
 	# message against a specific one when there's exactly one candidate.
 	if len(created_inquiry_ids) == 1:
-		return reply, "Inquiry", created_inquiry_ids[0]
-	return reply, "General", None
+		return reply, "Inquiry", created_inquiry_ids[0], item_code
+	return reply, "General", None, item_code
 
 
 @frappe.whitelist()
@@ -188,9 +207,9 @@ def get_item_info(lead=None, **kwargs):
 			return f"{item['name']} ({item['code']}) is in stock — {int(on_hand)} boxes available."
 		return f"{item['name']} ({item['code']}) is currently out of stock."
 
-	reply, related_type, related_reference = _resolve_and_track_items(dealer, text, describe)
+	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
-	return {"message": reply}
+	return {"message": reply, "item_code": item_code}
 
 
 def _find_dealer_order(dealer: str, order_number: str):
@@ -349,9 +368,9 @@ def get_item_price(lead=None, **kwargs):
 			return f"{item['name']} ({item['code']}): no price is published for your account yet -- please contact your Pacific representative."
 		return f"{item['name']} ({item['code']}): ₹{rate:,.2f} per box."
 
-	reply, related_type, related_reference = _resolve_and_track_items(dealer, text, describe)
+	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
-	return {"message": reply}
+	return {"message": reply, "item_code": item_code}
 
 
 # Approximate order qty for a Place Order request -- the Flow only collects a range

@@ -52,6 +52,12 @@ class TestGetItemInfo(FrappeTestCase):
 		self.assertIn("in stock", result["message"])
 		mock_create_inquiry.assert_called_once_with(dealer=self.dealer, item="GVT-6013", qty=1, source="WhatsApp")
 
+		# The Flow's own n_set_stock_order_ref node reads this back as
+		# erpnext_response.message.item_code to carry the item into "Place Order" --
+		# a real production bug (the Flow silently treating a button's own label as
+		# the item code) came from this key being missing entirely. Never regress it.
+		self.assertEqual(result["item_code"], "GVT-6013")
+
 		thread = comms_api.list_all_messages(self.dealer)
 		self.assertEqual(thread[-2]["direction"], "Inbound")
 		self.assertEqual(thread[-2]["text"], "GVT-6013")
@@ -94,6 +100,7 @@ class TestGetItemInfo(FrappeTestCase):
 		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "NO-SUCH-CODE"})
 
 		self.assertIn("couldn't find an item", result["message"])
+		self.assertIsNone(result["item_code"])
 		thread = comms_api.list_all_messages(self.dealer)
 		self.assertEqual(thread[-1]["direction"], "Outbound")
 
@@ -224,6 +231,7 @@ class TestGetItemPrice(FrappeTestCase):
 		self.assertIn("Nordic Oak", result["message"])
 		self.assertIn("425.5", result["message"])
 		mock_price.assert_called_once_with("GVT-6013", self.dealer)
+		self.assertEqual(result["item_code"], "GVT-6013")
 
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
 	@patch("dms_erp.catalog.api.resolve_item_mention")
@@ -259,6 +267,7 @@ class TestGetItemPrice(FrappeTestCase):
 		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": "NO-SUCH-CODE"})
 
 		self.assertIn("couldn't find an item", result["message"])
+		self.assertIsNone(result["item_code"])
 
 	def test_unresolvable_phone_replies_safely(self):
 		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919999999999", "message": "GVT-6013"})
