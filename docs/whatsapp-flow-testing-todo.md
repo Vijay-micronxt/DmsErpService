@@ -89,3 +89,31 @@ Status: nothing below has been verified end-to-end yet except the one partial te
   won't help (that log is only for the separate free-text path) — check `/app/error-log`
   for a failed call, then check the Flow's own setup on whats91's platform if there's
   nothing there either.
+
+---
+
+## Blocked — hold off until whats91's API is confirmed
+
+**Proactive follow-up reminders (BRD §C.2.6)** — "[Still need] [Received elsewhere]
+[Cancel]" nudge sent after an Inquiry sits unresolved past a follow-up window. The
+biggest remaining gap, and a genuinely new capability, not an extension of the existing
+Dealer Portal Flow: that Flow only ever reacts to a dealer-initiated message; this needs
+us to message a dealer first, unprompted.
+
+Three pieces, none of them buildable yet with confidence:
+
+1. **Trigger** — a new scheduled job over unresolved Inquiries (straightforward, same
+   pattern as the existing daily jobs in `hooks.py`).
+2. **Outbound send** — requires a **Meta-approved WhatsApp template** (proactive
+   messages outside the 24-hour customer-service window need one) — a product/business
+   step through whats91's dashboard, not code, and has to happen before anything here
+   can be tested for real.
+3. **Inbound handler for the button tap** — unconfirmed whether whats91 delivers a
+   template button-reply through the existing raw webhook
+   (`comms.whats91.receive_webhook`) or needs its own small Flow. Don't guess at this —
+   this module's own history already includes more than one "per the docs" assumption
+   about whats91 that turned out wrong until checked against a real payload.
+
+**Do not start building this until:** the template is submitted and approved by Meta,
+and a real test button-tap has been captured (webhook log or otherwise) to confirm which
+path it actually arrives through. Revisit this section once that's in hand.
