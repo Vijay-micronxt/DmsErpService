@@ -70,6 +70,22 @@ class TestCommsApi(FrappeTestCase):
 		self.assertEqual(message["status"], "Delivered")
 		self.assertIsNone(message["sentBy"])
 
+	def test_webhook_inbound_message_accepts_an_iso_8601_sent_at(self):
+		# whats91 (and WhatsApp Business API generally) sends timestamps like this --
+		# MariaDB's Datetime column rejects the literal string outright (a real bug
+		# found via a live end-to-end test, not a hypothetical), so this is a
+		# regression test for _parse_sent_at doing the conversion first.
+		message = comms_api.webhook_inbound_message(
+			secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="Hi", sent_at="2026-09-26T09:00:00.000Z"
+		)
+		self.assertEqual(message["direction"], "Inbound")
+
+	def test_webhook_inbound_message_falls_back_to_now_for_an_unparseable_sent_at(self):
+		message = comms_api.webhook_inbound_message(
+			secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="hi", sent_at="not a real timestamp"
+		)
+		self.assertEqual(message["direction"], "Inbound")
+
 	def test_webhook_inbound_message_resolves_dealer_from_phone(self):
 		dealer = make_dealer("Comms Phone Dealer")
 		frappe.db.set_value("Customer", dealer, "custom_phone", "9620204657")
@@ -222,3 +238,20 @@ class TestCommsAutoReply(FrappeTestCase):
 		message = comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="GVT 6013 stock hai kya")
 		self.assertEqual(message["direction"], "Inbound")
 		self.assertEqual(message["status"], "Delivered")
+
+
+class TestParseSentAt(FrappeTestCase):
+	"""Regression coverage for a real bug found via a live end-to-end test: MariaDB's
+	Datetime column rejects an ISO 8601 string outright (a SQL error, not a graceful
+	no-op), and whats91 -- like WhatsApp Business API generally -- always sends
+	timestamps in that format."""
+
+	def test_returns_now_for_none(self):
+		self.assertIsNotNone(comms_api._parse_sent_at(None))
+
+	def test_parses_an_iso_8601_utc_timestamp(self):
+		parsed = comms_api._parse_sent_at("2026-09-26T09:00:00.000Z")
+		self.assertEqual((parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute), (2026, 9, 26, 9, 0))
+
+	def test_falls_back_to_now_for_an_unparseable_string(self):
+		self.assertIsNotNone(comms_api._parse_sent_at("not a real timestamp"))
