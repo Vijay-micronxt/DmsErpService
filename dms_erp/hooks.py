@@ -25,7 +25,6 @@ before_request = ["dms_erp.auth.middleware.authenticate_request"]
 # comms/flow_api.py's own docstring for the full picture of what calls these and why.
 override_whitelisted_methods = {
 	"get_item_info": "dms_erp.comms.flow_api.get_item_info",
-	"get_item_price": "dms_erp.comms.flow_api.get_item_price",
 	"get_order_status": "dms_erp.comms.flow_api.get_order_status",
 	"get_delivery_status": "dms_erp.comms.flow_api.get_delivery_status",
 	"get_outstanding_due": "dms_erp.comms.flow_api.get_outstanding_due",
