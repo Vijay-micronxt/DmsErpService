@@ -258,6 +258,11 @@ def create_product(
 	pieces_per_box: float = 0,
 	sqft_per_box: float = 0,
 	weight_per_box_kg: float = 0,
+	# BRD D.2 — independent of `supplier` above (which is only who this launch price came
+	# from): lets Purchase name a different default supplier at creation time, e.g. when
+	# the launch quote and the intended ongoing source aren't the same company. Falls back
+	# to `supplier` when not given, same as before this param existed.
+	default_supplier: str | None = None,
 	lead_time_days: int = 0,
 	alt_item: str | None = None,
 	hsn_code: str | None = None,
@@ -302,11 +307,10 @@ def create_product(
 			"custom_pieces_per_box": pieces_per_box,
 			"custom_sqft_per_box": sqft_per_box,
 			"custom_weight_per_box_kg": weight_per_box_kg,
-			# BRD D.2 -- the supplier this launch price came from is this item's
-			# default supplier until Purchase explicitly re-sources it (update_product's
-			# "defaultSupplier" patch); every item created through this endpoint always
-			# gets one, no separate default-supplier param needed.
-			"custom_default_supplier": supplier,
+			# BRD D.2 -- defaults to the launch-pricing supplier when default_supplier isn't
+			# given explicitly, so every item created through this endpoint always gets one;
+			# Purchase can still re-source it later via update_product's "defaultSupplier" patch.
+			"custom_default_supplier": default_supplier or supplier,
 			"lead_time_days": lead_time_days,
 			# Only meaningful (and only mandatory) when india_compliance is
 			# installed -- harmless to set on a site without it (Frappe just

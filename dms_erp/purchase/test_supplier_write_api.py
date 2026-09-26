@@ -46,6 +46,22 @@ class TestSupplierWriteApi(FrappeTestCase):
 		updated = supplier_api.update_supplier("SW Insurance Co", {"insuranceHolder": "ICICI Lombard — POL-9981"})
 		self.assertEqual(updated["insuranceHolder"], "ICICI Lombard — POL-9981")
 
+	def test_create_and_update_supplier_set_address_and_contact_person(self):
+		created = supplier_api.create_supplier(
+			"SW Address Co",
+			address="Plot 12, GIDC Industrial Estate, Morbi, Gujarat",
+			contact_person="Rajesh Patel — 98765 43210",
+		)
+		self.assertEqual(created["address"], "Plot 12, GIDC Industrial Estate, Morbi, Gujarat")
+		self.assertEqual(created["contactPerson"], "Rajesh Patel — 98765 43210")
+
+		updated = supplier_api.update_supplier(
+			"SW Address Co",
+			{"address": "Plot 45, Lalpar Road, Morbi, Gujarat", "contactPerson": "Suresh Shah — 91234 56789"},
+		)
+		self.assertEqual(updated["address"], "Plot 45, Lalpar Road, Morbi, Gujarat")
+		self.assertEqual(updated["contactPerson"], "Suresh Shah — 91234 56789")
+
 	def test_write_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

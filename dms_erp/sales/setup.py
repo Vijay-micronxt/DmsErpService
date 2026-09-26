@@ -166,6 +166,20 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.1.4 — a dealer far enough from the warehouse that transport cost justifies at least Master Dealer pricing. Staff-set (no geocoding exists anywhere in this app); read by pricing.dealer_classification.recompute_dealer_classifications as a floor on top of the volume-based tier, never a client-specific location check — see that module for why.",
 			"insert_after": "custom_email",
 		},
+		{
+			"fieldname": "custom_gstin",
+			"fieldtype": "Data",
+			"label": "GSTIN",
+			"description": "Dealer's GST registration number. Free text, not validated against the GSTIN checksum format.",
+			"insert_after": "custom_out_of_station",
+		},
+		{
+			"fieldname": "custom_address",
+			"fieldtype": "Small Text",
+			"label": "Address",
+			"description": "Dealer's business address.",
+			"insert_after": "custom_gstin",
+		},
 	],
 }
 

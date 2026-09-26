@@ -8,7 +8,9 @@ lifecycle: nothing ever set an Inquiry to "Mapped to PO" because nothing ever ra
 a Purchase Order *from* one. It's a thin wrapper over `purchase.po_api.
 create_purchase_order` (which still does the actual work, and still enforces its own
 Purchase/Management role gate) — not a parallel "purchase requirement" doctype,
-since a requirement here is just a PO with a `custom_source_inquiry` link back.
+since a requirement here is just a PO with a `custom_source_inquiry` link back. Its
+own `supplier` param is optional too (BRD D.2), just forwarded straight through to
+create_purchase_order's own item/Series default-supplier fallback.
 
 `create_inquiry` (Phase 14) now enforces the same catalog gate `quotation_api.
 create_quotation` always has — dealer-assigned visibility and current sellability —
@@ -230,8 +232,8 @@ def update_inquiry(inquiry: str, patch: dict):
 @frappe.whitelist(methods=["POST"])
 def convert_to_purchase_requirement(
 	inquiry: str,
-	supplier: str,
 	expected_ready_date,
+	supplier: str | None = None,
 	ordered_qty: float | None = None,
 	remarks: str | None = None,
 ):
