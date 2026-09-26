@@ -506,33 +506,55 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
 
 
 def resolve_item_by_name(dealer: str, text: str) -> dict | None:
-	"""Fuzzy fallback for comms.flow_api.get_item_info, tried only once
-	resolve_item_mention's exact dealer-code match has already failed -- a dealer
-	prompted with "enter the item code" often types the item's name instead,
-	sometimes with a minor typo ("Royal Glass" for "Royal Glassy"), and sometimes
-	wrapped in a full sentence -- often in Hindi/Hinglish, with the item name itself
-	still typed in Latin script ("क्या आप ... Royal Glossy ... सकते हैं?"). Fuzzy-
-	matching that whole sentence against a two-word item name washes the match out
-	with unrelated surrounding text, so this extracts just the Latin-script words
-	and fuzzy-matches short windows of them (1-3 consecutive words -- the shape an
-	item name actually takes) rather than the raw text as one blob; the raw text is
-	still tried too; whichever window scores highest overall wins.
+	"""Fallback for comms.flow_api.get_item_info, tried only once resolve_item_mention's
+	exact private-dealer-code match has already failed. Scoped to
+	dealer_catalog_api.catalog_for(dealer) -- the dealer's actual visible-and-sellable
+	catalog -- not just items they have an Item Dealer Code for: those are two
+	genuinely separate mechanisms (a Dealer Catalog assignment is "can this dealer see
+	and order this item at all"; an Item Dealer Code is an optional private shorthand
+	code layered on top), and a dealer routinely asks about a catalog-visible item
+	they were never assigned a private code for at all. An item outside catalog_for is
+	never matched into a reply, same visibility boundary resolve_dealer_code enforces
+	for its own, narrower case.
+
+	Two matching strategies, tried in order:
+	1. Exact, case-insensitive substring containment against the item's own code
+	   ("RUSTIC-GREY" inside "PT-4040-RUSTIC-GREY") -- a dealer shortens the real
+	   item code at least as often as they type its name, and this needs no fuzzy
+	   tolerance since it's already an exact match once case is ignored.
+	2. A fuzzy match against the item's name, tolerant of a minor typo ("Royal Glass"
+	   for "Royal Glassy") and of the name being wrapped inside a full sentence --
+	   often in Hindi/Hinglish, with the item name itself still typed in Latin script
+	   ("क्या आप ... Royal Glossy ... सकते हैं?"). Fuzzy-matching that whole sentence
+	   against a two-word item name washes the match out with unrelated surrounding
+	   text, so this extracts just the Latin-script words and fuzzy-matches short
+	   windows of them (1-3 consecutive words -- the shape an item name actually
+	   takes) rather than the raw text as one blob; the raw text is still tried too;
+	   whichever window scores highest overall wins.
 
 	Deliberately NOT used by the free-text LLM path (comms/api.py's _maybe_auto_reply):
 	there, item_mention is an arbitrary phrase pulled out of a longer, unprompted
-	sentence, where a fuzzy name match risks confidently resolving to the wrong item.
-	Here the dealer's entire reply is a single, deliberate answer to a single
-	question, so a close name match is a safe bet. Scoped to items this dealer
-	actually has a code for, same visibility boundary as resolve_dealer_code -- an
-	item outside their catalog is never fuzzy-matched into a reply."""
+	sentence, where either strategy above risks confidently resolving to the wrong
+	item. Here the dealer's entire reply is a single, deliberate answer to a single
+	question, so a close match is a safe bet."""
 	text = (text or "").strip()
 	if not text:
 		return None
 
-	item_names = frappe.get_all("Item Dealer Code", filters={"dealer": dealer}, pluck="parent")
-	if not item_names:
+	from dms_erp.catalog.dealer_catalog_api import catalog_for
+
+	item_codes = catalog_for(dealer)
+	if not item_codes:
 		return None
-	items = frappe.get_all("Item", filters={"name": ["in", item_names]}, fields=["name", "item_name"])
+	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "item_name"])
+	if not items:
+		return None
+
+	upper_text = text.upper()
+	for item in items:
+		if upper_text in item.name.upper():
+			return _serialize(frappe.get_doc("Item", item.name))
+
 	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
 	if not by_lower_name:
 		return None

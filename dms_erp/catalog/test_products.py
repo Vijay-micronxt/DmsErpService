@@ -432,14 +432,15 @@ class TestProducts(FrappeTestCase):
 		)
 		self.assertEqual(resolved["id"], "PROD-TEST-HI")
 
-	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
-		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"))
-		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, ""))
+	def test_resolve_item_by_name_matches_a_substring_of_the_real_item_code(self):
+		# A catalog-visible item with no private Item Dealer Code at all -- a dealer
+		# routinely types a shortened version of the real item code itself
+		# ("RUSTIC-GREY" for "PT-4040-RUSTIC-GREY"), not just the item's name.
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
 
-	def test_resolve_item_by_name_never_matches_an_item_outside_the_dealers_catalog(self):
 		catalog_api.create_product(
-			code="PROD-TEST-OUTSIDE",
-			name="Unassigned Item",
+			code="PT-4040-RUSTIC-GREY",
+			name="Rustic Grey Parking Tile",
 			category="Vitrified",
 			supplier=self.supplier,
 			purchase_cost=400,
@@ -447,8 +448,48 @@ class TestProducts(FrappeTestCase):
 			effective_date="2026-08-01",
 			series_ref=self.series,
 		)
-		# No dealerCodes assigned for self.dealer -- must not fuzzy-match into it.
-		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "Unassigned Item"))
+		scoped_dealer = make_dealer("Dealer Catalog Substring Test Dealer")
+		_set_product_visibility(scoped_dealer, "PT-4040-RUSTIC-GREY", True)
+
+		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "RUSTIC-GREY")["id"], "PT-4040-RUSTIC-GREY")
+		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "rustic-grey")["id"], "PT-4040-RUSTIC-GREY")
+
+	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
+		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"))
+		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, ""))
+
+	def test_resolve_item_by_name_never_matches_an_item_outside_the_dealers_catalog(self):
+		# A dealer with no Dealer Catalog record at all falls back to the full
+		# sellable catalog (dealer_catalog_api.catalog_for's own documented
+		# behavior) -- so the real boundary to test is a dealer with an explicit,
+		# narrow catalog assignment, not merely "no Item Dealer Code".
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		catalog_api.create_product(
+			code="PROD-TEST-INSIDE",
+			name="Inside Catalog Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		catalog_api.create_product(
+			code="PROD-TEST-OUTSIDE",
+			name="Outside Catalog Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		scoped_dealer = make_dealer("Dealer Catalog Scoped Test Dealer")
+		_set_product_visibility(scoped_dealer, "PROD-TEST-INSIDE", True)
+
+		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "Inside Catalog Item")["id"], "PROD-TEST-INSIDE")
+		self.assertIsNone(catalog_api.resolve_item_by_name(scoped_dealer, "Outside Catalog Item"))
 
 	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
 		series_api.create_series(
