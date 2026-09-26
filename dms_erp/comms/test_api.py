@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -115,3 +117,108 @@ class TestCommsApi(FrappeTestCase):
 	def test_list_templates_returns_seeded_templates(self):
 		templates = comms_api.list_templates()
 		self.assertTrue(any(t["label"] == "Item available" for t in templates))
+
+
+class TestCommsAutoReply(FrappeTestCase):
+	"""_maybe_auto_reply's own dependencies (item-mention resolution, the LLM
+	classification call itself, catalog visibility/sellability gating) each have
+	their own tests elsewhere (catalog.test_products, comms.test_intent,
+	sales.test_inquiry_api) -- these only verify this module's orchestration: given
+	those pieces behave a certain way, does the webhook correctly resolve, gate, and
+	reply (or correctly do nothing)."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		frappe.conf.dms_erp_whatsapp_webhook_secret = TEST_WEBHOOK_SECRET
+		cls.dealer = make_dealer("Comms Auto-Reply Dealer")
+
+	@classmethod
+	def tearDownClass(cls):
+		frappe.conf.pop("dms_erp_whatsapp_webhook_secret", None)
+		super().tearDownClass()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_replies_and_logs_an_inquiry_when_in_stock(self, mock_classify, mock_resolve, mock_create_inquiry, mock_stock):
+		mock_classify.return_value = {"intent": "availability_check", "item_mention": "GVT 6013"}
+		mock_resolve.return_value = {"id": "GVT-6013", "name": "Nordic Oak"}
+		mock_stock.return_value = 40.0
+
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="GVT 6013 stock hai kya")
+
+		mock_create_inquiry.assert_called_once_with(dealer=self.dealer, item="GVT-6013", qty=1, source="WhatsApp")
+		reply = comms_api.last_message(self.dealer)
+		self.assertEqual(reply["direction"], "Outbound")
+		self.assertIn("Nordic Oak", reply["text"])
+		self.assertIn("40", reply["text"])
+
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_replies_out_of_stock_when_on_hand_is_zero(self, mock_classify, mock_resolve, mock_create_inquiry, mock_stock):
+		mock_classify.return_value = {"intent": "availability_check", "item_mention": "GVT 6013"}
+		mock_resolve.return_value = {"id": "GVT-6013", "name": "Nordic Oak"}
+		mock_stock.return_value = 0.0
+
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="GVT 6013 available?")
+
+		reply = comms_api.last_message(self.dealer)
+		self.assertIn("out of stock", reply["text"])
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_does_nothing_when_llm_is_not_configured(self, mock_classify, mock_create_inquiry):
+		mock_classify.return_value = None
+
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="bhai rate bhejo")
+
+		mock_create_inquiry.assert_not_called()
+		self.assertEqual(comms_api.unreplied_inbound_count(self.dealer), 1)
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_does_nothing_for_a_non_availability_intent(self, mock_classify, mock_create_inquiry):
+		mock_classify.return_value = {"intent": "other", "item_mention": None}
+
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="thanks bhai")
+
+		mock_create_inquiry.assert_not_called()
+
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_does_nothing_when_the_item_mention_does_not_resolve(self, mock_classify, mock_create_inquiry, mock_resolve):
+		mock_classify.return_value = {"intent": "availability_check", "item_mention": "NO-SUCH-CODE"}
+		mock_resolve.return_value = None
+
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="NO-SUCH-CODE available?")
+
+		mock_create_inquiry.assert_not_called()
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	@patch("dms_erp.comms.api.classify_message")
+	def test_does_nothing_when_the_item_is_not_sellable_for_this_dealer(self, mock_classify, mock_resolve, mock_create_inquiry):
+		mock_classify.return_value = {"intent": "availability_check", "item_mention": "GVT 6013"}
+		mock_resolve.return_value = {"id": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.side_effect = frappe.ValidationError("not sellable")
+
+		# Must not raise, and must not send a reply, even though _create_inquiry rejected it.
+		comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="GVT 6013 stock hai kya")
+		self.assertEqual(comms_api.unreplied_inbound_count(self.dealer), 1)
+
+	@patch("dms_erp.comms.api.classify_message")
+	def test_webhook_still_logs_the_inbound_message_even_if_auto_reply_blows_up(self, mock_classify):
+		mock_classify.side_effect = RuntimeError("boom")
+
+		message = comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="GVT 6013 stock hai kya")
+		self.assertEqual(message["direction"], "Inbound")
+		self.assertEqual(message["status"], "Delivered")

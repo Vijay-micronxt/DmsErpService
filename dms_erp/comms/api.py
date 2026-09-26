@@ -14,17 +14,32 @@ Replied — thread-handling state) doesn't model WhatsApp's delivery-receipt sta
 option on a doctype shared by unrelated core features — extending it would mean
 customizing a widely-used shared doctype rather than modeling Pacific's own,
 differently-shaped lifecycle.
+
+`_maybe_auto_reply` (run after every inbound message is logged) is the availability/
+price auto-responder: comms.intent.classify_message turns the free text into an
+intent + a raw item mention (LLM-based — see that module's own docstring for why not
+a keyword dictionary), catalog.api.resolve_item_mention turns that mention into a
+real Item (deterministic substring matching, not LLM), and the actual stock figure
+is a plain warehouse.utils.total_stock_for_item DB read. Only when every one of those
+resolves confidently does a reply go out and an Inquiry get logged (source
+"WhatsApp") — anything else (LLM disabled/unsure, no matching item, item not in this
+dealer's catalog or no longer sellable) is left inbound-unreplied for a human,
+exactly as if this feature didn't exist. Wrapped in its own try/except in the
+webhook so a bug or outage in the auto-reply path can never break logging the
+inbound message itself, which is this module's actual contract.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import now_datetime
 
+from dms_erp.comms.intent import classify_message
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
 from dms_erp.pagination import clamp
 from dms_erp.phone_utils import dealer_for_phone
 
 COMMS_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
+AUTO_REPLY_INTENTS = {"availability_check", "price_check"}
 
 
 def _assert_can_manage_comms():
@@ -180,7 +195,52 @@ def webhook_inbound_message(
 		}
 	)
 	doc.insert(ignore_permissions=True)
+	try:
+		_maybe_auto_reply(dealer, text)
+	except Exception:
+		# The auto-reply path is a bonus on top of this webhook's real contract
+		# (logging the inbound message, already done above) -- a bug or an LLM/DB
+		# error here must never surface as a webhook failure to the caller.
+		frappe.log_error(title="WhatsApp auto-reply failed")
 	return _serialize(doc)
+
+
+def _maybe_auto_reply(dealer: str, text: str):
+	"""See this module's own docstring for the full reasoning. Every early return
+	below means the same thing: "don't guess, leave it for a human" — that's the
+	expected, routine outcome for most messages, not a failure."""
+	from dms_erp.catalog.api import resolve_item_mention
+	from dms_erp.sales.inquiry_api import _create_inquiry
+	from dms_erp.warehouse.utils import total_stock_for_item
+
+	classification = classify_message(text)
+	if not classification or classification["intent"] not in AUTO_REPLY_INTENTS:
+		return
+	mention = classification.get("item_mention")
+	if not mention:
+		return
+
+	item = resolve_item_mention(dealer, mention)
+	if not item:
+		return
+
+	try:
+		_create_inquiry(dealer=dealer, item=item["id"], qty=1, source="WhatsApp")
+	except (frappe.PermissionError, frappe.ValidationError):
+		# Not in this dealer's assigned catalog, or no longer sellable -- can't
+		# confidently auto-reply "yes it's available" here either.
+		return
+
+	on_hand = total_stock_for_item(item["id"])
+	if on_hand > 0:
+		reply = _(
+			"Good news — {0} is back in stock ({1} boxes available). Let us know if you'd like to confirm the order."
+		).format(item["name"], int(on_hand))
+	else:
+		reply = _(
+			"{0} is currently out of stock. We'll notify you as soon as it's back — let us know if you'd like us to check alternatives."
+		).format(item["name"])
+	_send_message(dealer, reply, related_type="Inquiry")
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
