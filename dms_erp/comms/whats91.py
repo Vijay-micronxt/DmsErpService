@@ -19,6 +19,28 @@ credentials live in site_config.json instead:
 Neither configured -> send_otp_template logs a warning and returns False; it
 never raises, since request_otp's own generic response must not change shape
 just because WhatsApp delivery isn't set up on a given site yet.
+
+`receive_webhook` is the inbound counterpart (https://developers.whats91.com/
+webhooks/examples): whats91's own event envelope --
+`{"event": ..., "data": {...}}` -- and its own auth (a header token, set on
+whats91's dashboard against a webhook pointed at this function), neither of
+which match comms.api.webhook_inbound_message's generic contract (a flat
+`{secret, phone, text}` body). This translates one into the other rather than
+teaching the generic endpoint whats91-specific shapes; point whats91's
+dashboard "Endpoint URL" at THIS function
+(dms_erp.comms.whats91.receive_webhook), not the generic one. Config:
+
+  dms_erp_whats91_webhook_token  -- must match whats91's dashboard
+                                     "Verification Token" field exactly
+  dms_erp_whats91_webhook_header -- optional, defaults to
+                                     "X-Whats91-Webhook-Token" (whats91's own
+                                     default "Verification Header Name") --
+                                     only set this if you changed that field
+                                     on whats91's side too
+  dms_erp_whatsapp_webhook_secret -- the same one webhook_inbound_message
+                                      already uses; this module supplies it
+                                      internally when calling that function,
+                                      it's never exposed to whats91 itself
 """
 
 import frappe
@@ -28,6 +50,7 @@ from dms_erp.phone_utils import clean_indian_mobile
 
 WHATS91_SEND_URL = "https://graph.whats91.com/api/v2/send"
 _REQUEST_TIMEOUT_SECONDS = 30
+WHATS91_WEBHOOK_HEADER_DEFAULT = "X-Whats91-Webhook-Token"
 
 
 def _is_send_successful(response) -> bool:
@@ -100,3 +123,59 @@ def send_otp_template(phone: str, otp_code: str) -> bool:
 
 	frappe.logger().info(f"whats91 OTP template '{template_name}' sent to {clean_phone}")
 	return True
+
+
+def _verify_whats91_webhook_token(received_token: str | None):
+	"""whats91 authenticates its own webhook deliveries with a request header (its
+	dashboard's "Verification Token" + "Verification Header Name" fields) -- a
+	different mechanism from comms.api's generic webhook_*'s body-level `secret`
+	param, so it gets its own site_config key rather than overloading that one for
+	two different checks against two different callers.
+
+	Takes the already-extracted header value rather than reaching into
+	frappe.local.request itself, so it's directly unit-testable with a plain string
+	-- same pattern auth.middleware._enforce_dealer_scope uses for the same reason."""
+	configured = frappe.conf.get("dms_erp_whats91_webhook_token")
+	if not configured:
+		frappe.throw("dms_erp_whats91_webhook_token is not configured in site_config.json.")
+	if not received_token or received_token != configured:
+		frappe.throw("Invalid whats91 webhook token.", frappe.PermissionError)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def receive_webhook(event: str | None = None, data: dict | None = None, **kwargs):
+	"""whats91's own webhook delivery -- see this module's docstring for the event
+	envelope and why this exists separately from comms.api.webhook_inbound_message.
+
+	Acknowledges (200) any event this doesn't act on, rather than throwing --
+	whats91 retries failed deliveries (see its dashboard's own "Retry failed
+	deliveries" setting), and there's no reason to make it retry forever for an
+	event we deliberately don't act on yet. Right now that's everything except
+	`message.inbound.text`: the message.status.* delivery-receipt events have
+	nothing to reconcile against, because dms_erp doesn't yet record whats91's own
+	messageId anywhere when it logs an outbound message (comms.api._send_message
+	never actually calls whats91 for a general message, only send_otp_template
+	does, and only for the OTP template) -- wiring status receipts up is a
+	follow-on once outbound sending for general messages exists."""
+	header_name = frappe.conf.get("dms_erp_whats91_webhook_header") or WHATS91_WEBHOOK_HEADER_DEFAULT
+	received_token = frappe.local.request.headers.get(header_name) if frappe.local.request else None
+	_verify_whats91_webhook_token(received_token)
+
+	data = data or {}
+
+	if event == "message.inbound.text":
+		phone = data.get("from")
+		text = data.get("text")
+		if not phone or not text:
+			frappe.throw("Malformed message.inbound.text payload -- missing 'from' or 'text'.", frappe.ValidationError)
+
+		from dms_erp.comms.api import webhook_inbound_message
+
+		webhook_inbound_message(
+			secret=frappe.conf.get("dms_erp_whatsapp_webhook_secret"),
+			phone=phone,
+			text=text,
+			sent_at=data.get("timestamp"),
+		)
+
+	return {"success": True}
