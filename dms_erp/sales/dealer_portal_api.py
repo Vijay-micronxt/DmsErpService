@@ -221,19 +221,26 @@ def get_my_order(order: str) -> dict:
 	return _serialize_order(doc)
 
 
-@frappe.whitelist(methods=["GET"])
-def my_dues() -> dict:
-	"""BRD C.13.1 — outstanding dues. Sales Invoice.outstanding_amount is real,
-	correct SQL against the native ERPNext billing doctype; it simply returns 0
-	today because nothing in this app raises a Sales Invoice yet anywhere. Not a
-	stub -- a true, forward-compatible answer that starts returning real numbers
-	the moment invoicing exists."""
-	dealer = _current_dealer()
+def _outstanding_for(dealer: str) -> float:
+	"""Unguarded core of my_dues -- also called directly by comms.flow_api's
+	get_outstanding_due, whose caller is resolved from a WhatsApp phone number
+	rather than a dealer-portal session, so it has no frappe.session.user to run
+	_current_dealer() against. Sales Invoice.outstanding_amount is real, correct SQL
+	against the native ERPNext billing doctype; it simply returns 0 today because
+	nothing in this app raises a Sales Invoice yet anywhere. Not a stub -- a true,
+	forward-compatible answer that starts returning real numbers the moment
+	invoicing exists."""
 	total = frappe.db.sql(
 		"select sum(outstanding_amount) from `tabSales Invoice` where customer=%s and docstatus=1",
 		(dealer,),
 	)[0][0]
-	return {"outstanding": float(total or 0)}
+	return float(total or 0)
+
+
+@frappe.whitelist(methods=["GET"])
+def my_dues() -> dict:
+	"""BRD C.13.1 — outstanding dues."""
+	return {"outstanding": _outstanding_for(_current_dealer())}
 
 
 @frappe.whitelist(methods=["GET"])

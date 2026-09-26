@@ -62,7 +62,16 @@ Required at creation, per sales.inquiry_api's own status-from-stock derivation),
 which is the actual reorder signal these checks are supposed to feed. Unlike
 _maybe_auto_reply, a failure to create one (not in this dealer's catalog, not
 sellable) doesn't cancel the reply -- the dealer asked a direct question and gets a
-direct answer either way; only the internal demand-tracking side effect is skipped."""
+direct answer either way; only the internal demand-tracking side effect is skipped.
+
+get_order_status/get_delivery_status/get_outstanding_due/get_recent_orders are the
+account-lookup half of the Flow (own Sales Order data, not the catalog) -- no item
+resolution or Inquiry-raising involved, just the same dealer_for_phone resolution
+plus, for the two order-number lookups, an ownership check
+(_find_dealer_order) equivalent to sales.dealer_portal_api.get_my_order's own, so a
+dealer can never fish for another dealer's order by guessing a number. The latter
+two fire straight off the Flow's main menu with no preceding "wait for input" step,
+so there's no dealer-typed text worth logging as an inbound turn for either."""
 
 import json
 import re
@@ -158,6 +167,132 @@ def get_item_info(lead=None, **kwargs):
 
 	reply, related_type, related_reference = _resolve_and_track_items(dealer, text, describe)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
+	return {"message": reply}
+
+
+def _find_dealer_order(dealer: str, order_number: str):
+	"""Looks up a Sales Order by number and confirms it belongs to `dealer`, the same
+	ownership check dealer_portal_api.get_my_order already enforces for its own,
+	session-scoped case. Returns None for BOTH "no such order" and "exists but isn't
+	yours" -- a caller should give the same generic reply either way rather than
+	confirming a valid order number exists for a dealer that isn't asking about it.
+	Checks existence with frappe.db.exists first rather than letting frappe.get_doc
+	raise, since a mistyped order number is the routine case here, not an error."""
+	if not frappe.db.exists("Sales Order", order_number):
+		return None
+	doc = frappe.get_doc("Sales Order", order_number)
+	if doc.customer != dealer:
+		return None
+	return doc
+
+
+@frappe.whitelist()
+def get_order_status(lead=None, **kwargs):
+	"""Flow event `order.status` ("3. Order Status" step): `lead.message` is the
+	Sales Order number the dealer typed (e.g. SAL-ORD-2026-00001)."""
+	phone, text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+	if not text:
+		return {"message": "Please enter your Sales Order number to check its status."}
+
+	_log_inbound_message(dealer, text, related_type="General")
+
+	doc = _find_dealer_order(dealer, text.strip())
+	if not doc:
+		reply = f"We couldn't find an order '{text}' on your account. Please check the order number and try again."
+		_send_message(dealer, reply, related_type="General")
+		return {"message": reply}
+
+	stage = doc.custom_fulfillment_stage or "Confirmed"
+	reply = f"Order {doc.name} is currently: {stage}."
+	_send_message(dealer, reply, related_type="Order", related_reference=doc.name)
+	return {"message": reply}
+
+
+@frappe.whitelist()
+def get_delivery_status(lead=None, **kwargs):
+	"""Flow event `delivery.status` ("2. Delivery Status" step): same underlying
+	data as get_order_status -- custom_fulfillment_stage is the one status
+	vocabulary this app uses for both order and delivery status (order_api.py's own
+	docstring notes it's "layered on top of, not derived from, ERPNext's own
+	delivery/billing status" -- no separate Delivery Note or dispatch_status field
+	exists) -- but framed around dispatch/delivery, and, when the order has actually
+	reached that stage, the real timestamp from custom_stage_history rather than
+	just the stage name."""
+	phone, text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+	if not text:
+		return {"message": "Please enter your Sales Order number to check its delivery status."}
+
+	_log_inbound_message(dealer, text, related_type="General")
+
+	doc = _find_dealer_order(dealer, text.strip())
+	if not doc:
+		reply = f"We couldn't find an order '{text}' on your account. Please check the order number and try again."
+		_send_message(dealer, reply, related_type="General")
+		return {"message": reply}
+
+	stage = doc.custom_fulfillment_stage or "Confirmed"
+	if stage in ("Dispatched", "Delivered"):
+		at = next((row.at for row in reversed(doc.custom_stage_history) if row.stage == stage), None)
+		when = f" on {at.strftime('%d %b %Y')}" if at else ""
+		reply = f"Order {doc.name} was {stage.lower()}{when}."
+	elif stage == "Cancelled":
+		reply = f"Order {doc.name} was cancelled."
+	else:
+		reply = f"Order {doc.name} hasn't been dispatched yet — current stage: {stage}."
+	_send_message(dealer, reply, related_type="Order", related_reference=doc.name)
+	return {"message": reply}
+
+
+@frappe.whitelist()
+def get_outstanding_due(lead=None, **kwargs):
+	"""Flow event `outstanding.check` ("4. Payment Due" step) -- this node fires
+	straight off the main menu button with no preceding "wait for input" step (see
+	the Flow's own edges), so there's no dealer-typed text to log as an inbound
+	turn here, only the reply. Reuses dealer_portal_api._outstanding_for rather
+	than duplicating its SQL -- that function's own docstring covers why it's real,
+	correct SQL that simply returns 0 today."""
+	from dms_erp.sales.dealer_portal_api import _outstanding_for
+
+	phone, _text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+
+	outstanding = _outstanding_for(dealer)
+	if outstanding > 0:
+		reply = f"Your outstanding due is ₹{outstanding:,.2f}."
+	else:
+		reply = "You have no outstanding dues at the moment."
+
+	_send_message(dealer, reply, related_type="General")
+	return {"message": reply}
+
+
+@frappe.whitelist()
+def get_recent_orders(lead=None, **kwargs):
+	"""Flow event `orders.recent5` ("6. Recent 5 Orders" step) -- also fires
+	straight off the main menu button, no dealer-typed input to log here either."""
+	phone, _text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+
+	names = frappe.get_all(
+		"Sales Order", filters={"customer": dealer}, fields=["name", "custom_fulfillment_stage"], order_by="creation desc", limit_page_length=5
+	)
+	if not names:
+		reply = "You don't have any orders yet."
+	else:
+		lines = [f"{row.name}: {row.custom_fulfillment_stage or 'Confirmed'}" for row in names]
+		reply = f"Your last {len(names)} order(s):\n" + "\n".join(lines)
+
+	_send_message(dealer, reply, related_type="General")
 	return {"message": reply}
 
 

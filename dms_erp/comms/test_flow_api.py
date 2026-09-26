@@ -5,7 +5,9 @@ from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.comms import api as comms_api
 from dms_erp.comms import flow_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer
+from dms_erp.pricing import api as pricing_api
+from dms_erp.sales import inquiry_api, order_api
+from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
 class TestSplitItemMentions(FrappeTestCase):
@@ -267,3 +269,176 @@ class TestGetItemPrice(FrappeTestCase):
 		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": ""})
 
 		self.assertIn("enter an item code", result["message"])
+
+
+class TestGetOutstandingDue(FrappeTestCase):
+	"""No preceding "wait for input" step in the Flow for this event (it fires
+	straight off the main menu button) -- these only verify the reply wording and
+	that _outstanding_for is reused rather than duplicated."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Flow API Dues Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204659")
+
+	@patch("dms_erp.sales.dealer_portal_api._outstanding_for")
+	def test_replies_with_the_outstanding_amount(self, mock_outstanding):
+		mock_outstanding.return_value = 1250.75
+
+		result = flow_api.get_outstanding_due(lead={"event": "outstanding.check", "phone": "919620204659"})
+
+		self.assertIn("1,250.75", result["message"])
+		mock_outstanding.assert_called_once_with(self.dealer)
+
+	@patch("dms_erp.sales.dealer_portal_api._outstanding_for")
+	def test_replies_with_no_dues_when_zero(self, mock_outstanding):
+		mock_outstanding.return_value = 0.0
+
+		result = flow_api.get_outstanding_due(lead={"event": "outstanding.check", "phone": "919620204659"})
+
+		self.assertIn("no outstanding dues", result["message"])
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.get_outstanding_due(lead={"event": "outstanding.check", "phone": "919999999999"})
+
+		self.assertIn("dealer account", result["message"])
+
+
+class TestGetRecentOrders(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Flow API Recent Orders Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204660")
+
+	def test_replies_with_no_orders_when_dealer_has_none(self):
+		result = flow_api.get_recent_orders(lead={"event": "orders.recent5", "phone": "919620204660"})
+
+		self.assertIn("don't have any orders", result["message"])
+
+	@patch("dms_erp.comms.flow_api.frappe.get_all")
+	def test_lists_the_dealers_recent_orders_with_stage(self, mock_get_all):
+		mock_get_all.return_value = [
+			frappe._dict({"name": "SAL-ORD-2026-00002", "custom_fulfillment_stage": "Dispatched"}),
+			frappe._dict({"name": "SAL-ORD-2026-00001", "custom_fulfillment_stage": None}),
+		]
+
+		result = flow_api.get_recent_orders(lead={"event": "orders.recent5", "phone": "919620204660"})
+
+		self.assertIn("SAL-ORD-2026-00002: Dispatched", result["message"])
+		self.assertIn("SAL-ORD-2026-00001: Confirmed", result["message"])
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.get_recent_orders(lead={"event": "orders.recent5", "phone": "919999999999"})
+
+		self.assertIn("dealer account", result["message"])
+
+
+class TestGetOrderStatus(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.supplier = make_supplier("Flow API Order Status Supplier")
+		cls.dealer = make_dealer("Flow API Order Status Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204662")
+		cls.item = make_item("FLOW-ORDER-STATUS-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
+
+	def _make_order(self, qty=10):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
+		return order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+
+	def test_replies_with_the_current_fulfillment_stage(self):
+		order = self._make_order()
+
+		result = flow_api.get_order_status(lead={"event": "order.status", "phone": "919620204662", "message": order["number"]})
+
+		self.assertIn(order["number"], result["message"])
+		self.assertIn("Confirmed", result["message"])
+
+	def test_replies_with_not_found_for_an_unknown_order_number(self):
+		result = flow_api.get_order_status(
+			lead={"event": "order.status", "phone": "919620204662", "message": "SAL-ORD-2099-99999"}
+		)
+
+		self.assertIn("couldn't find an order", result["message"])
+
+	def test_never_reveals_an_order_belonging_to_a_different_dealer(self):
+		order = self._make_order()
+		other_dealer = make_dealer("Flow API Order Status Other Dealer")
+		frappe.db.set_value("Customer", other_dealer, "custom_phone", "9620204663")
+
+		result = flow_api.get_order_status(lead={"event": "order.status", "phone": "919620204663", "message": order["number"]})
+
+		self.assertIn("couldn't find an order", result["message"])
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.get_order_status(
+			lead={"event": "order.status", "phone": "919999999999", "message": "SAL-ORD-2026-00001"}
+		)
+
+		self.assertIn("dealer account", result["message"])
+
+	def test_blank_message_asks_for_an_order_number(self):
+		result = flow_api.get_order_status(lead={"event": "order.status", "phone": "919620204662", "message": ""})
+
+		self.assertIn("enter your Sales Order number", result["message"])
+
+
+class TestGetDeliveryStatus(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.supplier = make_supplier("Flow API Delivery Status Supplier")
+		cls.dealer = make_dealer("Flow API Delivery Status Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204664")
+		cls.item = make_item("FLOW-DELIVERY-STATUS-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
+
+	def _make_order(self, qty=10):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
+		return order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+
+	def test_replies_not_yet_dispatched_before_that_stage(self):
+		order = self._make_order()
+
+		result = flow_api.get_delivery_status(
+			lead={"event": "delivery.status", "phone": "919620204664", "message": order["number"]}
+		)
+
+		self.assertIn("hasn't been dispatched yet", result["message"])
+
+	def test_replies_with_the_dispatch_date_once_dispatched(self):
+		order = self._make_order()
+		frappe.db.set_value("Sales Order", order["number"], "custom_fulfillment_stage", "Dispatched")
+		doc = frappe.get_doc("Sales Order", order["number"])
+		doc.append(
+			"custom_stage_history",
+			{"stage": "Dispatched", "at": "2026-09-05 10:00:00", "by": "Administrator", "note": "Test dispatch"},
+		)
+		doc.save(ignore_permissions=True)
+
+		result = flow_api.get_delivery_status(
+			lead={"event": "delivery.status", "phone": "919620204664", "message": order["number"]}
+		)
+
+		self.assertIn("dispatched", result["message"].lower())
+		self.assertIn("05 Sep 2026", result["message"])
+
+	def test_replies_with_not_found_for_an_unknown_order_number(self):
+		result = flow_api.get_delivery_status(
+			lead={"event": "delivery.status", "phone": "919620204664", "message": "SAL-ORD-2099-99999"}
+		)
+
+		self.assertIn("couldn't find an order", result["message"])
