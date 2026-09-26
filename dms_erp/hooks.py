@@ -18,6 +18,15 @@ required_apps = ["frappe", "erpnext"]
 
 before_request = ["dms_erp.auth.middleware.authenticate_request"]
 
+# whats91's "Dealer Portal" Flow already has these bare (dot-free) names baked into
+# each action.api_call node's endpoint_url (/api/method/get_item_info, not
+# /api/method/dms_erp.comms.flow_api.get_item_info) -- aliasing them here means every
+# new comms.flow_api endpoint works without re-pointing the Flow's own config. See
+# comms/flow_api.py's own docstring for the full picture of what calls these and why.
+override_whitelisted_methods = {
+	"get_item_info": "dms_erp.comms.flow_api.get_item_info",
+}
+
 after_install = "dms_erp.setup.install.after_install"
 after_migrate = "dms_erp.setup.install.after_migrate"
 

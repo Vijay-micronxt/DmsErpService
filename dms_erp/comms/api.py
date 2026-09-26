@@ -186,6 +186,29 @@ def mark_read(message: str):
 	return _serialize(doc)
 
 
+def _log_inbound_message(
+	dealer: str, text: str, related_type: str = "General", related_reference: str | None = None, sent_at=None
+) -> dict:
+	"""Unguarded core of webhook_inbound_message -- also called directly by
+	comms.flow_api, whose Flow-driven callers authenticate as a real Frappe user via
+	API key/secret rather than this module's own webhook secret, so they have no
+	reason to go through webhook_inbound_message's secret check at all."""
+	doc = frappe.get_doc(
+		{
+			"doctype": "WhatsApp Message",
+			"dealer": dealer,
+			"direction": "Inbound",
+			"text": text,
+			"status": "Delivered",  # arrived, not yet marked read by staff — see mark_read
+			"related_type": related_type,
+			"related_reference": related_reference,
+			"sent_at": _parse_sent_at(sent_at),
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return _serialize(doc)
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def webhook_inbound_message(
 	secret: str,
@@ -212,19 +235,7 @@ def webhook_inbound_message(
 	if not dealer:
 		frappe.throw(_("Could not resolve a dealer for this message (phone {0}).").format(phone), frappe.ValidationError)
 
-	doc = frappe.get_doc(
-		{
-			"doctype": "WhatsApp Message",
-			"dealer": dealer,
-			"direction": "Inbound",
-			"text": text,
-			"status": "Delivered",  # arrived, not yet marked read by staff — see mark_read
-			"related_type": related_type,
-			"related_reference": related_reference,
-			"sent_at": _parse_sent_at(sent_at),
-		}
-	)
-	doc.insert(ignore_permissions=True)
+	message = _log_inbound_message(dealer, text, related_type, related_reference, sent_at)
 	try:
 		_maybe_auto_reply(dealer, text)
 	except Exception:
@@ -232,7 +243,7 @@ def webhook_inbound_message(
 		# (logging the inbound message, already done above) -- a bug or an LLM/DB
 		# error here must never surface as a webhook failure to the caller.
 		frappe.log_error(title="WhatsApp auto-reply failed")
-	return _serialize(doc)
+	return message
 
 
 def _maybe_auto_reply(dealer: str, text: str):
