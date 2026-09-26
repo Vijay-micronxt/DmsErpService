@@ -391,6 +391,43 @@ class TestProducts(FrappeTestCase):
 		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, "bhai kal wale rate wapas bhej do"))
 		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, ""))
 
+	def test_resolve_item_by_name_tolerates_a_minor_typo(self):
+		catalog_api.create_product(
+			code="PROD-TEST-N",
+			name="Royal Glassy",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		catalog_api.update_product(
+			"PROD-TEST-N", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "RG-001", "sample_issued": 1}]}
+		)
+
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "Royal Glass")["id"], "PROD-TEST-N")
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "royal glasy")["id"], "PROD-TEST-N")
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "Royal Glassy")["id"], "PROD-TEST-N")
+
+	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
+		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"))
+		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, ""))
+
+	def test_resolve_item_by_name_never_matches_an_item_outside_the_dealers_catalog(self):
+		catalog_api.create_product(
+			code="PROD-TEST-OUTSIDE",
+			name="Unassigned Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		# No dealerCodes assigned for self.dealer -- must not fuzzy-match into it.
+		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "Unassigned Item"))
+
 	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
 		series_api.create_series(
 			series_name="Product Test Series",
