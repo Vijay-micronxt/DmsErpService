@@ -193,3 +193,77 @@ class TestGetItemInfo(FrappeTestCase):
 
 		self.assertIn("FOO-1", result["message"])
 		self.assertIn("BAR-2", result["message"])
+
+
+class TestGetItemPrice(FrappeTestCase):
+	"""Mirrors TestGetItemInfo's structure -- the split/resolve/Inquiry-raising core
+	is shared (_resolve_and_track_items, tested via get_item_info above); these only
+	verify get_item_price's own job: the custom_price_visible gate and the price
+	reply wording."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Flow API Price Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204658")
+		frappe.db.set_value("Customer", cls.dealer, "custom_price_visible", 1)
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_replies_with_the_dealers_price_when_visible(self, mock_resolve, mock_create_inquiry, mock_price):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0010"}
+		mock_price.return_value = 425.5
+
+		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": "GVT-6013"})
+
+		self.assertIn("Nordic Oak", result["message"])
+		self.assertIn("425.5", result["message"])
+		mock_price.assert_called_once_with("GVT-6013", self.dealer)
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_hides_the_price_when_the_dealers_account_has_it_hidden(self, mock_resolve, mock_create_inquiry):
+		frappe.db.set_value("Customer", self.dealer, "custom_price_visible", 0)
+		try:
+			mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+			mock_create_inquiry.return_value = {"id": "INQ-0011"}
+
+			result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": "GVT-6013"})
+
+			self.assertIn("isn't available", result["message"])
+			self.assertNotIn("₹", result["message"])
+		finally:
+			frappe.db.set_value("Customer", self.dealer, "custom_price_visible", 1)
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_replies_when_no_price_is_published_yet(self, mock_resolve, mock_create_inquiry, mock_price):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0012"}
+		mock_price.return_value = None
+
+		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": "GVT-6013"})
+
+		self.assertIn("no price is published", result["message"])
+
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_replies_with_not_found_when_code_does_not_resolve(self, mock_resolve):
+		mock_resolve.return_value = None
+
+		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": "NO-SUCH-CODE"})
+
+		self.assertIn("couldn't find an item", result["message"])
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919999999999", "message": "GVT-6013"})
+
+		self.assertIn("dealer account", result["message"])
+
+	def test_blank_message_asks_for_an_item_code(self):
+		result = flow_api.get_item_price(lead={"event": "price.lookup", "phone": "919620204658", "message": ""})
+
+		self.assertIn("enter an item code", result["message"])
