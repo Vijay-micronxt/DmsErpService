@@ -8,6 +8,19 @@ from dms_erp.comms import flow_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer
 
 
+class TestSplitItemMentions(FrappeTestCase):
+	def test_splits_on_comma_and_ampersand_and_newline(self):
+		self.assertEqual(flow_api._split_item_mentions("A, B & C\nD"), ["A", "B", "C", "D"])
+
+	def test_splits_on_the_english_and_hindi_word_for_and(self):
+		self.assertEqual(flow_api._split_item_mentions("RUSTIC-GREY and Royal Glossy"), ["RUSTIC-GREY", "Royal Glossy"])
+		self.assertEqual(flow_api._split_item_mentions("RUSTIC-GREY aur Royal Glossy"), ["RUSTIC-GREY", "Royal Glossy"])
+		self.assertEqual(flow_api._split_item_mentions("RUSTIC-GREY और Royal Glossy"), ["RUSTIC-GREY", "Royal Glossy"])
+
+	def test_returns_the_whole_text_as_one_segment_when_no_delimiter_is_present(self):
+		self.assertEqual(flow_api._split_item_mentions("GVT-6013"), ["GVT-6013"])
+
+
 class TestGetItemInfo(FrappeTestCase):
 	"""resolve_item_mention/total_stock_for_item have their own tests elsewhere
 	(catalog.test_products, warehouse tests) -- these only verify this endpoint's own

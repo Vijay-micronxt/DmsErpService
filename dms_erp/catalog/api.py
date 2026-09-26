@@ -502,18 +502,29 @@ def resolve_item_mention(dealer: str, text: str) -> dict | None:
 	return None
 
 
+_LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
+
+
 def resolve_item_by_name(dealer: str, text: str) -> dict | None:
 	"""Fuzzy fallback for comms.flow_api.get_item_info, tried only once
 	resolve_item_mention's exact dealer-code match has already failed -- a dealer
 	prompted with "enter the item code" often types the item's name instead,
-	sometimes with a minor typo ("Royal Glass" for "Royal Glassy"). Deliberately NOT
-	used by the free-text LLM path (comms/api.py's _maybe_auto_reply): there,
-	item_mention is an arbitrary phrase pulled out of a longer, unprompted sentence,
-	where a fuzzy name match risks confidently resolving to the wrong item. Here the
-	dealer's entire reply is a single, deliberate answer to a single question, so a
-	close name match is a safe bet. Scoped to items this dealer actually has a code
-	for, same visibility boundary as resolve_dealer_code -- an item outside their
-	catalog is never fuzzy-matched into a reply."""
+	sometimes with a minor typo ("Royal Glass" for "Royal Glassy"), and sometimes
+	wrapped in a full sentence -- often in Hindi/Hinglish, with the item name itself
+	still typed in Latin script ("क्या आप ... Royal Glossy ... सकते हैं?"). Fuzzy-
+	matching that whole sentence against a two-word item name washes the match out
+	with unrelated surrounding text, so this extracts just the Latin-script words
+	and fuzzy-matches short windows of them (1-3 consecutive words -- the shape an
+	item name actually takes) rather than the raw text as one blob; the raw text is
+	still tried too; whichever window scores highest overall wins.
+
+	Deliberately NOT used by the free-text LLM path (comms/api.py's _maybe_auto_reply):
+	there, item_mention is an arbitrary phrase pulled out of a longer, unprompted
+	sentence, where a fuzzy name match risks confidently resolving to the wrong item.
+	Here the dealer's entire reply is a single, deliberate answer to a single
+	question, so a close name match is a safe bet. Scoped to items this dealer
+	actually has a code for, same visibility boundary as resolve_dealer_code -- an
+	item outside their catalog is never fuzzy-matched into a reply."""
 	text = (text or "").strip()
 	if not text:
 		return None
@@ -523,11 +534,25 @@ def resolve_item_by_name(dealer: str, text: str) -> dict | None:
 		return None
 	items = frappe.get_all("Item", filters={"name": ["in", item_names]}, fields=["name", "item_name"])
 	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
-
-	match = difflib.get_close_matches(text.lower(), by_lower_name.keys(), n=1, cutoff=0.6)
-	if not match:
+	if not by_lower_name:
 		return None
-	return _serialize(frappe.get_doc("Item", by_lower_name[match[0]]))
+
+	words = _LATIN_WORD_RE.findall(text)
+	candidates = {" ".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(i + 4, len(words) + 1))}
+	candidates.add(text)  # covers a name that doesn't split cleanly into separate words
+
+	best_name, best_ratio = None, 0.0
+	for candidate in candidates:
+		match = difflib.get_close_matches(candidate.lower(), by_lower_name.keys(), n=1, cutoff=0.6)
+		if not match:
+			continue
+		ratio = difflib.SequenceMatcher(None, candidate.lower(), match[0]).ratio()
+		if ratio > best_ratio:
+			best_name, best_ratio = match[0], ratio
+
+	if not best_name:
+		return None
+	return _serialize(frappe.get_doc("Item", by_lower_name[best_name]))
 
 
 @frappe.whitelist(methods=["GET"])
