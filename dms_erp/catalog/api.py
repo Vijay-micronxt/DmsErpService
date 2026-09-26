@@ -40,6 +40,8 @@ list -- reports need the whole result set, not a page of it, so they call
 list_all_products (unpaginated, internal-only) instead of the whitelisted endpoint.
 """
 
+import re
+
 import frappe
 from frappe import _
 
@@ -441,6 +443,62 @@ def resolve_dealer_code(dealer: str, code: str) -> dict | None:
 	if not item_code:
 		return None
 	return _serialize(frappe.get_doc("Item", item_code))
+
+
+_MENTION_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-]*")
+# A single token like "GVT6013" (no hyphen, no space -- typed as one word) has no
+# natural split point to recover "GVT-6013" from except this common item-code shape:
+# a letter run immediately followed by a digit run.
+_LETTER_DIGIT_BOUNDARY_RE = re.compile(r"^([A-Za-z]+)(\d[\dA-Za-z]*)$")
+
+
+def _candidate_variants(s: str) -> set[str]:
+	# Dealer codes are conventionally uppercase, but a message typed on a phone
+	# keyboard is not -- try both rather than requiring the dealer to match case.
+	return {s, s.upper()}
+
+
+@frappe.whitelist(methods=["GET"])
+def resolve_item_mention(dealer: str, text: str) -> dict | None:
+	"""Finds a dealer's own item code somewhere inside a free-text message (a WhatsApp
+	enquiry, not a bare code lookup like resolve_dealer_code above) — e.g. "GVT 6013
+	stock hai kya" should resolve the same as if the dealer had typed "GVT-6013" or
+	"GVT6013" alone. Deterministic substring matching only, no fuzzy/NLU matching:
+	dealer codes are exact identifiers the dealer chose, not natural language, so
+	exact-match candidates generated from the raw text are the right tool here —
+	unlike *whether* a message is an availability question at all, which is a
+	language-understanding problem this function deliberately doesn't attempt (see
+	comms/api.py's inbound-webhook handling for that side of it).
+
+	Returns None (not a throw) when nothing resolves, same convention as
+	resolve_dealer_code — "no code found in this text" is routine, not an error."""
+	tokens = _MENTION_TOKEN_RE.findall(text or "")
+	if not tokens:
+		return None
+
+	candidates: list[str] = []
+	# Longer, more specific candidates first (adjacent-token pairs, joined the ways a
+	# dealer code might actually be split across words: hyphenated, concatenated, or
+	# space-separated), then fall back to single tokens.
+	for i in range(len(tokens) - 1):
+		a, b = tokens[i], tokens[i + 1]
+		for pair in (f"{a}-{b}", f"{a}{b}", f"{a} {b}"):
+			candidates.extend(_candidate_variants(pair))
+	for token in tokens:
+		candidates.extend(_candidate_variants(token))
+		boundary = _LETTER_DIGIT_BOUNDARY_RE.match(token)
+		if boundary:
+			candidates.extend(_candidate_variants(f"{boundary.group(1)}-{boundary.group(2)}"))
+
+	seen: set[str] = set()
+	for candidate in candidates:
+		if candidate in seen:
+			continue
+		seen.add(candidate)
+		item = resolve_dealer_code(dealer, candidate)
+		if item:
+			return item
+	return None
 
 
 @frappe.whitelist(methods=["GET"])
