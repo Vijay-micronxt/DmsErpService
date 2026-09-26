@@ -157,9 +157,11 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 	def setUp(self):
 		self._orig_request = frappe.local.request
 		frappe.local.request = _FakeRequest({whats91.WHATS91_WEBHOOK_HEADER_DEFAULT: TEST_WEBHOOK_TOKEN})
+		frappe.local.response.pop("success", None)
 
 	def tearDown(self):
 		frappe.local.request = self._orig_request
+		frappe.local.response.pop("success", None)
 
 	def test_rejects_a_call_with_the_wrong_header_token(self):
 		frappe.local.request = _FakeRequest({whats91.WHATS91_WEBHOOK_HEADER_DEFAULT: "wrong"})
@@ -185,6 +187,7 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 			sent_at="2026-06-05T10:30:00.000Z",
 		)
 		self.assertEqual(result, {"success": True})
+		self.assertTrue(frappe.local.response.get("success"))
 
 	def test_rejects_a_malformed_inbound_text_event(self):
 		with self.assertRaises(frappe.ValidationError):
@@ -201,6 +204,7 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 
 		mock_webhook.assert_not_called()
 		self.assertEqual(result, {"success": True})
+		self.assertTrue(frappe.local.response.get("success"))
 
 	@patch("dms_erp.comms.api.webhook_inbound_message")
 	def test_tolerates_unexpected_extra_top_level_fields(self, mock_webhook):
@@ -213,3 +217,4 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 			senderId="916268662275",
 		)
 		self.assertEqual(result, {"success": True})
+		self.assertTrue(frappe.local.response.get("success"))
