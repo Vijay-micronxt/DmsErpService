@@ -40,6 +40,7 @@ list -- reports need the whole result set, not a page of it, so they call
 list_all_products (unpaginated, internal-only) instead of the whitelisted endpoint.
 """
 
+import difflib
 import re
 
 import frappe
@@ -499,6 +500,34 @@ def resolve_item_mention(dealer: str, text: str) -> dict | None:
 		if item:
 			return item
 	return None
+
+
+def resolve_item_by_name(dealer: str, text: str) -> dict | None:
+	"""Fuzzy fallback for comms.flow_api.get_item_info, tried only once
+	resolve_item_mention's exact dealer-code match has already failed -- a dealer
+	prompted with "enter the item code" often types the item's name instead,
+	sometimes with a minor typo ("Royal Glass" for "Royal Glassy"). Deliberately NOT
+	used by the free-text LLM path (comms/api.py's _maybe_auto_reply): there,
+	item_mention is an arbitrary phrase pulled out of a longer, unprompted sentence,
+	where a fuzzy name match risks confidently resolving to the wrong item. Here the
+	dealer's entire reply is a single, deliberate answer to a single question, so a
+	close name match is a safe bet. Scoped to items this dealer actually has a code
+	for, same visibility boundary as resolve_dealer_code -- an item outside their
+	catalog is never fuzzy-matched into a reply."""
+	text = (text or "").strip()
+	if not text:
+		return None
+
+	item_names = frappe.get_all("Item Dealer Code", filters={"dealer": dealer}, pluck="parent")
+	if not item_names:
+		return None
+	items = frappe.get_all("Item", filters={"name": ["in", item_names]}, fields=["name", "item_name"])
+	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
+
+	match = difflib.get_close_matches(text.lower(), by_lower_name.keys(), n=1, cutoff=0.6)
+	if not match:
+		return None
+	return _serialize(frappe.get_doc("Item", by_lower_name[match[0]]))
 
 
 @frappe.whitelist(methods=["GET"])

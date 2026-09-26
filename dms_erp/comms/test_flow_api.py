@@ -77,6 +77,30 @@ class TestGetItemInfo(FrappeTestCase):
 		self.assertEqual(len(comms_api.list_all_messages(self.dealer)), before)
 
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.catalog.api.resolve_item_by_name")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_falls_back_to_fuzzy_name_match_when_exact_code_fails(self, mock_mention, mock_by_name, mock_stock):
+		mock_mention.return_value = None
+		mock_by_name.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Royal Glassy"}
+		mock_stock.return_value = 12.0
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "Royal Glass"})
+
+		mock_by_name.assert_called_once_with(self.dealer, "Royal Glass")
+		self.assertIn("Royal Glassy", result["message"])
+		self.assertIn("in stock", result["message"])
+
+	@patch("dms_erp.catalog.api.resolve_item_by_name")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_does_not_try_fuzzy_name_match_when_exact_code_already_resolved(self, mock_mention, mock_by_name):
+		mock_mention.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+
+		with patch("dms_erp.warehouse.utils.total_stock_for_item", return_value=1.0):
+			flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		mock_by_name.assert_not_called()
+
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.catalog.api.resolve_item_mention")
 	def test_accepts_lead_as_a_json_string(self, mock_resolve, mock_stock):
 		# Frappe's form_dict parsing can hand nested JSON back as a string depending on

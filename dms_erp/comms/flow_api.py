@@ -55,7 +55,7 @@ def _lead_fields(lead) -> tuple[str | None, str]:
 def get_item_info(lead=None, **kwargs):
 	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability" step):
 	`lead.message` is the item code the dealer typed after being prompted for one."""
-	from dms_erp.catalog.api import resolve_item_mention
+	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
 	from dms_erp.warehouse.utils import total_stock_for_item
 
 	phone, text = _lead_fields(lead)
@@ -67,7 +67,12 @@ def get_item_info(lead=None, **kwargs):
 
 	_log_inbound_message(dealer, text, related_type="General")
 
-	item = resolve_item_mention(dealer, text)
+	# A dealer prompted for "the item code" often types the item's name instead,
+	# sometimes with a typo -- the exact code match is tried first since it's the
+	# intended, unambiguous path; the fuzzy name match is only a fallback for when
+	# that fails (see resolve_item_by_name's own docstring for why this fallback
+	# doesn't also apply to the free-text LLM path).
+	item = resolve_item_mention(dealer, text) or resolve_item_by_name(dealer, text)
 	if not item:
 		reply = f"We couldn't find an item matching '{text}'. Please check the item code and try again."
 	else:
