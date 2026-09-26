@@ -22,6 +22,7 @@ from frappe.utils import now_datetime
 
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
 from dms_erp.pagination import clamp
+from dms_erp.phone_utils import dealer_for_phone
 
 COMMS_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 
@@ -143,14 +144,28 @@ def mark_read(message: str):
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def webhook_inbound_message(
 	secret: str,
-	dealer: str,
-	text: str,
+	dealer: str | None = None,
+	phone: str | None = None,
+	text: str = "",
 	related_type: str = "General",
 	related_reference: str | None = None,
 	sent_at=None,
 ):
-	"""Called by the WhatsApp middleware when a dealer sends a new message."""
+	"""Called by the WhatsApp middleware when a dealer sends a new message.
+
+	Pass either `dealer` (a Customer id, if the caller already resolved it) or
+	`phone` (the raw sender number WhatsApp/whats91/whatever flow tool handed it) —
+	most callers only ever have the phone, since they have no visibility into this
+	app's dealer records, so `phone` is resolved the same normalized way as OTP
+	login (phone_utils.dealer_for_phone). Throws when neither resolves to a known
+	dealer, rather than silently logging an orphan message no one could ever find
+	on a dealer's thread again."""
 	verify_webhook_secret(secret)
+
+	if not dealer and phone:
+		dealer = dealer_for_phone(phone)
+	if not dealer:
+		frappe.throw(_("Could not resolve a dealer for this message (phone {0}).").format(phone), frappe.ValidationError)
 
 	doc = frappe.get_doc(
 		{

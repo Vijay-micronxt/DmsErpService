@@ -35,23 +35,12 @@ from dms_erp.auth.api import _issue_tokens
 from dms_erp.auth.utils import hash_token
 from dms_erp.comms.api import _send_message
 from dms_erp.comms.whats91 import send_otp_template
-from dms_erp.phone_utils import clean_indian_mobile
+from dms_erp.phone_utils import dealer_for_phone
 
 OTP_LENGTH = 6
 OTP_TTL_MINUTES = 5
 MAX_OTP_ATTEMPTS = 5
 OTP_RESEND_COOLDOWN_SECONDS = 60
-
-
-def _dealer_for_phone(phone: str) -> str | None:
-	"""Customer.custom_phone is stored normalized (see sales.dealer_api.create_dealer/
-	update_dealer) -- normalizing the caller's input the same way here is what makes
-	"+91 96202 04657", "9620204657" and "919620204657" all resolve to the same dealer,
-	instead of an exact string match that only works if it was typed exactly as stored."""
-	clean_phone = clean_indian_mobile(phone)
-	if not clean_phone:
-		return None
-	return frappe.db.get_value("Customer", {"custom_phone": clean_phone, "disabled": 0}, "name")
 
 
 def _dealer_portal_user(dealer: str) -> str:
@@ -86,7 +75,7 @@ def request_otp(phone: str):
 	if not phone:
 		frappe.throw(_("phone is required"), frappe.ValidationError)
 
-	dealer = _dealer_for_phone(phone)
+	dealer = dealer_for_phone(phone)
 	if dealer:
 		now = now_datetime()
 		recent = frappe.db.get_value(
@@ -126,7 +115,7 @@ def verify_otp(phone: str, otp: str, device_id: str, device_name: str | None = N
 
 	generic_error = _("Invalid phone number or code.")
 
-	dealer = _dealer_for_phone(phone)
+	dealer = dealer_for_phone(phone)
 	if not dealer:
 		frappe.throw(generic_error, frappe.AuthenticationError)
 

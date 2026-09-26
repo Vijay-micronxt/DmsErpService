@@ -187,7 +187,8 @@ def _validate_dealer_type(dealer_type: str | None):
 
 def _clean_phone_or_throw(phone: str) -> str:
 	"""Stored normalized (bare 10 digits — see phone_utils.clean_indian_mobile)
-	so auth.dealer_api._dealer_for_phone's lookup and comms.whats91's receiverId
+	so phone_utils.dealer_for_phone's lookup (used by auth.dealer_api's OTP login
+	and comms.api's inbound-webhook resolution) and comms.whats91's receiverId
 	both match this dealer regardless of how the number is typed here (+91,
 	spaces, a leading 0). Rejected outright rather than silently dropped, since
 	an un-normalizable phone here would otherwise let a dealer never be able to

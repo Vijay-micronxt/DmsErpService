@@ -68,6 +68,23 @@ class TestCommsApi(FrappeTestCase):
 		self.assertEqual(message["status"], "Delivered")
 		self.assertIsNone(message["sentBy"])
 
+	def test_webhook_inbound_message_resolves_dealer_from_phone(self):
+		dealer = make_dealer("Comms Phone Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_phone", "9620204657")
+
+		# Differently formatted from how it's stored -- same normalization OTP login uses.
+		message = comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, phone="+91 96202 04657", text="Stock hai kya")
+		self.assertEqual(message["dealerId"], dealer)
+		self.assertEqual(message["direction"], "Inbound")
+
+	def test_webhook_inbound_message_rejects_an_unresolvable_phone(self):
+		with self.assertRaises(frappe.ValidationError):
+			comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, phone="9999999999", text="hi")
+
+	def test_webhook_inbound_message_requires_dealer_or_phone(self):
+		with self.assertRaises(frappe.ValidationError):
+			comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, text="hi")
+
 	def test_mark_read_transitions_inbound_message(self):
 		message = comms_api.webhook_inbound_message(secret=TEST_WEBHOOK_SECRET, dealer=self.dealer, text="Any update?")
 		updated = comms_api.mark_read(message["id"])

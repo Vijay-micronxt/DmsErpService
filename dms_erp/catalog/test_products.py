@@ -363,6 +363,34 @@ class TestProducts(FrappeTestCase):
 	def test_resolve_dealer_code_returns_none_for_an_unknown_code(self):
 		self.assertIsNone(catalog_api.resolve_dealer_code(self.dealer, "NO-SUCH-CODE"))
 
+	def test_resolve_item_mention_finds_the_code_inside_a_free_text_message(self):
+		catalog_api.create_product(
+			code="PROD-TEST-M",
+			name="Test Mention Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		catalog_api.update_product(
+			"PROD-TEST-M", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "GVT-6013", "sample_issued": 1}]}
+		)
+
+		# Typed exactly as stored, embedded in a sentence.
+		self.assertEqual(catalog_api.resolve_item_mention(self.dealer, "GVT-6013 stock hai kya")["id"], "PROD-TEST-M")
+		# Space-separated instead of hyphenated -- still resolves via the joined candidates.
+		self.assertEqual(catalog_api.resolve_item_mention(self.dealer, "GVT 6013 available?")["id"], "PROD-TEST-M")
+		# Concatenated, no separator at all -- recovered via the letter/digit boundary split.
+		self.assertEqual(catalog_api.resolve_item_mention(self.dealer, "any GVT6013 in stock")["id"], "PROD-TEST-M")
+		# Lowercase, as typed on a phone keyboard.
+		self.assertEqual(catalog_api.resolve_item_mention(self.dealer, "gvt6013 milega kya")["id"], "PROD-TEST-M")
+
+	def test_resolve_item_mention_returns_none_when_no_known_code_appears(self):
+		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, "bhai kal wale rate wapas bhej do"))
+		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, ""))
+
 	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
 		series_api.create_series(
 			series_name="Product Test Series",
