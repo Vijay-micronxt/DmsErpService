@@ -156,7 +156,14 @@ def receive_webhook(event: str | None = None, data: dict | None = None, **kwargs
 	messageId anywhere when it logs an outbound message (comms.api._send_message
 	never actually calls whats91 for a general message, only send_otp_template
 	does, and only for the OTP template) -- wiring status receipts up is a
-	follow-on once outbound sending for general messages exists."""
+	follow-on once outbound sending for general messages exists.
+
+	Sets frappe.response["success"] directly rather than just returning a value --
+	Frappe wraps a whitelisted method's return value under a "message" key
+	(`{"message": {"success": true}}`), but whats91's own examples show it checking
+	for a literal top-level `success` boolean (its error samples are shaped
+	`{"success": false, "message": "...", ...}`), so the wrapped shape alone reads
+	as a failure to whats91 even though the call succeeded."""
 	header_name = frappe.conf.get("dms_erp_whats91_webhook_header") or WHATS91_WEBHOOK_HEADER_DEFAULT
 	received_token = frappe.local.request.headers.get(header_name) if frappe.local.request else None
 	_verify_whats91_webhook_token(received_token)
@@ -178,4 +185,5 @@ def receive_webhook(event: str | None = None, data: dict | None = None, **kwargs
 			sent_at=data.get("timestamp"),
 		)
 
+	frappe.local.response["success"] = True
 	return {"success": True}
