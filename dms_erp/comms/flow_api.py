@@ -367,7 +367,7 @@ def get_outstanding_due(lead=None, **kwargs):
 
 @frappe.whitelist()
 def get_recent_orders(lead=None, **kwargs):
-	"""Flow event `orders.recent5` ("6. Recent 5 Orders" step) -- also fires
+	"""Flow event `orders.recent5` ("5. Recent 5 Orders" step) -- also fires
 	straight off the main menu button, no dealer-typed input to log here either."""
 	phone, _text = _lead_fields(lead)
 	dealer = dealer_for_phone(phone)
