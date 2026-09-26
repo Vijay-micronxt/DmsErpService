@@ -31,7 +31,7 @@ inbound message itself, which is this module's actual contract.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import get_datetime, now_datetime
 
 from dms_erp.comms.intent import classify_message
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
@@ -40,6 +40,23 @@ from dms_erp.phone_utils import dealer_for_phone
 
 COMMS_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 AUTO_REPLY_INTENTS = {"availability_check", "price_check"}
+
+
+def _parse_sent_at(sent_at):
+	"""whats91 (and potentially other middleware) sends ISO 8601 timestamps
+	("2026-06-05T10:30:00.000Z") -- MariaDB's Datetime column rejects that format
+	outright as a SQL error, not a graceful fallback, so any caller-supplied value
+	always goes through Frappe's own flexible datetime parser before reaching the
+	ORM. Falls back to "now" for a genuinely unparseable value rather than losing
+	the whole inbound message over a timestamp that couldn't be made sense of --
+	same fail-soft-on-metadata philosophy as clean_indian_mobile/_is_send_successful
+	elsewhere in this app."""
+	if not sent_at:
+		return now_datetime()
+	try:
+		return get_datetime(sent_at)
+	except Exception:
+		return now_datetime()
 
 
 def _assert_can_manage_comms():
@@ -191,7 +208,7 @@ def webhook_inbound_message(
 			"status": "Delivered",  # arrived, not yet marked read by staff — see mark_read
 			"related_type": related_type,
 			"related_reference": related_reference,
-			"sent_at": sent_at or now_datetime(),
+			"sent_at": _parse_sent_at(sent_at),
 		}
 	)
 	doc.insert(ignore_permissions=True)
