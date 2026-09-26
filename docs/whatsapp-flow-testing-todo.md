@@ -38,6 +38,14 @@ Status: nothing below has been verified end-to-end yet except the one partial te
       Confirm it still resolves via the fuzzy fallback.
 - [ ] **Hindi/Hinglish sentence** — item name embedded in a full Hindi/Hinglish sentence.
       Confirm it still resolves.
+- [ ] **Confirm-don't-guess on ambiguous names (BRD C.2.1)** — with two similarly-named
+      items in the test dealer's catalog (e.g. two finishes of the same Series, like
+      "Nordic Oak Glossy" / "Nordic Oak Matte"), type just the shared part of the name
+      (e.g. "Nordic Oak"). Confirm the reply lists both candidates by name and code and
+      asks to retype the exact one — it must never silently pick either.
+- [ ] **Confirm-don't-guess on a weak single match** — a badly garbled version of a real
+      item's name with no other close item in the catalog. Confirm it still asks to
+      confirm rather than silently resolving (a "mismatch," not "not found").
 - [ ] **Inquiry side effect** — after any of the above, confirm a new Inquiry (source
       WhatsApp) actually appears in the Inquiries list, not just that the reply text
       looked right.
