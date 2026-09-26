@@ -153,7 +153,23 @@ def _resolve_and_track_items(
 	actually on hand -- observed in production as the literal button label ("🛒
 	Place Order") being treated as the item code all the way through to order
 	creation. A multi-item request only ever carries one order forward regardless,
-	so "the first resolved item" is the only sane choice here, not a compromise."""
+	so "the first resolved item" is the only sane choice here, not a compromise.
+
+	BRD C.2.1: "on a mismatch or multiple candidates, the user/dealer is prompted to
+	confirm the exact code rather than the system guessing." resolve_item_by_name's
+	"ambiguous" status (a weak best match, or a close runner-up -- see its own
+	docstring) is never silently resolved into an answer here: no Inquiry is raised
+	for that segment (there's no confirmed item to raise one against), item_code
+	isn't set from it, and the reply lists the actual candidates by name and code so
+	the dealer can just retype the exact one. Deliberately not a real multi-turn
+	confirmation loop (a dealer tapping "🛒 Place Order" straight after with no
+	item_code set falls through to create_dealer_opportunity's own existing "we
+	couldn't tell which item" reply, itself already correct for exactly this) --
+	whats91's action.api_call nodes only expose two output branches (Success/Error),
+	confirmed against this Flow's own JSON, so a genuine "reply 1 or 2" branch isn't
+	buildable without unconfirmed platform behavior. This closes BRD's actual
+	correctness requirement (never guess) without pretending the interactive
+	round-trip is built too."""
 	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
 	from dms_erp.sales.inquiry_api import _create_inquiry
 
@@ -167,10 +183,21 @@ def _resolve_and_track_items(
 		# intended, unambiguous path; the fuzzy name match is only a fallback for when
 		# that fails (see resolve_item_by_name's own docstring for why this fallback
 		# doesn't also apply to the free-text LLM path).
-		item = resolve_item_mention(dealer, segment) or resolve_item_by_name(dealer, segment)
+		item = resolve_item_mention(dealer, segment)
 		if not item:
-			lines.append(f"We couldn't find an item matching '{segment}'. Please check the item code and try again.")
-			continue
+			outcome = resolve_item_by_name(dealer, segment)
+			if outcome["status"] == "matched":
+				item = outcome["item"]
+			elif outcome["status"] == "ambiguous":
+				names = ", ".join(f"{c['name']} ({c['code']})" for c in outcome["candidates"])
+				lines.append(
+					f"We found more than one possible match for '{segment}': {names}. "
+					f"Please reply with the exact item code you meant."
+				)
+				continue
+			else:
+				lines.append(f"We couldn't find an item matching '{segment}'. Please check the item code and try again.")
+				continue
 
 		if item_code is None:
 			item_code = item["id"]
@@ -196,9 +223,10 @@ def _resolve_and_track_items(
 
 def _alt_item_suggestion(dealer: str, item: dict) -> str | None:
 	"""BRD C.2.2's out-of-stock reply includes "a suggested alternative" --
-	catalog.api._get_alt_item (already surfaced as item['altItemId'] by
-	resolve_item_mention/resolve_item_by_name, both of which return catalog.api's
-	own _serialize) is the existing two-way Item Alternative link. Only worth
+	catalog.api._get_alt_item (already surfaced as item['altItemId'] on every
+	resolved item -- catalog.api's own _serialize, whether it came directly from
+	resolve_item_mention or from resolve_item_by_name's "matched" status) is the
+	existing two-way Item Alternative link. Only worth
 	mentioning when it's both actually in this dealer's own catalog (never
 	recommend an item they can't even see/order, same visibility boundary as the
 	item lookup itself) and itself has real stock -- suggesting another dead end

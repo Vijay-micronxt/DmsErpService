@@ -406,9 +406,10 @@ class TestProducts(FrappeTestCase):
 			"PROD-TEST-N", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "RG-001", "sample_issued": 1}]}
 		)
 
-		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "Royal Glass")["id"], "PROD-TEST-N")
-		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "royal glasy")["id"], "PROD-TEST-N")
-		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "Royal Glassy")["id"], "PROD-TEST-N")
+		for text in ("Royal Glass", "royal glasy", "Royal Glassy"):
+			result = catalog_api.resolve_item_by_name(self.dealer, text)
+			self.assertEqual(result["status"], "matched")
+			self.assertEqual(result["item"]["id"], "PROD-TEST-N")
 
 	def test_resolve_item_by_name_finds_the_name_inside_a_hindi_sentence(self):
 		catalog_api.create_product(
@@ -430,7 +431,8 @@ class TestProducts(FrappeTestCase):
 		resolved = catalog_api.resolve_item_by_name(
 			self.dealer, "Royal Glossy के लिए जाँच कर सकते हैं?"
 		)
-		self.assertEqual(resolved["id"], "PROD-TEST-HI")
+		self.assertEqual(resolved["status"], "matched")
+		self.assertEqual(resolved["item"]["id"], "PROD-TEST-HI")
 
 	def test_resolve_item_by_name_matches_a_substring_of_the_real_item_code(self):
 		# A catalog-visible item with no private Item Dealer Code at all -- a dealer
@@ -451,12 +453,14 @@ class TestProducts(FrappeTestCase):
 		scoped_dealer = make_dealer("Dealer Catalog Substring Test Dealer")
 		_set_product_visibility(scoped_dealer, "PT-4040-RUSTIC-GREY", True)
 
-		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "RUSTIC-GREY")["id"], "PT-4040-RUSTIC-GREY")
-		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "rustic-grey")["id"], "PT-4040-RUSTIC-GREY")
+		for text in ("RUSTIC-GREY", "rustic-grey"):
+			result = catalog_api.resolve_item_by_name(scoped_dealer, text)
+			self.assertEqual(result["status"], "matched")
+			self.assertEqual(result["item"]["id"], "PT-4040-RUSTIC-GREY")
 
 	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
-		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"))
-		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, ""))
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"), {"status": "none"})
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, ""), {"status": "none"})
 
 	def test_resolve_item_by_name_never_matches_an_item_outside_the_dealers_catalog(self):
 		# A dealer with no Dealer Catalog record at all falls back to the full
@@ -488,8 +492,90 @@ class TestProducts(FrappeTestCase):
 		scoped_dealer = make_dealer("Dealer Catalog Scoped Test Dealer")
 		_set_product_visibility(scoped_dealer, "PROD-TEST-INSIDE", True)
 
-		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "Inside Catalog Item")["id"], "PROD-TEST-INSIDE")
-		self.assertIsNone(catalog_api.resolve_item_by_name(scoped_dealer, "Outside Catalog Item"))
+		inside = catalog_api.resolve_item_by_name(scoped_dealer, "Inside Catalog Item")
+		self.assertEqual(inside["status"], "matched")
+		self.assertEqual(inside["item"]["id"], "PROD-TEST-INSIDE")
+		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "Outside Catalog Item"), {"status": "none"})
+
+	def test_resolve_item_by_name_asks_to_confirm_when_two_items_are_a_close_tie(self):
+		# BRD C.2.1's own example: "one finish or sub-type mistaken for another" --
+		# two items from the same family, a query naming only the shared part must
+		# never silently guess which one was meant.
+		catalog_api.create_product(
+			code="PROD-TEST-GLOSSY",
+			name="Nordic Oak Glossy",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		catalog_api.create_product(
+			code="PROD-TEST-MATTE",
+			name="Nordic Oak Matte",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		scoped_dealer = make_dealer("Ambiguous Match Test Dealer")
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		_set_product_visibility(scoped_dealer, "PROD-TEST-GLOSSY", True)
+		_set_product_visibility(scoped_dealer, "PROD-TEST-MATTE", True)
+
+		result = catalog_api.resolve_item_by_name(scoped_dealer, "Nordic Oak")
+
+		self.assertEqual(result["status"], "ambiguous")
+		candidate_ids = {c["id"] for c in result["candidates"]}
+		self.assertEqual(candidate_ids, {"PROD-TEST-GLOSSY", "PROD-TEST-MATTE"})
+
+	def test_resolve_item_by_name_asks_to_confirm_on_a_low_confidence_single_match(self):
+		# Only one plausible item exists, but the match is a "mismatch" per BRD
+		# C.2.1's own wording (below the confidence bar) -- still not confident
+		# enough to answer directly, even with no competing candidate.
+		catalog_api.create_product(
+			code="PROD-TEST-LOWCONF",
+			name="Nordic Oak Glossy",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		scoped_dealer = make_dealer("Low Confidence Match Test Dealer")
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		_set_product_visibility(scoped_dealer, "PROD-TEST-LOWCONF", True)
+
+		result = catalog_api.resolve_item_by_name(scoped_dealer, "nordik glosi")
+
+		self.assertEqual(result["status"], "ambiguous")
+		self.assertEqual([c["id"] for c in result["candidates"]], ["PROD-TEST-LOWCONF"])
+
+	def test_resolve_item_by_name_returns_none_when_even_the_best_guess_is_too_weak(self):
+		catalog_api.create_product(
+			code="PROD-TEST-TOOFAR",
+			name="Nordic Oak Glossy",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		scoped_dealer = make_dealer("No Plausible Match Test Dealer")
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		_set_product_visibility(scoped_dealer, "PROD-TEST-TOOFAR", True)
+
+		self.assertEqual(
+			catalog_api.resolve_item_by_name(scoped_dealer, "nordik oke"), {"status": "none"}
+		)
 
 	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
 		series_api.create_series(

@@ -413,7 +413,10 @@ class TestGetItemInfo(FrappeTestCase):
 		self, mock_mention, mock_by_name, mock_create_inquiry, mock_stock, mock_price
 	):
 		mock_mention.return_value = None
-		mock_by_name.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Royal Glassy"}
+		mock_by_name.return_value = {
+			"status": "matched",
+			"item": {"id": "GVT-6013", "code": "GVT-6013", "name": "Royal Glassy"},
+		}
 		mock_create_inquiry.return_value = {"id": "INQ-0003"}
 		mock_stock.return_value = 12.0
 		mock_price.return_value = None
@@ -439,6 +442,38 @@ class TestGetItemInfo(FrappeTestCase):
 			flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
 
 		mock_by_name.assert_not_called()
+
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_by_name")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_ambiguous_name_match_asks_to_confirm_instead_of_guessing(
+		self, mock_mention, mock_by_name, mock_create_inquiry
+	):
+		# BRD C.2.1: "on a mismatch or multiple candidates ... prompted to confirm the
+		# exact code rather than the system guessing." Never resolve to either
+		# candidate silently -- this is exactly the "one finish/sub-type mistaken for
+		# another" scenario the BRD names.
+		mock_mention.return_value = None
+		mock_by_name.return_value = {
+			"status": "ambiguous",
+			"candidates": [
+				{"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak Glossy"},
+				{"id": "GVT-6014", "code": "GVT-6014", "name": "Nordic Oak Matte"},
+			],
+		}
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "Nordic Oak"})
+
+		self.assertIn("Nordic Oak Glossy", result["message"])
+		self.assertIn("GVT-6013", result["message"])
+		self.assertIn("Nordic Oak Matte", result["message"])
+		self.assertIn("GVT-6014", result["message"])
+		self.assertIn("exact item code", result["message"])
+		# No confirmed item -- neither an Inquiry raised nor item_code carried
+		# forward into "🛒 Place Order" (which would otherwise silently place an
+		# order for whichever candidate happened to be resolved first).
+		mock_create_inquiry.assert_not_called()
+		self.assertIsNone(result["item_code"])
 
 	@patch("dms_erp.pricing.api.get_price_for_dealer")
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")

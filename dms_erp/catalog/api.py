@@ -504,8 +504,18 @@ def resolve_item_mention(dealer: str, text: str) -> dict | None:
 
 _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
 
+# BRD C.2.1: "a closest-match search (target ~85-90% confidence) is applied; on a
+# mismatch or multiple candidates, the user/dealer is prompted to confirm the exact
+# code rather than the system guessing (this prevents the variant-confusion errors
+# seen in the past, e.g. one finish or sub-type mistaken for another)." A candidate
+# below this ratio is a "mismatch" even when it's the only plausible one; a runner-up
+# within _AMBIGUOUS_MATCH_GAP of the winner is "multiple candidates" even when the
+# winner alone would have cleared the bar -- either case must ask, never guess.
+_CONFIDENT_MATCH_RATIO = 0.85
+_AMBIGUOUS_MATCH_GAP = 0.05
 
-def resolve_item_by_name(dealer: str, text: str) -> dict | None:
+
+def resolve_item_by_name(dealer: str, text: str) -> dict:
 	"""Fallback for comms.flow_api.get_item_info, tried only once resolve_item_mention's
 	exact private-dealer-code match has already failed. Scoped to
 	dealer_catalog_api.catalog_for(dealer) -- the dealer's actual visible-and-sellable
@@ -521,7 +531,8 @@ def resolve_item_by_name(dealer: str, text: str) -> dict | None:
 	1. Exact, case-insensitive substring containment against the item's own code
 	   ("RUSTIC-GREY" inside "PT-4040-RUSTIC-GREY") -- a dealer shortens the real
 	   item code at least as often as they type its name, and this needs no fuzzy
-	   tolerance since it's already an exact match once case is ignored.
+	   tolerance since it's already an exact match once case is ignored. Always
+	   confident -- there's no ratio to be unsure about here.
 	2. A fuzzy match against the item's name, tolerant of a minor typo ("Royal Glass"
 	   for "Royal Glassy") and of the name being wrapped inside a full sentence --
 	   often in Hindi/Hinglish, with the item name itself still typed in Latin script
@@ -529,52 +540,76 @@ def resolve_item_by_name(dealer: str, text: str) -> dict | None:
 	   against a two-word item name washes the match out with unrelated surrounding
 	   text, so this extracts just the Latin-script words and fuzzy-matches short
 	   windows of them (1-3 consecutive words -- the shape an item name actually
-	   takes) rather than the raw text as one blob; the raw text is still tried too;
-	   whichever window scores highest overall wins.
+	   takes) rather than the raw text as one blob; the raw text is still tried too.
+	   Every plausible name is ranked (not just the single best), so a close runner-up
+	   is never silently thrown away -- see _CONFIDENT_MATCH_RATIO/_AMBIGUOUS_MATCH_GAP.
 
 	Deliberately NOT used by the free-text LLM path (comms/api.py's _maybe_auto_reply):
 	there, item_mention is an arbitrary phrase pulled out of a longer, unprompted
 	sentence, where either strategy above risks confidently resolving to the wrong
 	item. Here the dealer's entire reply is a single, deliberate answer to a single
-	question, so a close match is a safe bet."""
+	question, so a close match is worth ranking at all -- though per BRD C.2.1, still
+	not worth guessing on when it isn't close enough.
+
+	Returns one of three shapes, discriminated by "status":
+	  {"status": "matched", "item": {...}}          -- confident enough to answer directly.
+	  {"status": "ambiguous", "candidates": [...]}  -- BRD's "mismatch or multiple
+	      candidates" case: the best fuzzy match didn't clear the confidence bar, or a
+	      close runner-up exists. Never guesses here -- candidates is the top 1-3
+	      plausible items, for the caller to ask the dealer to confirm/retype instead.
+	  {"status": "none"}                            -- nothing plausible at all."""
 	text = (text or "").strip()
 	if not text:
-		return None
+		return {"status": "none"}
 
 	from dms_erp.catalog.dealer_catalog_api import catalog_for
 
 	item_codes = catalog_for(dealer)
 	if not item_codes:
-		return None
+		return {"status": "none"}
 	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "item_name"])
 	if not items:
-		return None
+		return {"status": "none"}
 
 	upper_text = text.upper()
 	for item in items:
 		if upper_text in item.name.upper():
-			return _serialize(frappe.get_doc("Item", item.name))
+			return {"status": "matched", "item": _serialize(frappe.get_doc("Item", item.name))}
 
 	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
 	if not by_lower_name:
-		return None
+		return {"status": "none"}
 
 	words = _LATIN_WORD_RE.findall(text)
-	candidates = {" ".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(i + 4, len(words) + 1))}
-	candidates.add(text)  # covers a name that doesn't split cleanly into separate words
+	candidate_phrases = {
+		" ".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(i + 4, len(words) + 1))
+	}
+	candidate_phrases.add(text)  # covers a name that doesn't split cleanly into separate words
 
-	best_name, best_ratio = None, 0.0
-	for candidate in candidates:
-		match = difflib.get_close_matches(candidate.lower(), by_lower_name.keys(), n=1, cutoff=0.6)
-		if not match:
-			continue
-		ratio = difflib.SequenceMatcher(None, candidate.lower(), match[0]).ratio()
-		if ratio > best_ratio:
-			best_name, best_ratio = match[0], ratio
+	# Every plausible item name's own best score against any candidate phrase -- not
+	# just the single overall winner -- so a close runner-up is visible below, rather
+	# than being silently overwritten the way a single best_name/best_ratio pair would.
+	scores: dict[str, float] = {}
+	for phrase in candidate_phrases:
+		for match in difflib.get_close_matches(phrase.lower(), by_lower_name.keys(), n=3, cutoff=0.6):
+			ratio = difflib.SequenceMatcher(None, phrase.lower(), match).ratio()
+			if ratio > scores.get(match, 0.0):
+				scores[match] = ratio
 
-	if not best_name:
-		return None
-	return _serialize(frappe.get_doc("Item", by_lower_name[best_name]))
+	if not scores:
+		return {"status": "none"}
+
+	ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+	best_name, best_ratio = ranked[0]
+	runner_up_is_close = len(ranked) > 1 and (best_ratio - ranked[1][1]) < _AMBIGUOUS_MATCH_GAP
+
+	if best_ratio < _CONFIDENT_MATCH_RATIO or runner_up_is_close:
+		return {
+			"status": "ambiguous",
+			"candidates": [_serialize(frappe.get_doc("Item", by_lower_name[name])) for name, _ in ranked[:3]],
+		}
+
+	return {"status": "matched", "item": _serialize(frappe.get_doc("Item", by_lower_name[best_name]))}
 
 
 @frappe.whitelist(methods=["GET"])
