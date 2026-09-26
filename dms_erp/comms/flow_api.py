@@ -29,7 +29,17 @@ before this module ever runs.
 Every call also logs the dealer's turn and our reply as a genuine WhatsApp Message
 (comms.api._log_inbound_message/_send_message) -- the whole point of building these is
 so a Flow-driven conversation shows up in Communications exactly like a free-text one
-does, not as a second, invisible channel (see comms/api.py's own docstring)."""
+does, not as a second, invisible channel (see comms/api.py's own docstring).
+
+get_item_info also raises a real Inquiry (source "WhatsApp") for every resolved item,
+same as comms.api._maybe_auto_reply already does for the free-text path -- without it,
+a Flow-driven "is this in stock" check is invisible to purchase.reorder_api's
+missedDemandQty (Inquiry qty already Out of Stock/Pre-order Required at creation, per
+sales.inquiry_api's own status-from-stock derivation), which is the actual reorder
+signal a dealer typing "Royal Glass" into the Flow is supposed to feed. Unlike
+_maybe_auto_reply, a failure to create one (not in this dealer's catalog, not
+sellable) doesn't cancel the reply -- the dealer asked a direct question and gets a
+direct answer either way; only the internal demand-tracking side effect is skipped."""
 
 import json
 
@@ -56,6 +66,7 @@ def get_item_info(lead=None, **kwargs):
 	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability" step):
 	`lead.message` is the item code the dealer typed after being prompted for one."""
 	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
+	from dms_erp.sales.inquiry_api import _create_inquiry
 	from dms_erp.warehouse.utils import total_stock_for_item
 
 	phone, text = _lead_fields(lead)
@@ -73,14 +84,24 @@ def get_item_info(lead=None, **kwargs):
 	# that fails (see resolve_item_by_name's own docstring for why this fallback
 	# doesn't also apply to the free-text LLM path).
 	item = resolve_item_mention(dealer, text) or resolve_item_by_name(dealer, text)
+	related_type, related_reference = "General", None
 	if not item:
 		reply = f"We couldn't find an item matching '{text}'. Please check the item code and try again."
 	else:
+		try:
+			inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=1, source="WhatsApp")
+			related_type, related_reference = "Inquiry", inquiry["id"]
+		except (frappe.PermissionError, frappe.ValidationError):
+			# Not in this dealer's assigned catalog, or no longer sellable -- the
+			# dealer still gets a direct stock answer below; only the internal
+			# demand-tracking side effect is skipped (see this module's docstring).
+			pass
+
 		on_hand = total_stock_for_item(item["id"])
 		if on_hand > 0:
 			reply = f"{item['name']} ({item['code']}) is in stock — {int(on_hand)} boxes available."
 		else:
 			reply = f"{item['name']} ({item['code']}) is currently out of stock."
 
-	_send_message(dealer, reply, related_type="General")
+	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
 	return {"message": reply}
