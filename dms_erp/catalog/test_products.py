@@ -410,6 +410,28 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "royal glasy")["id"], "PROD-TEST-N")
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "Royal Glassy")["id"], "PROD-TEST-N")
 
+	def test_resolve_item_by_name_finds_the_name_inside_a_hindi_sentence(self):
+		catalog_api.create_product(
+			code="PROD-TEST-HI",
+			name="Royal Glassy",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		catalog_api.update_product(
+			"PROD-TEST-HI", {"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "RG-002", "sample_issued": 1}]}
+		)
+
+		# The item name is typed in Latin script even mid-sentence in Hindi; a typo
+		# ("Glossy" for "Glassy") on top of that must still resolve.
+		resolved = catalog_api.resolve_item_by_name(
+			self.dealer, "Royal Glossy के लिए जाँच कर सकते हैं?"
+		)
+		self.assertEqual(resolved["id"], "PROD-TEST-HI")
+
 	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
 		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"))
 		self.assertIsNone(catalog_api.resolve_item_by_name(self.dealer, ""))

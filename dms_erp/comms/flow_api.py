@@ -42,13 +42,14 @@ sellable) doesn't cancel the reply -- the dealer asked a direct question and get
 direct answer either way; only the internal demand-tracking side effect is skipped.
 
 A dealer prompted once for "the item code" often answers with several at once
-("RUSTIC-GREY, Royal Glossy") -- _split_item_mentions splits on the obvious list
-delimiters (comma, "and", "&", newline) and each segment is resolved and replied to
-independently (one line, one Inquiry each), rather than treating the whole message as
-a single lookup that only ever finds the first item and silently drops the rest.
-Deterministic splitting, not an LLM call -- this is a list-parsing problem, not an
-intent-understanding one, and the free-text LLM path's own item_mention is deliberately
-single-item already (see comms/intent.py)."""
+("RUSTIC-GREY, Royal Glossy", or "RUSTIC-GREY और Royal Glossy" in Hindi) --
+_split_item_mentions splits on the obvious list delimiters (comma, "and"/"aur"/"और",
+"&", newline) and each segment is resolved and replied to independently (one line, one
+Inquiry each), rather than treating the whole message as a single lookup that only
+ever finds the first item and silently drops the rest. Deterministic splitting, not an
+LLM call -- this is a list-parsing problem, not an intent-understanding one, and the
+free-text LLM path's own item_mention is deliberately single-item already (see
+comms/intent.py)."""
 
 import json
 import re
@@ -58,7 +59,7 @@ import frappe
 from dms_erp.comms.api import _log_inbound_message, _send_message
 from dms_erp.phone_utils import dealer_for_phone
 
-_ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b)\s*", re.IGNORECASE)
+_ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b|\baur\b|और)\s*", re.IGNORECASE)
 
 
 def _lead_fields(lead) -> tuple[str | None, str]:
