@@ -31,7 +31,7 @@ inbound message itself, which is this module's actual contract.
 
 import frappe
 from frappe import _
-from frappe.utils import get_datetime, now_datetime
+from frappe.utils import get_datetime, get_system_timezone, now_datetime
 
 from dms_erp.comms.intent import classify_message
 from dms_erp.comms.utils import MESSAGE_TEMPLATES, verify_webhook_secret
@@ -43,20 +43,33 @@ AUTO_REPLY_INTENTS = {"availability_check", "price_check"}
 
 
 def _parse_sent_at(sent_at):
-	"""whats91 (and potentially other middleware) sends ISO 8601 timestamps
-	("2026-06-05T10:30:00.000Z") -- MariaDB's Datetime column rejects that format
-	outright as a SQL error, not a graceful fallback, so any caller-supplied value
-	always goes through Frappe's own flexible datetime parser before reaching the
-	ORM. Falls back to "now" for a genuinely unparseable value rather than losing
-	the whole inbound message over a timestamp that couldn't be made sense of --
-	same fail-soft-on-metadata philosophy as clean_indian_mobile/_is_send_successful
+	"""whats91 (and potentially other middleware) sends ISO 8601 timestamps with a
+	"Z"/UTC offset ("2026-06-05T10:30:00.000Z") -- two separate problems, not one:
+	(1) MariaDB's Datetime column rejects the raw string outright as a SQL error,
+	not a graceful fallback, so any caller-supplied value always goes through
+	Frappe's own flexible datetime parser first; (2) that parser preserves the
+	timezone as an *aware* datetime, which MariaDB's Datetime column also rejects
+	outright (a different SQL error) since the column stores naive values that,
+	everywhere else in this app (now_datetime()), mean local system time, not UTC
+	-- inserting a bare UTC value here would both fail the insert and, had it not,
+	have silently misordered this dealer's inbound messages against their
+	outbound ones by the system's UTC offset. So an aware result is converted to
+	system-timezone wall-clock time and then stripped to naive to match. Falls
+	back to "now" for a genuinely unparseable value rather than losing the whole
+	inbound message over a timestamp that couldn't be made sense of -- same
+	fail-soft-on-metadata philosophy as clean_indian_mobile/_is_send_successful
 	elsewhere in this app."""
 	if not sent_at:
 		return now_datetime()
 	try:
-		return get_datetime(sent_at)
+		parsed = get_datetime(sent_at)
 	except Exception:
 		return now_datetime()
+	if parsed.tzinfo is not None:
+		from zoneinfo import ZoneInfo
+
+		parsed = parsed.astimezone(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
+	return parsed
 
 
 def _assert_can_manage_comms():

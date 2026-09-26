@@ -241,17 +241,28 @@ class TestCommsAutoReply(FrappeTestCase):
 
 
 class TestParseSentAt(FrappeTestCase):
-	"""Regression coverage for a real bug found via a live end-to-end test: MariaDB's
-	Datetime column rejects an ISO 8601 string outright (a SQL error, not a graceful
-	no-op), and whats91 -- like WhatsApp Business API generally -- always sends
-	timestamps in that format."""
+	"""Regression coverage for two real bugs found via a live end-to-end test, both on
+	the same line: MariaDB's Datetime column rejects an ISO 8601 string outright (a
+	SQL error, not a graceful no-op) -- and separately rejects a timezone-*aware*
+	datetime just as hard, so parsing alone wasn't the whole fix. whats91 -- like
+	WhatsApp Business API generally -- always sends "Z"-suffixed UTC timestamps."""
 
 	def test_returns_now_for_none(self):
 		self.assertIsNotNone(comms_api._parse_sent_at(None))
 
-	def test_parses_an_iso_8601_utc_timestamp(self):
+	def test_parses_an_iso_8601_utc_timestamp_as_naive_system_time(self):
+		from zoneinfo import ZoneInfo
+
+		from frappe.utils import get_system_timezone
+
 		parsed = comms_api._parse_sent_at("2026-09-26T09:00:00.000Z")
-		self.assertEqual((parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute), (2026, 9, 26, 9, 0))
+
+		self.assertIsNone(parsed.tzinfo)  # MariaDB's Datetime column can't store an aware value
+		expected = comms_api.get_datetime("2026-09-26T09:00:00.000Z").astimezone(ZoneInfo(get_system_timezone()))
+		self.assertEqual(
+			(parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute),
+			(expected.year, expected.month, expected.day, expected.hour, expected.minute),
+		)
 
 	def test_falls_back_to_now_for_an_unparseable_string(self):
 		self.assertIsNotNone(comms_api._parse_sent_at("not a real timestamp"))
