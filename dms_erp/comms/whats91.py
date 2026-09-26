@@ -41,6 +41,14 @@ dashboard "Endpoint URL" at THIS function
                                       already uses; this module supplies it
                                       internally when calling that function,
                                       it's never exposed to whats91 itself
+
+Every call to `receive_webhook` -- rejected, malformed, or successful -- is
+recorded in the "Whats91 Webhook Log" doctype (Comms module, visible in the
+desk at /app/whats91-webhook-log) with the raw request body, so "was this
+call even received" is answerable directly from that list without needing
+to reason about dealer resolution, LLM classification, or site routing at
+all -- those are all downstream of, and irrelevant to, whether whats91's
+delivery reached this endpoint in the first place.
 """
 
 import frappe
@@ -142,6 +150,39 @@ def _verify_whats91_webhook_token(received_token: str | None):
 		frappe.throw("Invalid whats91 webhook token.", frappe.PermissionError)
 
 
+def _log_webhook_attempt(event, data, raw_body):
+	"""Best-effort, unconditional record of every call this endpoint receives --
+	deliberately separate from whether the call succeeds, so a wrong token, a
+	malformed payload, or a bug three layers deep are all just as visible here as
+	a clean success. Never allowed to affect the real webhook's own outcome (see
+	_finish_webhook_log) -- a logging bug must never turn a legitimate whats91
+	delivery into a failure, and must never mask a real rejection either."""
+	try:
+		log = frappe.get_doc(
+			{
+				"doctype": "Whats91 Webhook Log",
+				"event": event,
+				"phone": (data or {}).get("from"),
+				"raw_body": raw_body,
+			}
+		)
+		log.insert(ignore_permissions=True)
+		return log
+	except Exception:
+		return None
+
+
+def _finish_webhook_log(log, outcome: str, error: str | None = None):
+	if not log:
+		return
+	try:
+		log.db_set("outcome", outcome, update_modified=False)
+		if error:
+			log.db_set("error", error[:140], update_modified=False)
+	except Exception:
+		pass
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def receive_webhook(event: str | None = None, data: dict | None = None, **kwargs):
 	"""whats91's own webhook delivery -- see this module's docstring for the event
@@ -163,27 +204,46 @@ def receive_webhook(event: str | None = None, data: dict | None = None, **kwargs
 	(`{"message": {"success": true}}`), but whats91's own examples show it checking
 	for a literal top-level `success` boolean (its error samples are shaped
 	`{"success": false, "message": "...", ...}`), so the wrapped shape alone reads
-	as a failure to whats91 even though the call succeeded."""
-	header_name = frappe.conf.get("dms_erp_whats91_webhook_header") or WHATS91_WEBHOOK_HEADER_DEFAULT
-	received_token = frappe.local.request.headers.get(header_name) if frappe.local.request else None
-	_verify_whats91_webhook_token(received_token)
+	as a failure to whats91 even though the call succeeded.
+
+	Every call is recorded in "Whats91 Webhook Log" (see that doctype and
+	_log_webhook_attempt) regardless of outcome -- built after repeated confusion
+	in production over whether whats91's deliveries were even reaching this site
+	at all, independent of anything downstream (dealer resolution, site/routing
+	mixups, permissions) that might otherwise hide a real inbound message."""
+	raw_body = None
+	if frappe.local.request is not None:
+		try:
+			raw_body = frappe.local.request.get_data(as_text=True)
+		except Exception:
+			raw_body = None
 
 	data = data or {}
+	log = _log_webhook_attempt(event, data, raw_body)
 
-	if event == "message.inbound.text":
-		phone = data.get("from")
-		text = data.get("text")
-		if not phone or not text:
-			frappe.throw("Malformed message.inbound.text payload -- missing 'from' or 'text'.", frappe.ValidationError)
+	try:
+		header_name = frappe.conf.get("dms_erp_whats91_webhook_header") or WHATS91_WEBHOOK_HEADER_DEFAULT
+		received_token = frappe.local.request.headers.get(header_name) if frappe.local.request else None
+		_verify_whats91_webhook_token(received_token)
 
-		from dms_erp.comms.api import webhook_inbound_message
+		if event == "message.inbound.text":
+			phone = data.get("from")
+			text = data.get("text")
+			if not phone or not text:
+				frappe.throw("Malformed message.inbound.text payload -- missing 'from' or 'text'.", frappe.ValidationError)
 
-		webhook_inbound_message(
-			secret=frappe.conf.get("dms_erp_whatsapp_webhook_secret"),
-			phone=phone,
-			text=text,
-			sent_at=data.get("timestamp"),
-		)
+			from dms_erp.comms.api import webhook_inbound_message
 
+			webhook_inbound_message(
+				secret=frappe.conf.get("dms_erp_whatsapp_webhook_secret"),
+				phone=phone,
+				text=text,
+				sent_at=data.get("timestamp"),
+			)
+	except Exception as e:
+		_finish_webhook_log(log, "Error", str(e))
+		raise
+
+	_finish_webhook_log(log, "Success")
 	frappe.local.response["success"] = True
 	return {"success": True}

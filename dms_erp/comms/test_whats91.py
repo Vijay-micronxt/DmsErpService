@@ -168,6 +168,17 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			whats91.receive_webhook(event="message.inbound.text", data={"from": "919900011122", "text": "hi"})
 
+	def test_a_rejected_call_is_still_logged_as_an_error(self):
+		frappe.local.request = _FakeRequest({whats91.WHATS91_WEBHOOK_HEADER_DEFAULT: "wrong"})
+		with self.assertRaises(frappe.PermissionError):
+			whats91.receive_webhook(event="message.inbound.text", data={"from": "919900011122", "text": "hi"})
+
+		log = frappe.get_last_doc("Whats91 Webhook Log")
+		self.assertEqual(log.event, "message.inbound.text")
+		self.assertEqual(log.phone, "919900011122")
+		self.assertEqual(log.outcome, "Error")
+		self.assertTrue(log.error)
+
 	@patch("dms_erp.comms.api.webhook_inbound_message")
 	def test_translates_an_inbound_text_event_into_the_generic_webhook_call(self, mock_webhook):
 		result = whats91.receive_webhook(
@@ -189,11 +200,20 @@ class TestWhats91ReceiveWebhook(FrappeTestCase):
 		self.assertEqual(result, {"success": True})
 		self.assertTrue(frappe.local.response.get("success"))
 
+		log = frappe.get_last_doc("Whats91 Webhook Log")
+		self.assertEqual(log.event, "message.inbound.text")
+		self.assertEqual(log.phone, "919900011122")
+		self.assertEqual(log.outcome, "Success")
+
 	def test_rejects_a_malformed_inbound_text_event(self):
 		with self.assertRaises(frappe.ValidationError):
 			whats91.receive_webhook(event="message.inbound.text", data={"text": "hi, no sender"})
 		with self.assertRaises(frappe.ValidationError):
 			whats91.receive_webhook(event="message.inbound.text", data={"from": "919900011122"})
+
+		log = frappe.get_last_doc("Whats91 Webhook Log")
+		self.assertEqual(log.outcome, "Error")
+		self.assertIn("Malformed", log.error)
 
 	@patch("dms_erp.comms.api.webhook_inbound_message")
 	def test_acknowledges_but_does_not_act_on_an_unhandled_event(self, mock_webhook):
