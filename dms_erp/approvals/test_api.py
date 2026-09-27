@@ -5,7 +5,7 @@ from dms_erp.approvals import api as approvals_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.sales import quotation_api
+from dms_erp.sales import inquiry_api, order_api, quotation_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 TEST_PASSWORD = "Pa$$w0rd123!"
@@ -41,6 +41,10 @@ class TestApprovalsApi(FrappeTestCase):
 		cls.priced_item = make_item("APR-PRICED", "Vitrified")
 		pricing_api.ensure_price_record(cls.priced_item, cls.supplier, 400, 25, "2026-08-01")
 		pricing_api.approve_price(item=cls.priced_item, final_price=500, reason="Launch")
+
+		cls.second_item = make_item("APR-SECOND", "Vitrified")
+		pricing_api.ensure_price_record(cls.second_item, cls.supplier, 200, 25, "2026-08-01")
+		pricing_api.approve_price(item=cls.second_item, final_price=250, reason="Launch")
 
 		cls.sales_user = _make_sales_only_user("approvals.sales@pacific.test")
 
@@ -163,3 +167,138 @@ class TestApprovalsApi(FrappeTestCase):
 		self.assertGreaterEqual(result["total"], 1)
 		self.assertTrue(all(item["status"] == "Pending" for item in result["items"]))
 		self.assertTrue(all(item["triggerType"] == "Channel Override" for item in result["items"]))
+
+	# ---------------- gate_authorized_action, exercised via quotation line edits (trigger #5) ----------------
+
+	def _make_quotation(self, qty=10):
+		return quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], markup_pct=12
+		)
+
+	def test_authorized_user_can_update_a_line_immediately_and_logs_an_approved_request(self):
+		quotation = self._make_quotation(qty=20)
+		before = frappe.db.count("Approval Request")
+
+		updated = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 30)
+		self.assertEqual(updated["lines"][0]["qty"], 30)
+		self.assertNotEqual(updated["id"], quotation["id"])  # amend cycle -> new document name
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Amend Or Cancel Submitted Document")
+		self.assertEqual(approval.status, "Approved")
+		self.assertEqual(approval.reference_doctype, "Quotation")
+		self.assertEqual(approval.reference_name, updated["id"])
+
+	def test_unauthorized_user_line_edit_is_queued_instead_of_applied(self):
+		quotation = self._make_quotation(qty=21)
+
+		frappe.set_user(self.sales_user)
+		result = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 40)
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["status"], "Pending")
+		self.assertEqual(result["approval"]["triggerType"], "Amend Or Cancel Submitted Document")
+		self.assertEqual(result["approval"]["referenceDoctype"], "Quotation")
+		self.assertEqual(result["approval"]["referenceName"], quotation["id"])
+
+		# The quotation itself must be untouched -- still the original doc, original qty.
+		frappe.set_user("Administrator")
+		untouched = quotation_api.get_quotation(quotation["id"])
+		self.assertEqual(untouched["lines"][0]["qty"], 21)
+
+	def test_approving_a_queued_line_edit_amends_the_quotation(self):
+		quotation = self._make_quotation(qty=22)
+
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 50)
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Approved")
+
+		self.assertEqual(decided["status"], "Approved")
+		self.assertEqual(decided["referenceDoctype"], "Quotation")
+		self.assertNotEqual(decided["referenceName"], quotation["id"])  # the amended copy
+
+		amended = quotation_api.get_quotation(decided["referenceName"])
+		self.assertEqual(amended["lines"][0]["qty"], 50)
+
+	def test_rejecting_a_queued_line_edit_leaves_the_quotation_untouched(self):
+		quotation = self._make_quotation(qty=23)
+
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 60)
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Rejected")
+		self.assertEqual(decided["status"], "Rejected")
+
+		untouched = quotation_api.get_quotation(quotation["id"])
+		self.assertEqual(untouched["lines"][0]["qty"], 23)
+
+	def test_authorized_user_can_add_and_remove_a_line_immediately(self):
+		quotation = self._make_quotation(qty=24)
+
+		added = quotation_api.add_quotation_line(quotation["id"], self.second_item, 5)
+		self.assertEqual(len(added["lines"]), 2)
+
+		removed = quotation_api.remove_quotation_line(added["id"], self.priced_item)
+		self.assertEqual(len(removed["lines"]), 1)
+		self.assertEqual(removed["lines"][0]["itemCode"], self.second_item)
+
+	# ---------------- gate_authorized_action, exercised via order cancellation (trigger #5) ----------------
+
+	def _make_order(self, qty=10):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=qty, source="Phone")
+		return order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+		)
+
+	def test_authorized_user_can_cancel_an_order_immediately_and_logs_an_approved_request(self):
+		order = self._make_order(qty=16)
+		before = frappe.db.count("Approval Request")
+
+		cancelled = order_api.advance_order_stage(order["id"], "Cancelled")
+		self.assertEqual(cancelled["id"], order["id"])
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Amend Or Cancel Submitted Document")
+		self.assertEqual(approval.status, "Approved")
+		self.assertEqual(approval.reference_doctype, "Sales Order")
+		self.assertEqual(approval.reference_name, order["id"])
+
+	def test_unauthorized_user_order_cancel_is_queued_instead_of_applied(self):
+		order = self._make_order(qty=17)
+
+		frappe.set_user(self.sales_user)
+		result = order_api.advance_order_stage(order["id"], "Cancelled")
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["status"], "Pending")
+		self.assertEqual(result["approval"]["referenceDoctype"], "Sales Order")
+		self.assertEqual(result["approval"]["referenceName"], order["id"])
+
+		frappe.set_user("Administrator")
+		untouched = order_api.get_order(order["id"])
+		self.assertNotEqual(untouched["stage"], "Cancelled")
+
+	def test_approving_a_queued_order_cancel_cancels_it(self):
+		order = self._make_order(qty=18)
+
+		frappe.set_user(self.sales_user)
+		queued = order_api.advance_order_stage(order["id"], "Cancelled")
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Approved")
+		self.assertEqual(decided["status"], "Approved")
+		self.assertEqual(decided["referenceName"], order["id"])
+
+		self.assertEqual(frappe.db.get_value("Sales Order", order["id"], "custom_fulfillment_stage"), "Cancelled")

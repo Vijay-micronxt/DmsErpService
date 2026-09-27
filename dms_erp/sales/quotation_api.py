@@ -334,7 +334,30 @@ def _create_quotation(
 
 @frappe.whitelist(methods=["POST"])
 def add_quotation_line(quotation: str, item: str, qty: float):
+	"""BRD C.11 trigger #5: amending a submitted quotation is audit-locked, same as
+	the Channel Override gate on create_quotation -- an unauthorized caller gets
+	`{"approvalRequired": True, "approval": {...}}` back instead of the updated
+	quotation, and nothing changes until Management approves it (see
+	approvals.api.gate_authorized_action / APPLIERS)."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is adding line {item} (qty {qty}) to quotation {quotation}.",
+		action_fn=_add_quotation_line_action,
+		action_kwargs=dict(quotation=quotation, item=item, qty=qty),
+		applier_action="add_line",
+	)
+
+
+def _add_quotation_line_action(quotation: str, item: str, qty: float) -> dict:
+	"""Unguarded core of add_quotation_line -- see gate_authorized_action. Re-checks
+	the quotation's current lines at call time (not just at gate time), since
+	nothing stops them changing between an unauthorized request being queued and
+	Management deciding it."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -347,7 +370,23 @@ def add_quotation_line(quotation: str, item: str, qty: float):
 
 @frappe.whitelist(methods=["POST"])
 def remove_quotation_line(quotation: str, item: str):
+	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is removing line {item} from quotation {quotation}.",
+		action_fn=_remove_quotation_line_action,
+		action_kwargs=dict(quotation=quotation, item=item),
+		applier_action="remove_line",
+	)
+
+
+def _remove_quotation_line_action(quotation: str, item: str) -> dict:
+	"""Unguarded core of remove_quotation_line -- see gate_authorized_action."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -362,7 +401,23 @@ def remove_quotation_line(quotation: str, item: str):
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_quotation_line_qty(quotation: str, item: str, qty: float):
+	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is changing line {item}'s qty to {qty} on quotation {quotation}.",
+		action_fn=_update_quotation_line_qty_action,
+		action_kwargs=dict(quotation=quotation, item=item, qty=qty),
+		applier_action="update_qty",
+	)
+
+
+def _update_quotation_line_qty_action(quotation: str, item: str, qty: float) -> dict:
+	"""Unguarded core of update_quotation_line_qty -- see gate_authorized_action."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -374,6 +429,13 @@ def update_quotation_line_qty(quotation: str, item: str, qty: float):
 		if l["item"] == item:
 			l["qty"] = qty
 	return _amend_with_lines(doc, lines)
+
+
+AMEND_ACTIONS = {
+	"add_line": _add_quotation_line_action,
+	"remove_line": _remove_quotation_line_action,
+	"update_qty": _update_quotation_line_qty_action,
+}
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

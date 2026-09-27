@@ -14,9 +14,10 @@ sales.order_channel.gate_channel_override, called from quotation_api.create_quot
 and order_api.create_order) already gates who can attempt the underlying action in
 the first place.
 
-Wired so far: trigger #6 (Channel Override) only. The other five reserved
-`trigger_type` values are designed but not yet raised by any code path -- see
-docs/BRD.md C.11 and this module's README for the planned detection points.
+Wired so far: trigger #6 (Channel Override) and trigger #5 (Amend Or Cancel
+Submitted Document). The other four reserved `trigger_type` values are designed
+but not yet raised by any code path -- see docs/BRD.md C.11 and this module's
+README for the planned detection points.
 """
 
 import json
@@ -150,6 +151,69 @@ def decide_approval(name: str, decision: str, note: str | None = None):
 	return _serialize(doc)
 
 
+def gate_authorized_action(
+	*,
+	trigger_type: str,
+	reference_doctype: str,
+	reference_name: str,
+	reason: str,
+	action_fn,
+	action_kwargs: dict,
+	authorized_roles: set[str] | None = None,
+	applier_action: str | None = None,
+) -> dict:
+	"""Shared gate for a BRD C.11 trigger that acts on an *already-existing*
+	document -- amend/cancel (#5) today; credit-limit/overdue/pricing/discount
+	(#1-#4) can reuse this once they're wired, since they're all "is this caller
+	authorized to do this to a document that already exists" checks, unlike
+	gate_channel_override (order_channel.py), which gates a document's own
+	creation and so never has a reference_name yet at gate time.
+
+	`authorized_roles` defaults to DECIDE_ROLES -- the same bar every one of the
+	six triggers sets. A caller outside it gets `action_fn` queued as a Pending
+	Approval Request instead of run; `action_fn(**action_kwargs)` never executes
+	until Management approves it (see APPLIERS).
+
+	`applier_action` is a discriminator stored alongside `action_kwargs` in the
+	persisted payload (never passed to `action_fn` itself) -- for a trigger_type
+	whose applier has to choose between several possible actions on the same
+	reference_doctype (e.g. Quotation's add/remove/update-qty), this is how it
+	knows which one to replay. Leave it unset when reference_doctype alone
+	already disambiguates the action (one action per doctype)."""
+	roles = authorized_roles or DECIDE_ROLES
+	payload = dict(action_kwargs)
+	if applier_action is not None:
+		payload["action"] = applier_action
+
+	if set(frappe.get_roles(frappe.session.user)) & roles:
+		result = action_fn(**action_kwargs)
+		raise_approval_request(
+			trigger_type=trigger_type,
+			reason=reason,
+			payload=payload,
+			reference_doctype=reference_doctype,
+			# The action may itself replace the document (Quotation's amend cycle
+			# names the new copy differently from `reference_name` above, which is
+			# only ever the pre-action name) -- result["id"] is the one that's
+			# actually live afterwards, so that's what the audit trail should point at.
+			reference_name=result.get("id", reference_name),
+			status="Approved",
+			decided_by=frappe.session.user,
+			decided_at=now_datetime(),
+			decision_note="Auto-approved: raised by an already-authorized user.",
+		)
+		return result
+
+	approval = raise_approval_request(
+		trigger_type=trigger_type,
+		reason=reason + " Needs Management approval before this takes effect.",
+		payload=payload,
+		reference_doctype=reference_doctype,
+		reference_name=reference_name,
+	)
+	return {"approvalRequired": True, "approval": approval}
+
+
 def _apply_channel_override(doc) -> dict:
 	"""Replays the original creation call now that Management has approved it --
 	`doc.reference_doctype` was set at raise time (gate_channel_override always
@@ -166,6 +230,37 @@ def _apply_channel_override(doc) -> dict:
 	return {"doctype": doc.reference_doctype, "name": result["id"]}
 
 
+def _apply_amend_or_cancel(doc) -> dict:
+	"""Replays the original amend/cancel call now that Management has approved
+	it. `doc.reference_doctype`/`reference_name` were both already known at raise
+	time (unlike Channel Override, this trigger always acts on a document that
+	already exists), so the payload only needs to say *which* action on that
+	document -- `payload["action"]` -- plus that action's own kwargs."""
+	payload = dict(json.loads(doc.payload or "{}"))
+	action = payload.pop("action", None)
+
+	if doc.reference_doctype == "Quotation":
+		from dms_erp.sales.quotation_api import AMEND_ACTIONS
+
+		action_fn = AMEND_ACTIONS.get(action)
+	elif doc.reference_doctype == "Sales Order":
+		from dms_erp.sales.order_api import _cancel_order_action
+
+		action_fn = _cancel_order_action if action == "cancel" else None
+	else:
+		action_fn = None
+
+	if action_fn is None:
+		frappe.throw(
+			_("Unknown amend/cancel action {0} for {1}.").format(action, doc.reference_doctype),
+			frappe.ValidationError,
+		)
+
+	result = action_fn(**payload)
+	return {"doctype": doc.reference_doctype, "name": result["id"]}
+
+
 APPLIERS = {
 	"Channel Override": _apply_channel_override,
+	"Amend Or Cancel Submitted Document": _apply_amend_or_cancel,
 }

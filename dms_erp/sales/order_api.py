@@ -322,6 +322,13 @@ def confirm_advance_payment(order: str, confirmed: bool = True):
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def advance_order_stage(order: str, next_stage: str, note: str | None = None):
+	"""Moving to "Cancelled" is BRD C.11 trigger #5 (amend/cancel of a submitted
+	document is audit-locked) -- an unauthorized caller gets
+	`{"approvalRequired": True, "approval": {...}}` back instead of the updated
+	order, and the order isn't actually cancelled until Management approves it
+	(see approvals.api.gate_authorized_action / APPLIERS). Every other forward
+	step is unaffected -- that's routine fulfillment progress, not a
+	cancellation."""
 	_assert_can_manage_orders()
 
 	if next_stage not in ORDER_STAGES:
@@ -341,6 +348,19 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 			frappe.ValidationError,
 		)
 
+	if is_cancel:
+		from dms_erp.approvals.api import gate_authorized_action
+
+		return gate_authorized_action(
+			trigger_type="Amend Or Cancel Submitted Document",
+			reference_doctype="Sales Order",
+			reference_name=order,
+			reason=f"{frappe.session.user} is cancelling Sales Order {order} (was {current}).",
+			action_fn=_cancel_order_action,
+			action_kwargs=dict(order=order, note=note),
+			applier_action="cancel",
+		)
+
 	doc.custom_fulfillment_stage = next_stage
 	doc.append("custom_stage_history", {"stage": next_stage, "at": now_datetime(), "by": frappe.session.user, "note": note})
 	doc.save(ignore_permissions=True)
@@ -350,4 +370,20 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 
 		ensure_pick_tasks(order)
 
+	return _serialize(doc)
+
+
+def _cancel_order_action(order: str, note: str | None = None) -> dict:
+	"""Unguarded core of the Cancelled transition -- see gate_authorized_action.
+	Re-checks the order's current stage at call time (not just at gate time),
+	since nothing stops it moving on between an unauthorized request being
+	queued and Management deciding it."""
+	doc = frappe.get_doc("Sales Order", order)
+	current = doc.custom_fulfillment_stage
+	if current in ("Delivered", "Cancelled"):
+		frappe.throw(_("Cannot move an order from {0} to Cancelled.").format(current), frappe.ValidationError)
+
+	doc.custom_fulfillment_stage = "Cancelled"
+	doc.append("custom_stage_history", {"stage": "Cancelled", "at": now_datetime(), "by": frappe.session.user, "note": note})
+	doc.save(ignore_permissions=True)
 	return _serialize(doc)
