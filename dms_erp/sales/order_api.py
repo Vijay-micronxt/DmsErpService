@@ -25,7 +25,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
-from dms_erp.sales.order_channel import auto_classify_channel
+from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
@@ -213,7 +213,13 @@ def _create_order(
 	same rate/catalog rules as any other order, just nothing to close on creation.
 	`taxes_and_charges` (optional) names an existing Sales Taxes and Charges
 	Template -- see sales.utils.apply_tax_template; left unset, the order is
-	simply untaxed, same as any ERPNext site with no GST template configured."""
+	simply untaxed, same as any ERPNext site with no GST template configured.
+
+	`channel` here is always already resolved (never None) -- create_order (the
+	whitelisted wrapper) resolves and gates it before this ever runs; only
+	dealer_portal_api.convert_to_order still calls this directly with channel
+	unset, since a dealer's self-service order was never a BRD C.11#6 override
+	candidate in the first place."""
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
 	if channel is None:
@@ -268,13 +274,37 @@ def create_order(
 
 	`channel` left unset auto-classifies from the dealer's type / item Series
 	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
-	audit-locked manual override.
+	audit-locked manual override (BRD C.11 trigger #6) -- an unauthorized caller
+	gets `{"approvalRequired": True, "approval": {...}}` back instead of a
+	serialized order, and the Sales Order isn't created until Management approves
+	the queued Approval Request (see sales.order_channel.gate_channel_override).
 
 	Each line in `lines` may carry `discount_percentage` (0-100) and/or
 	`delivery_date` -- see _priced_order_line. `taxes_and_charges` names an
 	existing Sales Taxes and Charges Template; see sales.utils.apply_tax_template."""
 	_assert_can_manage_orders()
-	return _create_order(dealer, lines, expected_dispatch, inquiry, channel, customer_po, taxes_and_charges)
+	if not lines:
+		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+
+	default_channel = auto_classify_channel(dealer, lines)
+	resolved_channel = channel if channel is not None else default_channel
+
+	create_kwargs = dict(
+		dealer=dealer,
+		lines=lines,
+		expected_dispatch=expected_dispatch,
+		inquiry=inquiry,
+		channel=resolved_channel,
+		customer_po=customer_po,
+		taxes_and_charges=taxes_and_charges,
+	)
+	return gate_channel_override(
+		requested_channel=resolved_channel,
+		default_channel=default_channel,
+		reference_doctype="Sales Order",
+		create_fn=_create_order,
+		create_kwargs=create_kwargs,
+	)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

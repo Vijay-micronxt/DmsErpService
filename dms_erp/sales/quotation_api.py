@@ -22,6 +22,12 @@ the one they started with.
 
 list_quotations is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list.
+
+An explicit `channel` differing from auto-classification (BRD C.11 trigger #6)
+goes through sales.order_channel.gate_channel_override -- an unauthorized caller
+gets `{"approvalRequired": True, "approval": {...}}` back instead of a serialized
+quotation, and the Quotation itself isn't created until Management approves the
+queued Approval Request (approvals.api.decide_approval).
 """
 
 import frappe
@@ -38,7 +44,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
-from dms_erp.sales.order_channel import auto_classify_channel
+from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
@@ -254,13 +260,50 @@ def create_quotation(
 				),
 				frappe.ValidationError,
 			)
-	# BRD C.4.3: an explicit channel (including "Retail") is the audit-locked manual
-	# override and always wins; only an unset channel triggers auto-classification.
+	# BRD C.4.3/C.11#6: an explicit channel (including "Retail") is the audit-locked
+	# manual override and always wins over auto-classification -- but *making it
+	# stick* runs through gate_channel_override, which only lets it straight through
+	# when the caller already holds an authorized role (see order_channel.py).
+	default_channel = auto_classify_channel(dealer, lines)
 	if channel is None:
-		channel = auto_classify_channel(dealer, lines)
+		channel = default_channel
 	elif channel not in ORDER_CHANNELS:
 		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
 
+	create_kwargs = dict(
+		dealer=dealer,
+		lines=lines,
+		markup_pct=markup_pct,
+		freight=freight,
+		validity_days=validity_days,
+		inquiries=inquiries,
+		channel=channel,
+		taxes_and_charges=taxes_and_charges,
+	)
+	return gate_channel_override(
+		requested_channel=channel,
+		default_channel=default_channel,
+		reference_doctype="Quotation",
+		create_fn=_create_quotation,
+		create_kwargs=create_kwargs,
+	)
+
+
+def _create_quotation(
+	dealer: str,
+	lines: list[dict],
+	markup_pct: float,
+	freight: float = 0,
+	validity_days: int = 7,
+	inquiries: list[str] | None = None,
+	channel: str = "Retail",
+	taxes_and_charges: str | None = None,
+) -> dict:
+	"""Unguarded core of create_quotation -- `channel` here is always already
+	resolved (never None) and already past the audit-locked-override gate. Also
+	called directly by approvals.api's Channel-Override applier once Management
+	approves a previously-queued override request: replaying this function IS the
+	gate's own resolution, so it must never call gate_channel_override itself."""
 	items = _priced_items(dealer, markup_pct, lines)
 
 	doc = frappe.get_doc(

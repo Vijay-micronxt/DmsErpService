@@ -109,6 +109,32 @@ class TestOrderApi(FrappeTestCase):
 				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Wholesale"
 			)
 
+	def test_create_order_channel_override_by_an_unauthorized_user_is_queued_not_applied(self):
+		email = "order.sales.only@pacific.test"
+		if frappe.db.exists("User", email):
+			frappe.delete_doc("User", email, force=True, ignore_permissions=True)
+		frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": "Sales",
+				"send_welcome_email": 0,
+				"roles": [{"role": "DMS Sales"}],
+			}
+		).insert(ignore_permissions=True)
+
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		before = frappe.db.count("Sales Order")
+
+		frappe.set_user(email)
+		result = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Bulk"
+		)
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["triggerType"], "Channel Override")
+		self.assertEqual(frappe.db.count("Sales Order"), before)
+
 	def test_create_order_auto_classifies_bulk_from_the_dealers_type(self):
 		bulk_dealer = make_dealer("Order Bulk-Type Dealer")
 		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Project")

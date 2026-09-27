@@ -1,0 +1,172 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-09-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "trigger_type",
+  "status",
+  "reference_doctype",
+  "reference_name",
+  "column_break_1",
+  "requested_by",
+  "requested_at",
+  "reason",
+  "section_break_1",
+  "decided_by",
+  "decided_at",
+  "decision_note",
+  "section_break_2",
+  "payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "trigger_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Trigger",
+   "options": "Channel Override\nCredit Limit Exceeded\nOverdue Outstanding\nPricing Override\nDiscount Over Price List\nAmend Or Cancel Submitted Document",
+   "reqd": 1,
+   "description": "BRD C.11's six audit-locked override triggers. Only \"Channel Override\" is wired to an actual detection point today (sales.order_channel.gate_channel_override); the other five are reserved values for the same queue, not yet raised by any code path."
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nApproved\nRejected",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "label": "Reference Document Type",
+   "options": "DocType",
+   "read_only": 1,
+   "description": "Set once the gated action actually creates/updates a document -- blank while a request is Pending and the action it's gating hasn't happened yet."
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Reference",
+   "options": "reference_doctype",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Requested By",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "requested_at",
+   "fieldtype": "Datetime",
+   "label": "Requested At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break",
+   "label": "Decision"
+  },
+  {
+   "fieldname": "decided_by",
+   "fieldtype": "Link",
+   "label": "Decided By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decided_at",
+   "fieldtype": "Datetime",
+   "label": "Decided At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decision_note",
+   "fieldtype": "Small Text",
+   "label": "Decision Note"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Request Payload"
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "label": "Payload (JSON)",
+   "read_only": 1,
+   "reqd": 1,
+   "description": "The gated call's own arguments, captured verbatim as JSON at request time -- what the trigger's applier function replays if/when this request is Approved (see approvals.api.APPLIERS)."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Approvals",
+ "name": "Approval Request",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "DMS Sales"
+  },
+  {
+   "read": 1,
+   "role": "DMS Purchase"
+  },
+  {
+   "read": 1,
+   "role": "DMS Warehouse"
+  }
+ ],
+ "sort_field": "requested_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
