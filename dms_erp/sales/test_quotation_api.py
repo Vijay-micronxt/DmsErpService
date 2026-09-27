@@ -193,6 +193,28 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(by_item[self.second_item]["qty"], 50)
 		self.assertEqual(by_item[self.priced_item]["qty"], 100)
 
+	def test_update_quotation_line_qty_does_not_crash_when_a_line_has_a_delivery_date(self):
+		# Regression test: update_quotation_line_qty reloads the Quotation from the
+		# database before touching any line (frappe.get_doc, not the in-memory doc
+		# create_quotation just returned) -- a freshly-loaded Quotation Item row only
+		# carries attributes for its own real fields, so reading a field that was
+		# never actually a Quotation Item field (delivery_date is native on Sales
+		# Order Item, not Quotation Item) raised a genuine AttributeError here in
+		# production the moment a dealer tried to change a line's quantity, even
+		# though the quotation with that delivery date had been created successfully
+		# moments earlier (see sales/setup.py's own docstring for the full story).
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100, "delivery_date": "2026-09-20"}],
+			markup_pct=10,
+		)
+
+		amended = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 150)
+
+		line = amended["lines"][0]
+		self.assertEqual(line["qty"], 150)
+		self.assertEqual(line["deliveryDate"], "2026-09-20")
+
 	def test_edit_rejects_already_ordered_quotation(self):
 		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 		quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")

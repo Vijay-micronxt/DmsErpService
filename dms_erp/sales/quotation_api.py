@@ -93,7 +93,7 @@ def _serialize_line(row) -> dict:
 		"discountPercentage": row.discount_percentage,
 		"rate": row.rate,
 		"amount": row.amount,
-		"deliveryDate": row.delivery_date,
+		"deliveryDate": row.custom_delivery_date,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -129,7 +129,14 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 				"price_list_rate": price_list_rate,
 				"discount_percentage": discount_pct,
 				"rate": rate,
-				"delivery_date": line.get("delivery_date"),
+				# custom_delivery_date, not delivery_date -- Quotation Item has no
+				# native delivery_date field (unlike Sales Order Item, which does);
+				# writing the wrong key here silently no-ops on insert (Frappe's
+				# append() just sets a throwaway Python attribute for an unknown
+				# field) and only surfaces as a real AttributeError the next time
+				# this document is reloaded and something reads it back -- see
+				# _lines_from_items below and sales/setup.py's own docstring.
+				"custom_delivery_date": line.get("delivery_date"),
 			}
 		)
 	return items
@@ -147,7 +154,7 @@ def _lines_from_items(rows) -> list[dict]:
 			"item": row.item_code,
 			"qty": row.qty,
 			"discount_percentage": row.discount_percentage,
-			"delivery_date": row.delivery_date,
+			"delivery_date": row.custom_delivery_date,
 		}
 		for row in rows
 	]

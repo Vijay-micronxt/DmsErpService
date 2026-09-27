@@ -17,6 +17,14 @@ equivalent for become Custom Fields:
   was really being excluded. This field is what makes that claim true, and is what a
   Retail vs Bulk report groups by. Defaults to Retail, matching every order created
   before this field existed.
+- Quotation Item: `custom_delivery_date`, a per-line delivery date (BRD C.3.1 --
+  "delivery date... maintained item-wise"). Unlike Sales Order Item, ERPNext's own
+  Quotation Item has no native `delivery_date` field to reuse -- quotation_api.py
+  used to read/write `row.delivery_date` on Quotation Item rows anyway, which raised
+  a genuine AttributeError the moment a document was reloaded from the database
+  (frappe.get_doc's freshly-loaded child rows only carry attributes for real,
+  meta-defined fields) -- e.g. every `update_quotation_line_qty` call, since that
+  reloads the doc before touching any line.
 """
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
@@ -98,6 +106,14 @@ CUSTOM_FIELDS = {
 			"default": "0",
 			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
 			"insert_after": "custom_order_channel",
+		},
+	],
+	"Quotation Item": [
+		{
+			"fieldname": "custom_delivery_date",
+			"fieldtype": "Date",
+			"label": "Delivery Date",
+			"insert_after": "discount_percentage",
 		},
 	],
 	"Customer": [
