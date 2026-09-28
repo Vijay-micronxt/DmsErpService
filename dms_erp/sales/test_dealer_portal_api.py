@@ -146,6 +146,8 @@ class TestDealerPortalApi(FrappeTestCase):
 		message = str(ctx.exception)
 		self.assertNotIn("<", message)
 		self.assertNotIn("micronxt.com", message)
+		self.assertNotIn("Karthik", message)
+		self.assertIn("Credit limit has been crossed for customer Medha - 1", message)
 		self.assertIn("Pacific representative", message)
 
 	def test_list_my_inquiries_never_shows_another_dealers_inquiries(self):

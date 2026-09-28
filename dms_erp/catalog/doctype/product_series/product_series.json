@@ -11,6 +11,7 @@
   "size",
   "thickness",
   "finish",
+  "sub_finish",
   "section_break_uom",
   "pieces_per_box",
   "sqft_per_box",
@@ -57,9 +58,18 @@
    "label": "Thickness"
   },
   {
+   "description": "BRD C.1.1 top-level finish.",
    "fieldname": "finish",
-   "fieldtype": "Data",
-   "label": "Finish"
+   "fieldtype": "Select",
+   "label": "Finish",
+   "options": "\nMatt\nGlossy"
+  },
+  {
+   "description": "BRD C.1.1 sub-finish detail. Placeholder option list pending the client's confirmed final range — verify before go-live.",
+   "fieldname": "sub_finish",
+   "fieldtype": "Select",
+   "label": "Sub Finish",
+   "options": "\nRocker\nCarving\nStone-Art\nGVT/PGVT"
   },
   {
    "fieldname": "section_break_uom",
