@@ -283,7 +283,10 @@ def create_order(
 	`delivery_date` -- see _priced_order_line. Any line with a nonzero discount
 	is BRD C.11 trigger #4 (no threshold -- see approvals.api.
 	gate_discount_over_price_list) and gates the same way channel override does.
-	`taxes_and_charges` names an existing Sales Taxes and Charges Template; see
+	So does a dealer whose committed order value (this order's own estimated
+	value included) would exceed their configured credit limit (BRD C.11
+	trigger #1 -- see sales.credit_limit.gate_credit_limit). `taxes_and_charges`
+	names an existing Sales Taxes and Charges Template; see
 	sales.utils.apply_tax_template."""
 	_assert_can_manage_orders()
 	if not lines:
@@ -304,7 +307,7 @@ def create_order(
 
 	def _create_after_discount_gate(**kwargs):
 		# BRD C.7.3/C.11#4: see quotation_api.create_quotation's own copy of this
-		# nested gate for why it's nested inside gate_channel_override rather than
+		# nested gate for why it's nested inside the other gates rather than
 		# checked separately.
 		from dms_erp.approvals.api import gate_discount_over_price_list
 
@@ -315,13 +318,41 @@ def create_order(
 			create_kwargs=kwargs,
 		)
 
+	def _create_after_credit_gate(**kwargs):
+		from dms_erp.sales.credit_limit import gate_credit_limit
+
+		return gate_credit_limit(
+			dealer=kwargs["dealer"],
+			additional_value=_estimate_order_value(kwargs["dealer"], kwargs["lines"]),
+			reference_doctype="Sales Order",
+			applier_action="create_order",
+			create_fn=_create_after_discount_gate,
+			create_kwargs=kwargs,
+		)
+
 	return gate_channel_override(
 		requested_channel=resolved_channel,
 		default_channel=default_channel,
 		reference_doctype="Sales Order",
-		create_fn=_create_after_discount_gate,
+		create_fn=_create_after_credit_gate,
 		create_kwargs=create_kwargs,
 	)
+
+
+def _estimate_order_value(dealer: str, lines: list[dict]) -> float:
+	"""Pre-tax, pre-rounding approximate order value for the credit-limit gate
+	(BRD C.11 trigger #1) -- the same kind of approximation dashboard.api.
+	_credit_exposure_alerts already accepts for this app's whole credit-exposure
+	signal (no Sales Invoice ledger exists to compute a true one from). Real
+	per-line rate/rounding still happens in _priced_order_line at actual
+	creation time; this is only ever used to decide whether to gate, never
+	written anywhere."""
+	total = 0.0
+	for line in lines:
+		price = get_price_for_dealer(line["item"], dealer) or 0
+		discount_pct = float(line.get("discount_percentage") or 0)
+		total += price * (1 - discount_pct / 100) * line["qty"]
+	return total
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

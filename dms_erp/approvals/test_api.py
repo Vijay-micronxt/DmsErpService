@@ -7,6 +7,7 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, quotation_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.utils import default_company
 
 TEST_PASSWORD = "Pa$$w0rd123!"
 
@@ -443,4 +444,151 @@ class TestApprovalsApi(FrappeTestCase):
 
 		self.assertTrue(result["approvalRequired"])
 		self.assertEqual(result["approval"]["triggerType"], "Discount Over Price List")
+		self.assertEqual(frappe.db.count("Sales Order"), before)
+
+	# ---------------- gate_credit_limit, exercised via create_order/convert_to_order (trigger #1) ----------------
+
+	def _make_credit_dealer(self, name: str, limit: float) -> str:
+		dealer = make_dealer(name)
+		doc = frappe.get_doc("Customer", dealer)
+		doc.append("credit_limits", {"company": default_company(), "credit_limit": limit})
+		doc.save(ignore_permissions=True)
+		return dealer
+
+	def test_order_within_credit_limit_never_raises_an_approval_request(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Within Limit", limit=10000)
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=5, source="Phone")
+		before = frappe.db.count("Approval Request")
+
+		order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 5}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)  # 5 * 500 = 2500, well under the 10000 limit
+
+		self.assertEqual(frappe.db.count("Approval Request"), before)
+
+	def test_dealer_with_no_credit_limit_never_gates_even_for_a_large_order(self):
+		dealer = make_dealer("Credit Test Dealer No Limit")
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=1000, source="Phone")
+		before = frappe.db.count("Approval Request")
+
+		order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 1000}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+
+		self.assertEqual(frappe.db.count("Approval Request"), before)
+
+	def test_authorized_user_order_over_credit_limit_applies_immediately_and_logs_an_approved_request(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Authorized Order", limit=1000)
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
+		before = frappe.db.count("Approval Request")
+
+		order = order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)  # 10 * 500 = 5000, over the 1000 limit
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Credit Limit Exceeded")
+		self.assertEqual(approval.status, "Approved")
+		self.assertEqual(approval.reference_doctype, "Sales Order")
+		self.assertEqual(approval.reference_name, order["id"])
+
+	def test_unauthorized_user_order_over_credit_limit_is_queued_instead_of_applied(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Unauthorized Order", limit=1000)
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
+		before = frappe.db.count("Sales Order")
+
+		frappe.set_user(self.sales_user)
+		result = order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["status"], "Pending")
+		self.assertEqual(result["approval"]["triggerType"], "Credit Limit Exceeded")
+		self.assertIsNone(result["approval"]["referenceName"])
+		self.assertEqual(frappe.db.count("Sales Order"), before)
+
+	def test_approving_a_queued_credit_limit_order_creates_it(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Approve Order", limit=1000)
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
+
+		frappe.set_user(self.sales_user)
+		queued = order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Approved")
+
+		self.assertEqual(decided["status"], "Approved")
+		self.assertEqual(decided["referenceDoctype"], "Sales Order")
+		self.assertIsNotNone(decided["referenceName"])
+		self.assertEqual(order_api.get_order(decided["referenceName"])["dealerId"], dealer)
+
+	def test_rejecting_a_queued_credit_limit_order_creates_nothing(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Reject Order", limit=1000)
+		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
+		before = frappe.db.count("Sales Order")
+
+		frappe.set_user(self.sales_user)
+		queued = order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": self.priced_item, "qty": 10}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Rejected")
+		self.assertEqual(decided["status"], "Rejected")
+		self.assertEqual(frappe.db.count("Sales Order"), before)
+
+	def test_authorized_user_quotation_conversion_over_credit_limit_logs_an_approved_request(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Authorized Convert", limit=1000)
+		quotation = quotation_api.create_quotation(
+			dealer=dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)  # priced well over the 1000 limit
+		before = frappe.db.count("Approval Request")
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Credit Limit Exceeded")
+		self.assertEqual(approval.status, "Approved")
+		self.assertEqual(approval.reference_name, order["id"])
+
+	def test_unauthorized_user_quotation_conversion_over_credit_limit_is_queued_instead_of_applied(self):
+		dealer = self._make_credit_dealer("Credit Test Dealer Unauthorized Convert", limit=1000)
+		quotation = quotation_api.create_quotation(
+			dealer=dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+		before = frappe.db.count("Sales Order")
+
+		frappe.set_user(self.sales_user)
+		result = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["triggerType"], "Credit Limit Exceeded")
 		self.assertEqual(frappe.db.count("Sales Order"), before)

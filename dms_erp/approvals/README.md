@@ -16,7 +16,7 @@ condition. See `api.py`'s own module docstring for the exact contract.
 5. Amendment or cancellation of a submitted sales/purchase document
 6. Retail-vs-bulk classification override
 
-Three are wired today:
+Four are wired today:
 
 - **#6 (Channel Override)**: `sales.order_channel.gate_channel_override`, called
   from `quotation_api.create_quotation` and `order_api.create_order` whenever an
@@ -39,6 +39,16 @@ Three are wired today:
   and the two compose: an authorized caller doing both in one call gets an
   audit record for each (see quotation_api.create_quotation's nested
   `_create_after_discount_gate`).
+- **#1 (Credit Limit Exceeded)**: `sales.credit_limit.gate_credit_limit`, called
+  from `order_api.create_order` (a pre-creation *estimate* of the new order's
+  value, since real per-line pricing happens later) and
+  `quotation_api.convert_to_order` (the Quotation's own `grand_total` is exact,
+  since it's already priced and submitted) whenever the dealer's committed
+  Sales Order value plus this order's own value would exceed their configured
+  `Customer Credit Limit` -- the same order-value approximation
+  `dashboard.api._credit_exposure_alerts` already uses (this app posts no Sales
+  Invoice, so it's an honest stand-in for true receivables, not the real
+  thing). A dealer with no credit limit configured is never gated at all.
 
 **#3 (Pricing Override) is deliberately not wired separately.** BRD C.7.3 talks
 about "any transaction-level price or discount change" as one idea, but this
@@ -47,8 +57,11 @@ codebase only has one transaction-level pricing lever -- `discount_percentage`
 set instead; building a real, distinct #3 means adding that capability first,
 not just another gate.
 
-The remaining two (#1 credit-limit exceedance, #2 overdue outstanding) are
-reserved `trigger_type` values on the doctype, not yet raised by any code path.
+**#2 (Overdue Outstanding) is not wired at all, and can't be with a gate alone.**
+Unlike #3, this isn't a missing field but a missing *subsystem*: "overdue"
+means an invoice past its due date and still unpaid, and this app posts no
+Sales Invoice or Payment Entry (see `dashboard.api`'s own honest
+`outstandingReceivables: 0`). A real #2 needs AR tracking built first.
 
 ## How a trigger plugs in
 
@@ -67,9 +80,10 @@ reserved `trigger_type` values on the doctype, not yet raised by any code path.
    and returns `{"doctype": ..., "name": ...}` so `decide_approval` can stamp
    `reference_doctype`/`reference_name` once the action actually happens. When a
    `trigger_type` covers more than one possible action on the same
-   `reference_doctype` (trigger #5's three Quotation actions), pass
-   `gate_authorized_action`'s `applier_action` to record which one to replay --
-   see `_apply_amend_or_cancel`.
+   `reference_doctype` (trigger #5's three Quotation actions, or trigger #1's
+   direct-order-vs-Quotation-conversion), pass `gate_authorized_action`'s or
+   `gate_document_creation`'s `applier_action` to record which one to replay --
+   see `_apply_amend_or_cancel` / `_apply_credit_limit_exceeded`.
 
 No new doctype, no new endpoints -- `list_pending_approvals`/`get_approval`/
 `decide_approval` and the `Approval Request` list view work for every trigger

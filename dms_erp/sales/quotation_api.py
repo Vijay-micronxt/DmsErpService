@@ -489,11 +489,38 @@ def update_quotation_status(quotation: str, status: str, lost_reasons: list[str]
 
 @frappe.whitelist(methods=["POST"])
 def convert_to_order(quotation: str, expected_dispatch=None):
+	"""BRD C.11 trigger #1: converting a quotation whose value would push the
+	dealer's committed order value over their configured credit limit is
+	audit-locked -- an unauthorized caller gets `{"approvalRequired": True,
+	"approval": {...}}` back instead of the new order, and nothing is created
+	until Management approves it (see sales.credit_limit.gate_credit_limit).
+	The quotation's own `grand_total` is exact (it's already priced and
+	submitted), so this is a real check, not order_api.create_order's
+	pre-creation estimate."""
+	_assert_can_manage_quotations()
+
+	qtn = frappe.get_doc("Quotation", quotation)
+
+	from dms_erp.sales.credit_limit import gate_credit_limit
+
+	return gate_credit_limit(
+		dealer=qtn.party_name,
+		additional_value=qtn.grand_total,
+		reference_doctype="Sales Order",
+		applier_action="convert_to_order",
+		create_fn=_convert_to_order,
+		create_kwargs=dict(quotation=quotation, expected_dispatch=expected_dispatch),
+	)
+
+
+def _convert_to_order(quotation: str, expected_dispatch=None) -> dict:
+	"""Unguarded core of convert_to_order -- see gate_credit_limit. Re-fetches
+	the Quotation fresh (the wrapper above already loaded one, just for its
+	party_name/grand_total) since this also has to run standalone when replayed
+	from an approved request."""
 	from erpnext.selling.doctype.quotation.quotation import make_sales_order
 
 	from dms_erp.sales.order_api import finalize_new_order
-
-	_assert_can_manage_quotations()
 
 	qtn = frappe.get_doc("Quotation", quotation)
 	so = make_sales_order(quotation)

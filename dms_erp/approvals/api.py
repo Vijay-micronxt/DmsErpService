@@ -15,16 +15,27 @@ and order_api.create_order) already gates who can attempt the underlying action 
 the first place.
 
 Wired so far: trigger #6 (Channel Override), trigger #5 (Amend Or Cancel
-Submitted Document), and trigger #4 (Discount Over Price List). Trigger #3
-(Pricing Override) is deliberately NOT separately wired -- in this codebase's
-data model there's no transaction-level pricing lever apart from the same
-per-line `discount_percentage` #4 already gates (BRD C.7.3's "any
+Submitted Document), trigger #4 (Discount Over Price List), and trigger #1
+(Credit Limit Exceeded, sales.credit_limit.gate_credit_limit -- an already
+real, existing signal: `Customer Credit Limit` vs a dealer's cumulative
+submitted Sales Order value, the same one dashboard.api's own credit-exposure
+alert already computes).
+
+Trigger #3 (Pricing Override) is deliberately NOT separately wired -- in this
+codebase's data model there's no transaction-level pricing lever apart from
+the same per-line `discount_percentage` #4 already gates (BRD C.7.3's "any
 transaction-level price or discount change" collapses to one field here); a
 real #3 would need a genuine explicit-rate-override capability this API
-doesn't have. The remaining two (#1 credit-limit exceedance, #2 overdue
-outstanding) are reserved `trigger_type` values, not yet raised by any code
-path -- see docs/BRD.md C.11 and this module's README for the planned
-detection points.
+doesn't have.
+
+Trigger #2 (Overdue Outstanding) is also NOT wired -- unlike #3, this isn't a
+missing field but a missing *subsystem*: "overdue" requires knowing which
+invoices are past due and unpaid, and this app posts no Sales Invoice or
+Payment Entry at all (see dashboard.api's own `outstandingReceivables: 0`
+honesty). Building a real #2 means building AR tracking first, well beyond a
+gate on an existing action.
+
+See docs/BRD.md C.11 and this module's README for more.
 """
 
 import json
@@ -230,26 +241,40 @@ def gate_document_creation(
 	create_fn,
 	create_kwargs: dict,
 	authorized_roles: set[str] | None = None,
+	applier_action: str | None = None,
 ) -> dict:
 	"""Shared gate for a BRD C.11 trigger that gates a document's own *creation*
-	-- discount-over-price-list (#4) today, alongside channel override (#6,
-	sales.order_channel.gate_channel_override, kept as its own function since it
-	also has to compare the requested channel against auto_classify_channel's
-	default before deciding whether this gate even applies). Unlike
-	gate_authorized_action, there's no reference_name yet at gate time -- the
-	document doesn't exist until `create_fn` actually runs.
+	-- discount-over-price-list (#4) and credit-limit exceedance (#1) today,
+	alongside channel override (#6, sales.order_channel.gate_channel_override,
+	kept as its own function since it also has to compare the requested channel
+	against auto_classify_channel's default before deciding whether this gate
+	even applies). Unlike gate_authorized_action, there's no reference_name yet
+	at gate time -- the document doesn't exist until `create_fn` actually runs.
 
 	`authorized_roles` defaults to DECIDE_ROLES -- the same bar every one of the
 	six triggers sets. A caller outside it gets `create_fn` queued as a Pending
 	Approval Request instead of run; `create_fn(**create_kwargs)` never executes
-	until Management approves it (see APPLIERS)."""
+	until Management approves it (see APPLIERS).
+
+	`applier_action` is a discriminator stored alongside `create_kwargs` in the
+	persisted payload (never passed to `create_fn` itself) -- for a trigger_type
+	whose applier has to choose between several possible creation paths that
+	all produce the same `reference_doctype` (credit-limit exceedance can come
+	from either a direct order or a Quotation conversion, both "Sales Order"),
+	this is how it knows which one to replay. Leave it unset when
+	reference_doctype alone already disambiguates (Channel Override, Discount
+	Over Price List: exactly one creation function per doctype)."""
 	roles = authorized_roles or DECIDE_ROLES
+	payload = dict(create_kwargs)
+	if applier_action is not None:
+		payload["action"] = applier_action
+
 	if set(frappe.get_roles(frappe.session.user)) & roles:
 		result = create_fn(**create_kwargs)
 		raise_approval_request(
 			trigger_type=trigger_type,
 			reason=reason,
-			payload=create_kwargs,
+			payload=payload,
 			reference_doctype=reference_doctype,
 			reference_name=result["id"],
 			status="Approved",
@@ -262,7 +287,7 @@ def gate_document_creation(
 	approval = raise_approval_request(
 		trigger_type=trigger_type,
 		reason=reason + " Needs Management approval before the document is created.",
-		payload=create_kwargs,
+		payload=payload,
 		reference_doctype=reference_doctype,
 	)
 	return {"approvalRequired": True, "approval": approval}
@@ -345,8 +370,31 @@ def _apply_amend_or_cancel(doc) -> dict:
 	return {"doctype": doc.reference_doctype, "name": result["id"]}
 
 
+def _apply_credit_limit_exceeded(doc) -> dict:
+	"""Replays the original order-creating call now that Management has
+	approved it. Unlike Channel Override/Discount Over Price List (exactly one
+	creation function per reference_doctype), this trigger's `reference_doctype`
+	is always "Sales Order" whether the order came from order_api.create_order
+	(direct/Inquiry-sourced) or quotation_api.convert_to_order (a Quotation
+	conversion) -- `payload["action"]` (set via gate_credit_limit's
+	`applier_action`) says which one to replay."""
+	payload = dict(json.loads(doc.payload or "{}"))
+	action = payload.pop("action", None)
+
+	if action == "create_order":
+		from dms_erp.sales.order_api import _create_order as create_fn
+	elif action == "convert_to_order":
+		from dms_erp.sales.quotation_api import _convert_to_order as create_fn
+	else:
+		frappe.throw(_("Unknown credit-limit action: {0}").format(action), frappe.ValidationError)
+
+	result = create_fn(**payload)
+	return {"doctype": "Sales Order", "name": result["id"]}
+
+
 APPLIERS = {
 	"Channel Override": _apply_document_creation,
 	"Discount Over Price List": _apply_document_creation,
 	"Amend Or Cancel Submitted Document": _apply_amend_or_cancel,
+	"Credit Limit Exceeded": _apply_credit_limit_exceeded,
 }
