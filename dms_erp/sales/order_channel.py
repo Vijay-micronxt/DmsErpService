@@ -3,14 +3,20 @@ Bulk / Project) is a manually-set Customer category that, together with a Series
 bulk_qty_threshold (propagated onto Item by catalog.api.create_product), drives
 the default `custom_order_channel` (Retail/Bulk/Project) on a new Quotation/Order.
 
-The BRD's "audit-locked manual override" is simply: a caller that passes `channel`
-explicitly (including "Retail") always wins — auto_classify_channel is only ever
-consulted when create_quotation/create_order are called without one.
+The BRD's "audit-locked manual override" (also BRD C.11 trigger #6) is: a caller
+that passes `channel` explicitly (including "Retail") always wins over
+auto-classification -- but *making it stick* runs through gate_channel_override
+below, not straight through. An already-authorized user's override still applies
+immediately (they're the authority BRD C.11 requires), just logged as an
+auto-approved Approval Request for audit; anyone else's override attempt is queued
+as a Pending one instead, and the document isn't created until Management decides
+it (see approvals.api.decide_approval / APPLIERS["Channel Override"]).
 """
 
 import frappe
 
 DEALER_TYPES = ["Retail", "Bulk", "Project"]
+CHANNEL_OVERRIDE_AUTHORIZED_ROLES = {"DMS Management", "System Manager"}
 
 
 def auto_classify_channel(dealer: str, lines: list[dict]) -> str:
@@ -29,3 +35,35 @@ def auto_classify_channel(dealer: str, lines: list[dict]) -> str:
 			return "Bulk"
 
 	return "Retail"
+
+
+def gate_channel_override(
+	*, requested_channel: str, default_channel: str, reference_doctype: str, create_fn, create_kwargs: dict
+) -> dict:
+	"""BRD C.11 trigger #6. `requested_channel` is what the caller resolved to
+	(explicit or auto-classified); `default_channel` is always
+	auto_classify_channel's own answer for the same dealer/lines, so the two only
+	differ when a caller actually overrode it. No difference -> create_fn runs
+	unconditionally, no approval-queue overhead for the common case.
+
+	`create_fn(**create_kwargs)` must be the trigger's own "_unchecked" creation
+	core (quotation_api._create_quotation / order_api._create_order) so that
+	replaying it later from an approved request (approvals.api.APPLIERS) can't
+	re-enter this gate and loop.
+	"""
+	if requested_channel == default_channel:
+		return create_fn(**create_kwargs)
+
+	from dms_erp.approvals.api import gate_document_creation
+
+	return gate_document_creation(
+		trigger_type="Channel Override",
+		reference_doctype=reference_doctype,
+		reason=(
+			f"{frappe.session.user} set channel to {requested_channel} "
+			f"(auto-classified: {default_channel})."
+		),
+		create_fn=create_fn,
+		create_kwargs=create_kwargs,
+		authorized_roles=CHANNEL_OVERRIDE_AUTHORIZED_ROLES,
+	)

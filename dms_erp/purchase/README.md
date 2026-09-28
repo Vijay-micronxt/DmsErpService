@@ -63,3 +63,23 @@ instead of a `0` stub, now that Warehouse exists.
   Supplier id, but no read endpoint over it ever existed. `list_suppliers`/
   `get_supplier`, no new doctype or field. Unlike Customer, Supplier has no
   per-company credit-limit child table to resolve — nothing else to net out.
+- **Transporter & Vehicle Master** (`transporter_api.py`, new doctypes
+  `Transporter` / `Transporter Vehicle`) — masters the Morbi→Bengaluru
+  full-load fleet (BRD C.1.7) for future pickup/route planning; that planning
+  module itself isn't built yet, this just gives it something clean to link
+  to. ERPNext's own transporter concept (a checkbox on Supplier) doesn't model
+  vehicle-type capacity, so a real custom master is required — same reasoning
+  as `Vehicle Type`, whose permission pattern (`DMS Purchase` full CRUD,
+  `DMS Warehouse`/`DMS Management` read-only) this follows, since both are
+  masters rather than an execution flow like `Pickup Run`. Deliberately
+  **not** the same doctype as `Vehicle Type`: that one is box-capacity for
+  Pickup Run's warehouse-pickup check, a different concept from this
+  module's tonnage/mode fleet, despite the shared name. Vehicle Number is
+  enforced unique across every transporter's fleet in this API layer (not
+  the child-table JSON — Frappe's `unique` flag isn't reliable on child
+  fields), since a real registration number is unique in reality and a
+  collision here is almost certainly a data-entry mistake. Driver
+  name/mobile stay plain optional fields on the vehicle row, not a linked
+  Driver master — none exists anywhere in this app, and BRD explicitly notes
+  a driver is "assigned on a pickup plan", not permanently tied to a
+  vehicle.

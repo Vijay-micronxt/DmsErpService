@@ -61,6 +61,34 @@ class TestAllocation(FrappeTestCase):
 		self.assertEqual(result["totalWeightKg"], 1400)
 		self.assertEqual(frappe.db.get_value("Batch", "ALLOC-BATCH-WEIGHT-DEFAULT", "custom_batch_weight_kg"), 28)
 
+	def test_create_allocation_carries_the_items_pieces_sqft_and_sqm(self):
+		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
+
+		result = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BATCH-PIECES-SQFT",
+			total_qty=50,
+			lines=[{"bay": "ALLOC-A-01", "qty": 50}],
+			supplier=self.supplier,
+		)
+
+		self.assertEqual(result["piecesPerBox"], 4)
+		self.assertEqual(result["totalPieces"], 200)
+		self.assertEqual(result["sqftPerBox"], 15.5)
+		self.assertEqual(result["totalSqft"], 775)
+		self.assertAlmostEqual(result["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(result["totalSqm"], 72, places=2)
+
+		stock = stock_api.list_stock(item=self.item)
+		lot = next(row for row in stock if row["batchNumber"] == "ALLOC-BATCH-PIECES-SQFT")
+		self.assertEqual(lot["piecesPerBox"], 4)
+		self.assertEqual(lot["totalPieces"], 200)
+		self.assertEqual(lot["sqftPerBox"], 15.5)
+		self.assertEqual(lot["totalSqft"], 775)
+		self.assertAlmostEqual(lot["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(lot["totalSqm"], 72, places=2)
+
 	def test_create_allocation_accepts_an_explicit_batch_weight_override(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
 

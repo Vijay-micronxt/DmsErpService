@@ -36,6 +36,15 @@ class TestQuotationApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
+	def test_create_quotation_exposes_created_at_timestamp(self):
+		# Quotation.transaction_date is a plain Date field (no time-of-day) --
+		# createdAt is the actual creation Datetime, for tables that need to show
+		# time alongside date.
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+		self.assertIsNotNone(quotation["createdAt"])
+
 	def test_create_quotation_applies_markup_to_approved_price(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12
@@ -48,6 +57,17 @@ class TestQuotationApi(FrappeTestCase):
 		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
 		self.assertEqual(quotation["lines"][0]["weightPerBoxKg"], 28)
 		self.assertEqual(quotation["lines"][0]["totalWeightKg"], 280)
+
+	def test_quotation_line_carries_the_items_pieces_and_sqft(self):
+		frappe.db.set_value("Item", self.priced_item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.priced_item, "custom_sqft_per_box", 15.5)
+		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
+		self.assertEqual(quotation["lines"][0]["piecesPerBox"], 4)
+		self.assertEqual(quotation["lines"][0]["totalPieces"], 40)
+		self.assertEqual(quotation["lines"][0]["sqftPerBox"], 15.5)
+		self.assertEqual(quotation["lines"][0]["totalSqft"], 155)
+		self.assertAlmostEqual(quotation["lines"][0]["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(quotation["lines"][0]["totalSqm"], 14.4, places=2)
 
 	def test_create_quotation_accepts_bulk_channel_and_carries_into_order(self):
 		quotation = quotation_api.create_quotation(
@@ -99,10 +119,39 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_from_inquiry_marks_it_quoted(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=50, source="Phone")
-		quotation_api.create_quotation(
-			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiry=inquiry["id"]
+		created = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiries=[inquiry["id"]]
 		)
-		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Quoted")
+		updated = inquiry_api.get_inquiry(inquiry["id"])
+		self.assertEqual(updated["status"], "Quoted")
+		self.assertEqual(updated["linkedQuotation"], created["id"])
+
+	def test_create_quotation_merges_two_inquiries_from_the_same_dealer(self):
+		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.second_item, qty=15, source="Phone")
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
+			markup_pct=10,
+			inquiries=[i1["id"], i2["id"]],
+		)
+		self.assertEqual(len(quotation["lines"]), 2)
+		self.assertEqual(inquiry_api.get_inquiry(i1["id"])["status"], "Quoted")
+		self.assertEqual(inquiry_api.get_inquiry(i2["id"])["status"], "Quoted")
+		self.assertEqual(inquiry_api.get_inquiry(i1["id"])["linkedQuotation"], quotation["id"])
+		self.assertEqual(inquiry_api.get_inquiry(i2["id"])["linkedQuotation"], quotation["id"])
+
+	def test_create_quotation_rejects_inquiries_from_a_different_dealer(self):
+		other_dealer = make_dealer("Quotation Test Other Dealer")
+		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
+		i2 = inquiry_api.create_inquiry(dealer=other_dealer, item=self.second_item, qty=15, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
+				markup_pct=10,
+				inquiries=[i1["id"], i2["id"]],
+			)
 
 	def test_add_quotation_line_amends_and_reprices_every_line(self):
 		quotation = quotation_api.create_quotation(
@@ -143,6 +192,28 @@ class TestQuotationApi(FrappeTestCase):
 		by_item = {l["itemCode"]: l for l in amended["lines"]}
 		self.assertEqual(by_item[self.second_item]["qty"], 50)
 		self.assertEqual(by_item[self.priced_item]["qty"], 100)
+
+	def test_update_quotation_line_qty_does_not_crash_when_a_line_has_a_delivery_date(self):
+		# Regression test: update_quotation_line_qty reloads the Quotation from the
+		# database before touching any line (frappe.get_doc, not the in-memory doc
+		# create_quotation just returned) -- a freshly-loaded Quotation Item row only
+		# carries attributes for its own real fields, so reading a field that was
+		# never actually a Quotation Item field (delivery_date is native on Sales
+		# Order Item, not Quotation Item) raised a genuine AttributeError here in
+		# production the moment a dealer tried to change a line's quantity, even
+		# though the quotation with that delivery date had been created successfully
+		# moments earlier (see sales/setup.py's own docstring for the full story).
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100, "delivery_date": "2026-09-20"}],
+			markup_pct=10,
+		)
+
+		amended = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 150)
+
+		line = amended["lines"][0]
+		self.assertEqual(line["qty"], 150)
+		self.assertEqual(line["deliveryDate"], "2026-09-20")
 
 	def test_edit_rejects_already_ordered_quotation(self):
 		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
@@ -199,3 +270,151 @@ class TestQuotationApi(FrappeTestCase):
 		found = quotation_api.list_quotations(dealer=dealer, search=created[0]["id"])
 		self.assertEqual(found["total"], 1)
 		self.assertEqual(found["items"][0]["id"], created[0]["id"])
+
+	def test_create_quotation_applies_line_level_discount(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
+			markup_pct=12,
+		)
+		line = quotation["lines"][0]
+		self.assertEqual(line["priceListRate"], 560)  # round(500 * 1.12)
+		self.assertEqual(line["discountPercentage"], 10)
+		self.assertEqual(line["rate"], 504)  # round(560 * 0.9)
+
+	def test_create_quotation_rejects_an_out_of_range_discount(self):
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": -5}],
+				markup_pct=12,
+			)
+
+	def test_create_quotation_respects_a_per_line_delivery_date(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+		self.assertEqual(quotation["lines"][0]["deliveryDate"], "2026-09-20")
+
+	def test_add_quotation_line_preserves_discount_and_delivery_date_on_untouched_lines(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 100, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+
+		amended = quotation_api.add_quotation_line(quotation["id"], self.second_item, 20)
+
+		by_item = {l["itemCode"]: l for l in amended["lines"]}
+		# The untouched line's own discount/date must survive the reprice, not
+		# silently reset to 0/None just because a different line was added.
+		self.assertEqual(by_item[self.priced_item]["discountPercentage"], 10)
+		self.assertEqual(by_item[self.priced_item]["deliveryDate"], "2026-09-20")
+		self.assertEqual(by_item[self.priced_item]["rate"], 504)  # round(560 * 0.9), rebuilt not stale
+
+	def test_convert_to_order_carries_discount_and_delivery_date_via_native_mapper(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			markup_pct=12,
+		)
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		line = order["lines"][0]
+		self.assertEqual(line["discountPercentage"], 10)
+		self.assertEqual(line["rate"], 504)
+		# The quotation line's own date wins over the order-level expected_dispatch.
+		self.assertEqual(line["deliveryDate"], "2026-09-20")
+
+	def test_convert_to_order_only_fills_the_gap_for_lines_with_no_own_delivery_date(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+
+		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
+
+	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
+		company = ensure_company()
+		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
+		if not account:
+			self.skipTest("Test company has no Chart of Accounts to pick a leaf account from.")
+		template_name = f"Quotation Test GST {name_suffix}"
+		if frappe.db.exists("Sales Taxes and Charges Template", {"title": template_name, "company": company}):
+			existing = frappe.db.get_value("Sales Taxes and Charges Template", {"title": template_name, "company": company}, "name")
+			if is_default:
+				existing_doc = frappe.get_doc("Sales Taxes and Charges Template", existing)
+				existing_doc.is_default = 1
+				existing_doc.save(ignore_permissions=True)
+			return existing
+		template = frappe.get_doc(
+			{
+				"doctype": "Sales Taxes and Charges Template",
+				"title": template_name,
+				"company": company,
+				"is_default": 1 if is_default else 0,
+				"taxes": [
+					{
+						"charge_type": "On Net Total",
+						"account_head": account[0],
+						"description": template_name,
+						"rate": rate,
+					}
+				],
+			}
+		)
+		template.insert(ignore_permissions=True)
+		return template.name
+
+	def test_create_quotation_applies_a_tax_template_and_lets_erpnext_compute_the_total(self):
+		template_name = self._make_tax_template("A", rate=18)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=0, taxes_and_charges=template_name
+		)
+		self.assertEqual(quotation["taxesAndCharges"], template_name)
+		self.assertEqual(len(quotation["taxes"]), 1)
+		self.assertEqual(quotation["netTotal"], 5000)  # 10 * 500
+		self.assertEqual(quotation["totalTaxesAndCharges"], 900)  # 18% of 5000
+		self.assertEqual(quotation["total"], 5900)
+
+	def test_create_quotation_without_a_tax_template_stays_untaxed(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+		self.assertEqual(quotation["taxes"], [])
+
+	def test_create_quotation_without_a_tax_template_ignores_the_companys_default_template(self):
+		"""Regression for the "hardcoded 18% for all customers" QA report: on a site
+		with a default Sales Taxes and Charges Template configured, ERPNext's own
+		validate()-time logic (Accounts Settings > "Add taxes from Taxes and Charges/
+		Item Tax Template") would otherwise silently apply it to any new quotation
+		whose taxes table is still empty -- regardless of what the caller asked for."""
+		self._make_tax_template("Default", rate=18, is_default=True)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+		self.assertEqual(quotation["taxes"], [])
+		self.assertEqual(quotation["totalTaxesAndCharges"], 0)
+		self.assertEqual(quotation["total"], quotation["netTotal"])
+
+	def test_convert_to_order_of_an_untaxed_quotation_ignores_the_companys_default_template(self):
+		"""Same regression, for the Quotation -> Sales Order conversion path: ERPNext's
+		make_sales_order mapper carries the source quotation's (empty) taxes across
+		verbatim, and the resulting Sales Order's own insert() is just as exposed to
+		the company's default-template auto-population as a directly-created order."""
+		self._make_tax_template("Default Convert", rate=18, is_default=True)
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
+		)
+		self.assertFalse(quotation["taxesAndCharges"])
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		self.assertFalse(order["taxesAndCharges"])
+		self.assertEqual(order["taxes"], [])
+		self.assertEqual(order["total"], order["netTotal"])

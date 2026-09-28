@@ -28,6 +28,12 @@ class TestInquiryApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
+	def test_create_inquiry_exposes_created_at_timestamp(self):
+		# Inquiry.date is a plain Date field (no time-of-day) -- createdAt is the
+		# actual creation Datetime, for tables that need to show time alongside date.
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=5, source="WhatsApp")
+		self.assertIsNotNone(inquiry["createdAt"])
+
 	def test_create_inquiry_with_no_stock_is_out_of_stock(self):
 		# BRD C.2.4 / Phase 22 -- status is derived from real on-hand qty at creation
 		# (previously always hardcoded "Open"), which is what feeds the reorder
@@ -94,6 +100,18 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(inquiry["weightPerBoxKg"], 28)
 		self.assertEqual(inquiry["totalWeightKg"], 280)
 
+	def test_inquiry_carries_the_items_pieces_and_sqft(self):
+		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="WhatsApp")
+		self.assertEqual(inquiry["piecesPerBox"], 4)
+		self.assertEqual(inquiry["totalPieces"], 40)
+		self.assertEqual(inquiry["sqftPerBox"], 15.5)
+		self.assertEqual(inquiry["totalSqft"], 155)
+		# sqm is derived from sqft (1 sqft = 0.09290304 sqm exactly), not its own field.
+		self.assertAlmostEqual(inquiry["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(inquiry["totalSqm"], 14.4, places=2)
+
 	def test_update_inquiry_patches_status_and_remarks(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=50, source="Phone")
 		updated = inquiry_api.update_inquiry(inquiry["id"], {"status": "Available", "remarks": "Confirmed in stock"})
@@ -114,6 +132,22 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertEqual(po["lines"][0]["orderedQty"], 40)
 		self.assertEqual(po["sourceInquiry"], inquiry["id"])
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Mapped to PO")
+
+	def test_convert_to_purchase_requirement_falls_back_to_the_items_default_supplier(self):
+		frappe.db.set_value("Item", self.item, "custom_default_supplier", self.supplier)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
+
+		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
+
+		self.assertEqual(po["supplier"], self.supplier)
+
+	def test_convert_to_purchase_requirement_requires_a_supplier_when_none_can_be_resolved(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
+
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
 
 	def test_convert_to_purchase_requirement_rejects_ineligible_status(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")

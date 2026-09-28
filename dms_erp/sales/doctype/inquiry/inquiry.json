@@ -21,7 +21,8 @@
   "whatsapp_replied",
   "remarks",
   "customer_po",
-  "linked_sales_order"
+  "linked_sales_order",
+  "linked_quotation"
  ],
  "fields": [
   {
@@ -44,6 +45,7 @@
   {
    "fieldname": "qty",
    "fieldtype": "Float",
+   "in_list_view": 1,
    "label": "Qty",
    "reqd": 1
   },
@@ -123,6 +125,14 @@
    "fieldtype": "Link",
    "label": "Linked Sales Order",
    "options": "Sales Order",
+   "read_only": 1
+  },
+  {
+   "description": "Set once, at the same moment status moves to \"Quoted\" (sales.quotation_api.create_quotation). Several inquiries for the same dealer can merge into one quotation, so — unlike linked_sales_order — this isn't discoverable from the Quotation side (its own custom_inquiry only points at the first one); this field is the only record of it for every inquiry after the first.",
+   "fieldname": "linked_quotation",
+   "fieldtype": "Link",
+   "label": "Linked Quotation",
+   "options": "Quotation",
    "read_only": 1
   }
  ],

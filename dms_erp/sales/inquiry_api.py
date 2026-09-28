@@ -8,7 +8,9 @@ lifecycle: nothing ever set an Inquiry to "Mapped to PO" because nothing ever ra
 a Purchase Order *from* one. It's a thin wrapper over `purchase.po_api.
 create_purchase_order` (which still does the actual work, and still enforces its own
 Purchase/Management role gate) — not a parallel "purchase requirement" doctype,
-since a requirement here is just a PO with a `custom_source_inquiry` link back.
+since a requirement here is just a PO with a `custom_source_inquiry` link back. Its
+own `supplier` param is optional too (BRD D.2), just forwarded straight through to
+create_purchase_order's own item/Series default-supplier fallback.
 
 `create_inquiry` (Phase 14) now enforces the same catalog gate `quotation_api.
 create_quotation` always has — dealer-assigned visibility and current sellability —
@@ -31,7 +33,13 @@ import frappe
 from frappe import _
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
-from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
+from dms_erp.catalog.utils import (
+	is_sellable,
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 from dms_erp.sales.utils import find_open_duplicate_inquiries
 from dms_erp.warehouse.utils import total_stock_for_item
@@ -47,15 +55,25 @@ def _assert_can_manage_inquiries():
 
 def _serialize(doc) -> dict:
 	weight_per_box_kg = item_weight_per_box_kg(doc.item)
+	pieces_per_box = item_pieces_per_box(doc.item)
+	sqft_per_box = item_sqft_per_box(doc.item)
+	sqm_per_box = item_sqm_per_box(doc.item)
 	return {
 		"id": doc.name,
 		"number": doc.name,
 		"date": doc.date,
+		"createdAt": doc.creation,
 		"dealerId": doc.dealer,
 		"productId": doc.item,
 		"qty": doc.qty,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.qty if weight_per_box_kg is not None else None,
+		"piecesPerBox": pieces_per_box,
+		"totalPieces": (pieces_per_box or 0) * doc.qty if pieces_per_box is not None else None,
+		"sqftPerBox": sqft_per_box,
+		"totalSqft": (sqft_per_box or 0) * doc.qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * doc.qty, 4) if sqm_per_box is not None else None,
 		"status": doc.status,
 		"source": doc.source,
 		"expectedDelivery": doc.expected_delivery,
@@ -65,6 +83,7 @@ def _serialize(doc) -> dict:
 		"whatsappReplied": bool(doc.whatsapp_replied),
 		"customerPo": doc.customer_po,
 		"linkedSalesOrder": doc.linked_sales_order,
+		"linkedQuotation": doc.linked_quotation,
 	}
 
 
@@ -214,8 +233,8 @@ def update_inquiry(inquiry: str, patch: dict):
 @frappe.whitelist(methods=["POST"])
 def convert_to_purchase_requirement(
 	inquiry: str,
-	supplier: str,
 	expected_ready_date,
+	supplier: str | None = None,
 	ordered_qty: float | None = None,
 	remarks: str | None = None,
 ):

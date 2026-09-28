@@ -29,6 +29,17 @@ class TestInward(FrappeTestCase):
 		self.assertEqual(truck["weightPerBoxKg"], 28)
 		self.assertEqual(truck["totalWeightKg"], 1400)
 
+	def test_truck_carries_the_items_pieces_and_sqft(self):
+		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
+		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
+		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50)
+		self.assertEqual(truck["piecesPerBox"], 4)
+		self.assertEqual(truck["totalPieces"], 200)
+		self.assertEqual(truck["sqftPerBox"], 15.5)
+		self.assertEqual(truck["totalSqft"], 775)
+		self.assertAlmostEqual(truck["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(truck["totalSqm"], 72, places=2)
+
 	def test_truck_weight_prefers_the_confirmed_batchs_own_weight_once_allocated(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
 		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=50)

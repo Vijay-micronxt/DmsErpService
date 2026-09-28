@@ -76,6 +76,14 @@ CUSTOM_FIELDS = {
 			"insert_after": "custom_discontinuation_status",
 		},
 		{
+			"fieldname": "custom_default_supplier",
+			"fieldtype": "Link",
+			"label": "Default Supplier",
+			"options": "Supplier",
+			"description": "BRD D.2 -- who this item is normally sourced from. Settable independently of the item's Series (e.g. re-sourcing just this one item); when unset, catalog.utils.item_default_supplier falls back to the Series' own supplier.",
+			"insert_after": "custom_moq",
+		},
+		{
 			"fieldname": "custom_dealer_codes_section",
 			"fieldtype": "Section Break",
 			"label": "Dealer Codes & Catalog Visibility",

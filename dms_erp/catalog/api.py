@@ -40,10 +40,13 @@ list -- reports need the whole result set, not a page of it, so they call
 list_all_products (unpaginated, internal-only) instead of the whitelisted endpoint.
 """
 
+import difflib
+import re
+
 import frappe
 from frappe import _
 
-from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable
+from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable, item_default_supplier
 from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
 from dms_erp.warehouse.utils import total_stock_for_item
@@ -147,6 +150,9 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"piecesPerBox": item_doc.custom_pieces_per_box,
 		"sqftPerBox": item_doc.custom_sqft_per_box,
 		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
+		# BRD D.2 -- the item's own custom_default_supplier if set, else its Series'
+		# supplier (see catalog.utils.item_default_supplier).
+		"defaultSupplier": item_default_supplier(item_doc.name),
 		"leadTimeDays": item_doc.lead_time_days,
 		"altItemId": _get_alt_item(item_doc.name),
 		"dealerCodes": [_serialize_dealer_code(row) for row in item_doc.custom_dealer_codes],
@@ -255,6 +261,11 @@ def create_product(
 	pieces_per_box: float = 0,
 	sqft_per_box: float = 0,
 	weight_per_box_kg: float = 0,
+	# BRD D.2 — independent of `supplier` above (which is only who this launch price came
+	# from): lets Purchase name a different default supplier at creation time, e.g. when
+	# the launch quote and the intended ongoing source aren't the same company. Falls back
+	# to `supplier` when not given, same as before this param existed.
+	default_supplier: str | None = None,
 	lead_time_days: int = 0,
 	alt_item: str | None = None,
 	hsn_code: str | None = None,
@@ -299,6 +310,10 @@ def create_product(
 			"custom_pieces_per_box": pieces_per_box,
 			"custom_sqft_per_box": sqft_per_box,
 			"custom_weight_per_box_kg": weight_per_box_kg,
+			# BRD D.2 -- defaults to the launch-pricing supplier when default_supplier isn't
+			# given explicitly, so every item created through this endpoint always gets one;
+			# Purchase can still re-source it later via update_product's "defaultSupplier" patch.
+			"custom_default_supplier": default_supplier or supplier,
 			"lead_time_days": lead_time_days,
 			# Only meaningful (and only mandatory) when india_compliance is
 			# installed -- harmless to set on a site without it (Frappe just
@@ -348,6 +363,7 @@ def update_product(item: str, patch: dict):
 		"seriesRef": "custom_series_ref",
 		"bulkQtyThreshold": "custom_bulk_qty_threshold",
 		"retailQtyThreshold": "custom_retail_qty_threshold",
+		"defaultSupplier": "custom_default_supplier",
 	}
 
 	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Product Series", patch["seriesRef"]):
@@ -428,6 +444,172 @@ def resolve_dealer_code(dealer: str, code: str) -> dict | None:
 	if not item_code:
 		return None
 	return _serialize(frappe.get_doc("Item", item_code))
+
+
+_MENTION_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-]*")
+# A single token like "GVT6013" (no hyphen, no space -- typed as one word) has no
+# natural split point to recover "GVT-6013" from except this common item-code shape:
+# a letter run immediately followed by a digit run.
+_LETTER_DIGIT_BOUNDARY_RE = re.compile(r"^([A-Za-z]+)(\d[\dA-Za-z]*)$")
+
+
+def _candidate_variants(s: str) -> set[str]:
+	# Dealer codes are conventionally uppercase, but a message typed on a phone
+	# keyboard is not -- try both rather than requiring the dealer to match case.
+	return {s, s.upper()}
+
+
+@frappe.whitelist(methods=["GET"])
+def resolve_item_mention(dealer: str, text: str) -> dict | None:
+	"""Finds a dealer's own item code somewhere inside a free-text message (a WhatsApp
+	enquiry, not a bare code lookup like resolve_dealer_code above) — e.g. "GVT 6013
+	stock hai kya" should resolve the same as if the dealer had typed "GVT-6013" or
+	"GVT6013" alone. Deterministic substring matching only, no fuzzy/NLU matching:
+	dealer codes are exact identifiers the dealer chose, not natural language, so
+	exact-match candidates generated from the raw text are the right tool here —
+	unlike *whether* a message is an availability question at all, which is a
+	language-understanding problem this function deliberately doesn't attempt (see
+	comms/api.py's inbound-webhook handling for that side of it).
+
+	Returns None (not a throw) when nothing resolves, same convention as
+	resolve_dealer_code — "no code found in this text" is routine, not an error."""
+	tokens = _MENTION_TOKEN_RE.findall(text or "")
+	if not tokens:
+		return None
+
+	candidates: list[str] = []
+	# Longer, more specific candidates first (adjacent-token pairs, joined the ways a
+	# dealer code might actually be split across words: hyphenated, concatenated, or
+	# space-separated), then fall back to single tokens.
+	for i in range(len(tokens) - 1):
+		a, b = tokens[i], tokens[i + 1]
+		for pair in (f"{a}-{b}", f"{a}{b}", f"{a} {b}"):
+			candidates.extend(_candidate_variants(pair))
+	for token in tokens:
+		candidates.extend(_candidate_variants(token))
+		boundary = _LETTER_DIGIT_BOUNDARY_RE.match(token)
+		if boundary:
+			candidates.extend(_candidate_variants(f"{boundary.group(1)}-{boundary.group(2)}"))
+
+	seen: set[str] = set()
+	for candidate in candidates:
+		if candidate in seen:
+			continue
+		seen.add(candidate)
+		item = resolve_dealer_code(dealer, candidate)
+		if item:
+			return item
+	return None
+
+
+_LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
+
+# BRD C.2.1: "a closest-match search (target ~85-90% confidence) is applied; on a
+# mismatch or multiple candidates, the user/dealer is prompted to confirm the exact
+# code rather than the system guessing (this prevents the variant-confusion errors
+# seen in the past, e.g. one finish or sub-type mistaken for another)." A candidate
+# below this ratio is a "mismatch" even when it's the only plausible one; a runner-up
+# within _AMBIGUOUS_MATCH_GAP of the winner is "multiple candidates" even when the
+# winner alone would have cleared the bar -- either case must ask, never guess.
+_CONFIDENT_MATCH_RATIO = 0.85
+_AMBIGUOUS_MATCH_GAP = 0.05
+
+
+def resolve_item_by_name(dealer: str, text: str) -> dict:
+	"""Fallback for comms.flow_api.get_item_info, tried only once resolve_item_mention's
+	exact private-dealer-code match has already failed. Scoped to
+	dealer_catalog_api.catalog_for(dealer) -- the dealer's actual visible-and-sellable
+	catalog -- not just items they have an Item Dealer Code for: those are two
+	genuinely separate mechanisms (a Dealer Catalog assignment is "can this dealer see
+	and order this item at all"; an Item Dealer Code is an optional private shorthand
+	code layered on top), and a dealer routinely asks about a catalog-visible item
+	they were never assigned a private code for at all. An item outside catalog_for is
+	never matched into a reply, same visibility boundary resolve_dealer_code enforces
+	for its own, narrower case.
+
+	Two matching strategies, tried in order:
+	1. Exact, case-insensitive substring containment against the item's own code
+	   ("RUSTIC-GREY" inside "PT-4040-RUSTIC-GREY") -- a dealer shortens the real
+	   item code at least as often as they type its name, and this needs no fuzzy
+	   tolerance since it's already an exact match once case is ignored. Always
+	   confident -- there's no ratio to be unsure about here.
+	2. A fuzzy match against the item's name, tolerant of a minor typo ("Royal Glass"
+	   for "Royal Glassy") and of the name being wrapped inside a full sentence --
+	   often in Hindi/Hinglish, with the item name itself still typed in Latin script
+	   ("क्या आप ... Royal Glossy ... सकते हैं?"). Fuzzy-matching that whole sentence
+	   against a two-word item name washes the match out with unrelated surrounding
+	   text, so this extracts just the Latin-script words and fuzzy-matches short
+	   windows of them (1-3 consecutive words -- the shape an item name actually
+	   takes) rather than the raw text as one blob; the raw text is still tried too.
+	   Every plausible name is ranked (not just the single best), so a close runner-up
+	   is never silently thrown away -- see _CONFIDENT_MATCH_RATIO/_AMBIGUOUS_MATCH_GAP.
+
+	Deliberately NOT used by the free-text LLM path (comms/api.py's _maybe_auto_reply):
+	there, item_mention is an arbitrary phrase pulled out of a longer, unprompted
+	sentence, where either strategy above risks confidently resolving to the wrong
+	item. Here the dealer's entire reply is a single, deliberate answer to a single
+	question, so a close match is worth ranking at all -- though per BRD C.2.1, still
+	not worth guessing on when it isn't close enough.
+
+	Returns one of three shapes, discriminated by "status":
+	  {"status": "matched", "item": {...}}          -- confident enough to answer directly.
+	  {"status": "ambiguous", "candidates": [...]}  -- BRD's "mismatch or multiple
+	      candidates" case: the best fuzzy match didn't clear the confidence bar, or a
+	      close runner-up exists. Never guesses here -- candidates is the top 1-3
+	      plausible items, for the caller to ask the dealer to confirm/retype instead.
+	  {"status": "none"}                            -- nothing plausible at all."""
+	text = (text or "").strip()
+	if not text:
+		return {"status": "none"}
+
+	from dms_erp.catalog.dealer_catalog_api import catalog_for
+
+	item_codes = catalog_for(dealer)
+	if not item_codes:
+		return {"status": "none"}
+	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "item_name"])
+	if not items:
+		return {"status": "none"}
+
+	upper_text = text.upper()
+	for item in items:
+		if upper_text in item.name.upper():
+			return {"status": "matched", "item": _serialize(frappe.get_doc("Item", item.name))}
+
+	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
+	if not by_lower_name:
+		return {"status": "none"}
+
+	words = _LATIN_WORD_RE.findall(text)
+	candidate_phrases = {
+		" ".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(i + 4, len(words) + 1))
+	}
+	candidate_phrases.add(text)  # covers a name that doesn't split cleanly into separate words
+
+	# Every plausible item name's own best score against any candidate phrase -- not
+	# just the single overall winner -- so a close runner-up is visible below, rather
+	# than being silently overwritten the way a single best_name/best_ratio pair would.
+	scores: dict[str, float] = {}
+	for phrase in candidate_phrases:
+		for match in difflib.get_close_matches(phrase.lower(), by_lower_name.keys(), n=3, cutoff=0.6):
+			ratio = difflib.SequenceMatcher(None, phrase.lower(), match).ratio()
+			if ratio > scores.get(match, 0.0):
+				scores[match] = ratio
+
+	if not scores:
+		return {"status": "none"}
+
+	ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+	best_name, best_ratio = ranked[0]
+	runner_up_is_close = len(ranked) > 1 and (best_ratio - ranked[1][1]) < _AMBIGUOUS_MATCH_GAP
+
+	if best_ratio < _CONFIDENT_MATCH_RATIO or runner_up_is_close:
+		return {
+			"status": "ambiguous",
+			"candidates": [_serialize(frappe.get_doc("Item", by_lower_name[name])) for name, _ in ranked[:3]],
+		}
+
+	return {"status": "matched", "item": _serialize(frappe.get_doc("Item", by_lower_name[best_name]))}
 
 
 @frappe.whitelist(methods=["GET"])

@@ -28,6 +28,12 @@ import frappe
 from frappe import _
 from frappe.utils import today
 
+from dms_erp.catalog.utils import (
+	item_pieces_per_box,
+	item_sqft_per_box,
+	item_sqm_per_box,
+	item_weight_per_box_kg,
+)
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_record
 from dms_erp.qr_utils import qr_data_uri
@@ -48,6 +54,11 @@ def _batch_weight_per_box_kg(batch_no: str | None) -> float | None:
 
 def _serialize(doc) -> dict:
 	weight_per_box_kg = _batch_weight_per_box_kg(doc.batch_no)
+	if weight_per_box_kg is None:
+		weight_per_box_kg = item_weight_per_box_kg(doc.item)
+	pieces_per_box = item_pieces_per_box(doc.item)
+	sqft_per_box = item_sqft_per_box(doc.item)
+	sqm_per_box = item_sqm_per_box(doc.item)
 	return {
 		"id": doc.name,
 		"slipNumber": doc.name,
@@ -60,6 +71,12 @@ def _serialize(doc) -> dict:
 		"purchaseReceipt": doc.purchase_receipt,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.total_qty if weight_per_box_kg is not None else None,
+		"piecesPerBox": pieces_per_box,
+		"totalPieces": (pieces_per_box or 0) * doc.total_qty if pieces_per_box is not None else None,
+		"sqftPerBox": sqft_per_box,
+		"totalSqft": (sqft_per_box or 0) * doc.total_qty if sqft_per_box is not None else None,
+		"sqmPerBox": sqm_per_box,
+		"totalSqm": round((sqm_per_box or 0) * doc.total_qty, 4) if sqm_per_box is not None else None,
 		"allocations": [
 			{"bayId": row.bay, "bayCode": frappe.db.get_value("Warehouse", row.bay, "custom_bay_code"), "qty": row.qty, "confirmed": bool(row.confirmed)}
 			for row in doc.lines

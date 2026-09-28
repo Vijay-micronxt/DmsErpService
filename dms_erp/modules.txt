@@ -8,3 +8,4 @@ Finance
 Comms
 Dashboard
 Reports
+Approvals

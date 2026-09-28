@@ -7,11 +7,13 @@ list/get over `Supplier`, the same gap `sales.dealer_api` closed for `Customer`.
 Unlike Customer, Supplier has no per-company credit-limit child table to net out —
 there's genuinely nothing else to resolve here beyond the native fields.
 
-`custom_latitude`/`custom_longitude` (BRD C.1.6) are the one exception: two plain
-Custom Fields (purchase/setup.py) for supplier GPS capture, a prerequisite for
-route optimisation (BRD C.5) once that's built. `set_supplier_location` is the
-only narrow write endpoint; `create_supplier` / `update_supplier` cover the rest of the
-master-data write side (BRD MD-02): name, group, country, GPS, disabled.
+`custom_latitude`/`custom_longitude`/`custom_address`/`custom_contact_person` (BRD
+C.1.6) are the exception: plain Custom Fields (purchase/setup.py) for GPS capture
+(a prerequisite for route optimisation, BRD C.5), factory address (pickup stop
+identification) and the material-ready contact (vendor enquiry/follow-up).
+`set_supplier_location` is the only narrow write endpoint; `create_supplier` /
+`update_supplier` cover the rest of the master-data write side (BRD MD-02): name,
+group, country, GPS, address, contact, disabled.
 """
 
 import frappe
@@ -34,6 +36,8 @@ def _serialize(
 	latitude=None,
 	longitude=None,
 	insurance_holder: str | None = None,
+	address: str | None = None,
+	contact_person: str | None = None,
 ) -> dict:
 	return {
 		"id": name,
@@ -45,6 +49,10 @@ def _serialize(
 		"longitude": longitude,
 		# BRD C.1.6 — which insurer a damage claim against this supplier routes to.
 		"insuranceHolder": insurance_holder,
+		# BRD C.1.6 — factory location, for pickup stop identification.
+		"address": address,
+		# BRD C.1.6 — who to reach for vendor enquiry / material-ready follow-up.
+		"contactPerson": contact_person,
 	}
 
 
@@ -65,6 +73,8 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			"custom_latitude",
 			"custom_longitude",
 			"custom_insurance_holder",
+			"custom_address",
+			"custom_contact_person",
 		],
 		order_by="supplier_name asc",
 	)
@@ -78,6 +88,8 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			r.custom_latitude,
 			r.custom_longitude,
 			r.custom_insurance_holder,
+			r.custom_address,
+			r.custom_contact_person,
 		)
 		for r in rows
 	]
@@ -95,6 +107,8 @@ def get_supplier(supplier: str):
 		doc.custom_latitude,
 		doc.custom_longitude,
 		doc.custom_insurance_holder,
+		doc.custom_address,
+		doc.custom_contact_person,
 	)
 
 
@@ -117,6 +131,8 @@ def create_supplier(
 	latitude: float | None = None,
 	longitude: float | None = None,
 	insurance_holder: str | None = None,
+	address: str | None = None,
+	contact_person: str | None = None,
 ):
 	"""BRD MD-02 — create a supplier (a native Supplier). `group` falls back to the site's
 	Buying Settings default when omitted."""
@@ -140,6 +156,10 @@ def create_supplier(
 		values["custom_longitude"] = longitude
 	if insurance_holder:
 		values["custom_insurance_holder"] = insurance_holder.strip()
+	if address:
+		values["custom_address"] = address.strip()
+	if contact_person:
+		values["custom_contact_person"] = contact_person.strip()
 
 	doc = frappe.get_doc(values)
 	doc.insert(ignore_permissions=True)
@@ -148,7 +168,8 @@ def create_supplier(
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_supplier(supplier: str, patch: dict):
-	"""Patch keys: name, group, country, latitude, longitude, disabled, insuranceHolder."""
+	"""Patch keys: name, group, country, latitude, longitude, disabled, insuranceHolder,
+	address, contactPerson."""
 	_assert_can_manage_suppliers()
 
 	field_map = {
@@ -158,6 +179,8 @@ def update_supplier(supplier: str, patch: dict):
 		"latitude": "custom_latitude",
 		"longitude": "custom_longitude",
 		"insuranceHolder": "custom_insurance_holder",
+		"address": "custom_address",
+		"contactPerson": "custom_contact_person",
 	}
 
 	doc = frappe.get_doc("Supplier", supplier)
