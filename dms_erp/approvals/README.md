@@ -33,11 +33,14 @@ Four are wired today:
   actually returns, not the pre-action name).
 - **#4 (Discount Over Price List)**: `approvals.api.
   gate_discount_over_price_list`, called from `quotation_api.create_quotation`
-  and `order_api.create_order` whenever any line carries a nonzero
-  `discount_percentage`. BRD C.7.3 sets no threshold ("even a one-rupee
-  change"), so any discount at all triggers this -- gates creation, same as #6,
-  and the two compose: an authorized caller doing both in one call gets an
-  audit record for each (see quotation_api.create_quotation's nested
+  and `order_api.create_order` whenever any line's `discount_percentage`
+  exceeds `DMS Sales Settings.discount_approval_threshold_pct` (a Single
+  doctype field, default 0). BRD C.7.3 sets no threshold for Pacific ("even a
+  one-rupee change"), hence the 0 default, but this app is white-labeled --
+  a different client's own rule may be looser (e.g. 5%), and that's a config
+  change (edit the Single doctype), never a code change. Gates creation, same
+  as #6, and the two compose: an authorized caller doing both in one call gets
+  an audit record for each (see quotation_api.create_quotation's nested
   `_create_after_discount_gate`).
 - **#1 (Credit Limit Exceeded)**: `sales.credit_limit.gate_credit_limit`, called
   from `order_api.create_order` (a pre-creation *estimate* of the new order's
