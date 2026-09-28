@@ -43,8 +43,9 @@ Four are wired today:
   an audit record for each (see quotation_api.create_quotation's nested
   `_create_after_discount_gate`).
 - **#1 (Credit Limit Exceeded)**: `sales.credit_limit.gate_credit_limit`, called
-  from `order_api.create_order` (a pre-creation *estimate* of the new order's
-  value, since real per-line pricing happens later) and
+  from `order_api.create_order` and `comms.flow_api.create_dealer_opportunity`
+  (WhatsApp order-placement -- both a pre-creation *estimate* of the new
+  order's value, since real per-line pricing happens later) and
   `quotation_api.convert_to_order` (the Quotation's own `grand_total` is exact,
   since it's already priced and submitted) whenever the dealer's committed
   Sales Order value plus this order's own value would exceed their configured

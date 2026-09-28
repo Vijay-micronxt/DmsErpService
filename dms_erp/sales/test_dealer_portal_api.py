@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -124,6 +126,27 @@ class TestDealerPortalApi(FrappeTestCase):
 
 		with self.assertRaises(frappe.ValidationError):
 			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-2")
+
+	@patch("dms_erp.sales.dealer_portal_api._create_order")
+	def test_convert_to_order_never_leaks_erpnext_native_html_or_emails(self, mock_create_order):
+		# A real report: ERPNext's own native Sales Order credit-limit check (not
+		# anything this app raises itself) throws an HTML-formatted message naming
+		# internal Credit Controller users and their emails -- convert_to_order
+		# must never forward that verbatim to a dealer.
+		mock_create_order.side_effect = frappe.ValidationError(
+			"Credit limit has been crossed for customer Medha - 1(37290.0/1000.0)<br><br>"
+			"Please contact any of the following users to extend the credit limits for Medha - 1: "
+			"<br><br> <ul><li>Karthik Mxt (karthikeyan@micronxt.com)</li></ul>."
+		)
+		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
+
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-HTML-TEST")
+
+		message = str(ctx.exception)
+		self.assertNotIn("<", message)
+		self.assertNotIn("micronxt.com", message)
+		self.assertIn("Pacific representative", message)
 
 	def test_list_my_inquiries_never_shows_another_dealers_inquiries(self):
 		dealer_portal_api.raise_inquiry(item=self.item, qty=1)

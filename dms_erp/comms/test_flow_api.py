@@ -8,6 +8,7 @@ from dms_erp.comms import flow_api
 from dms_erp.pricing import api as pricing_api
 from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.utils import default_company
 
 
 class TestSplitItemMentions(FrappeTestCase):
@@ -815,3 +816,56 @@ class TestCreateDealerOpportunity(FrappeTestCase):
 		)
 
 		self.assertIn("couldn't place this order", result["message"])
+
+	@patch("dms_erp.sales.order_api._create_order")
+	def test_order_creation_failure_never_leaks_erpnext_native_html_or_emails(self, mock_create_order):
+		# The real report this guards against: ERPNext's own native Sales Order
+		# credit-limit check throws an HTML-formatted message naming internal
+		# Credit Controller users and their emails -- forwarded verbatim, a
+		# WhatsApp dealer saw exactly this, tags and all.
+		mock_create_order.side_effect = frappe.ValidationError(
+			"Credit limit has been crossed for customer Medha - 1(37290.0/1000.0)<br><br>"
+			"Please contact any of the following users to extend the credit limits for Medha - 1: "
+			"<br><br> <ul><li>Karthik Mxt (karthikeyan@micronxt.com)</li></ul>."
+		)
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919620204665",
+				"variables": {"order_item_code": "GVT-6013", "po_number": "PO-1234"},
+			}
+		)
+
+		self.assertNotIn("<", result["message"])
+		self.assertNotIn("micronxt.com", result["message"])
+		self.assertIn("couldn't place this order", result["message"])
+
+	@patch("dms_erp.sales.order_api._create_order")
+	def test_order_over_credit_limit_is_queued_not_placed(self, mock_create_order):
+		item = make_item("FLOW-CREDIT-ITEM", "Vitrified")
+		supplier = make_supplier("Flow API Credit Test Supplier")
+		pricing_api.ensure_price_record(item, supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		dealer = make_dealer("Flow API Credit Limit Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_phone", "919888888888")
+		doc = frappe.get_doc("Customer", dealer)
+		doc.append("credit_limits", {"company": default_company(), "credit_limit": 1000})
+		doc.save(ignore_permissions=True)
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919888888888",
+				"variables": {
+					"order_item_code": item,
+					"order_qty_band": "100 - 200 units",  # midpoint 150 -> 150*500 = 75000, over the 1000 limit
+					"po_number": "PO-CREDIT-1",
+				},
+			}
+		)
+
+		mock_create_order.assert_not_called()
+		self.assertIn("credit limit", result["message"].lower())
+		self.assertNotIn("<", result["message"])
