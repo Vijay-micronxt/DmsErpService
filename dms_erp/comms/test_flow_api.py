@@ -839,6 +839,8 @@ class TestCreateDealerOpportunity(FrappeTestCase):
 
 		self.assertNotIn("<", result["message"])
 		self.assertNotIn("micronxt.com", result["message"])
+		self.assertNotIn("Karthik", result["message"])
+		self.assertIn("Credit limit has been crossed for customer Medha - 1", result["message"])
 		self.assertIn("couldn't place this order", result["message"])
 
 	@patch("dms_erp.sales.order_api._create_order")
