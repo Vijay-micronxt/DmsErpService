@@ -108,6 +108,29 @@ def apply_tax_template(doc, taxes_and_charges: str | None) -> None:
 		)
 
 
+def safe_customer_message(error: Exception) -> str:
+	"""Some exceptions this app's own code raises when an order can't be placed are
+	already plain, dealer-safe text (e.g. "{item} has no approved dealer price
+	yet."). ERPNext's own native validation -- most notably its built-in Sales
+	Order credit-limit check -- is not: it's an HTML-formatted internal-admin
+	message that names the site's Credit Controller users and their email
+	addresses, meant for a Desk user to read, never a dealer. A real report:
+	a WhatsApp dealer whose order exceeded their credit limit got that exact
+	message, HTML tags and all, forwarded verbatim as their order-rejection
+	reply -- Flow/dealer-portal call sites that pass raw exception text through
+	to a dealer must run it through this first.
+
+	None of this app's own frappe.throw calls contain HTML (verified: no
+	`frappe.throw` message anywhere in this codebase includes a tag), so "does
+	the text contain a tag" is a safe, simple signal for "this came from
+	ERPNext core, not from us" -- no need to enumerate every possible ERPNext
+	validation message by name."""
+	text = str(error)
+	if "<" in text and ">" in text:
+		return "We couldn't place this order right now. Please contact your Pacific representative."
+	return f"We couldn't place this order: {text}. Please contact your Pacific representative."
+
+
 def clear_unrequested_default_tax(doc) -> None:
 	"""Belt-and-suspenders companion to apply_tax_template's dont_auto_add_taxes
 	flag. Call after doc.insert() (while still a draft, before submit): if the

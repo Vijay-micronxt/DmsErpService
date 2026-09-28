@@ -152,7 +152,19 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	"""BRD C.13.1 — "enter their own PO number to tag/close it." Only converts an
 	inquiry this dealer actually owns, at the same in-stock/priced items it was
 	raised for -- lines come from the inquiry itself, not caller-supplied, so a
-	dealer session can't order arbitrary items through this endpoint."""
+	dealer session can't order arbitrary items through this endpoint.
+
+	Deliberately NOT gated for credit-limit exceedance (BRD C.11 trigger #1) the
+	way order_api.create_order/quotation_api.convert_to_order and
+	comms.flow_api's WhatsApp order-placement path now are: this endpoint's
+	response is consumed by the separate dealer-portal frontend, and returning
+	`{"approvalRequired": True, ...}` here instead of an Order would be a
+	response-shape change that frontend was never updated to handle. What IS
+	fixed here: _create_order can still raise ERPNext's own native
+	credit-limit-exceeded validation (an HTML-formatted message naming internal
+	Credit Controller users and their emails, never meant for a dealer to see;
+	see sales.utils.safe_customer_message's own docstring for the real report
+	that surfaced this) -- that text must never reach the dealer verbatim."""
 	dealer = _current_dealer()
 	if not customer_po:
 		frappe.throw(_("customer_po is required."), frappe.ValidationError)
@@ -164,7 +176,12 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(_("Inquiry {0} is {1} and can no longer be converted.").format(inquiry, doc.status), frappe.ValidationError)
 
 	lines = [{"item": doc.item, "qty": doc.qty}]
-	return _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po)
+	try:
+		return _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		from dms_erp.sales.utils import safe_customer_message
+
+		frappe.throw(safe_customer_message(e), type(e))
 
 
 @frappe.whitelist(methods=["GET"])

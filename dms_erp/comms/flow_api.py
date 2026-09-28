@@ -517,16 +517,48 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	if po_number:
 		from frappe.utils import add_days, today
 
+		from dms_erp.sales.credit_limit import gate_credit_limit
+		from dms_erp.sales.order_api import _estimate_order_value
+		from dms_erp.sales.utils import safe_customer_message
+
 		qty = _QTY_BAND_MIDPOINT.get(variables.get("order_qty_band"), 1)
+		lines = [{"item": item_code, "qty": qty}]
+		create_kwargs = dict(dealer=dealer, lines=lines, expected_dispatch=add_days(today(), 7), customer_po=po_number)
+
 		try:
-			order = _create_order(
-				dealer=dealer, lines=[{"item": item_code, "qty": qty}], expected_dispatch=add_days(today(), 7), customer_po=po_number
+			# BRD C.11 trigger #1: a WhatsApp-placed order is never itself an
+			# "authorized" credit-limit override (the API user this Flow
+			# authenticates as holds no DMS Management/System Manager role) --
+			# an over-limit order always queues for Management's decision here,
+			# rather than hard-blocking the dealer the way ERPNext's own native
+			# credit-limit check would (and, before this, actually did -- see
+			# safe_customer_message's own docstring for what that looked like).
+			result = gate_credit_limit(
+				dealer=dealer,
+				additional_value=_estimate_order_value(dealer, lines),
+				reference_doctype="Sales Order",
+				applier_action="create_order",
+				create_fn=_create_order,
+				create_kwargs=create_kwargs,
 			)
 		except (frappe.PermissionError, frappe.ValidationError) as e:
-			reply = f"We couldn't place this order: {e}. Please contact your Pacific representative."
+			# Safety net: gate_credit_limit's own estimate can't perfectly predict
+			# every real ERPNext validation (taxes, a concurrent order, etc.), so
+			# _create_order can still raise here -- never forward that raw text
+			# to a dealer.
+			reply = safe_customer_message(e)
 			_send_message(dealer, reply, related_type="General")
 			return {"message": reply}
 
+		if isinstance(result, dict) and result.get("approvalRequired"):
+			reply = (
+				f"Your order against PO {po_number} is over your approved credit limit, so it needs "
+				f"a quick review by our team before we can confirm it. We'll notify you once it's approved."
+			)
+			_send_message(dealer, reply, related_type="General")
+			return {"message": reply}
+
+		order = result
 		reply = f"Order {order['number']} has been placed against your PO {po_number}. We'll confirm dispatch shortly."
 		_send_message(dealer, reply, related_type="Order", related_reference=order["number"])
 		return {"message": reply}
