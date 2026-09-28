@@ -280,9 +280,10 @@ def create_order(
 	the queued Approval Request (see sales.order_channel.gate_channel_override).
 
 	Each line in `lines` may carry `discount_percentage` (0-100) and/or
-	`delivery_date` -- see _priced_order_line. Any line with a nonzero discount
-	is BRD C.11 trigger #4 (no threshold -- see approvals.api.
-	gate_discount_over_price_list) and gates the same way channel override does.
+	`delivery_date` -- see _priced_order_line. A line whose discount is above
+	`DMS Sales Settings.discount_approval_threshold_pct` (0 by default -- see
+	approvals.api.gate_discount_over_price_list) is BRD C.11 trigger #4 and
+	gates the same way channel override does.
 	So does a dealer whose committed order value (this order's own estimated
 	value included) would exceed their configured credit limit (BRD C.11
 	trigger #1 -- see sales.credit_limit.gate_credit_limit). `taxes_and_charges`

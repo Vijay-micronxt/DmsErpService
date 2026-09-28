@@ -353,6 +353,34 @@ class TestApprovalsApi(FrappeTestCase):
 		)  # discount_percentage omitted entirely
 		self.assertEqual(frappe.db.count("Approval Request"), before)
 
+	def test_discount_approval_threshold_is_configurable_per_site(self):
+		"""White-label config: DMS Sales Settings.discount_approval_threshold_pct
+		defaults to 0 (Pacific's own "even a one-rupee change" rule), but a
+		different client's site can raise it -- a discount at or below the
+		configured threshold should never gate at all, even for an unauthorized
+		caller, while one above it still does."""
+		frappe.db.set_single_value("DMS Sales Settings", "discount_approval_threshold_pct", 10)
+		try:
+			frappe.set_user(self.sales_user)
+
+			within_threshold = quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
+				markup_pct=12,
+			)
+			self.assertEqual(within_threshold["lines"][0]["discountPercentage"], 5)
+
+			over_threshold = quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 15}],
+				markup_pct=12,
+			)
+			self.assertTrue(over_threshold["approvalRequired"])
+			self.assertEqual(over_threshold["approval"]["triggerType"], "Discount Over Price List")
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.set_single_value("DMS Sales Settings", "discount_approval_threshold_pct", 0)
+
 	def test_approving_a_queued_discount_creates_the_quotation(self):
 		frappe.set_user(self.sales_user)
 		queued = quotation_api.create_quotation(

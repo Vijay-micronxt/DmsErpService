@@ -293,30 +293,48 @@ def gate_document_creation(
 	return {"approvalRequired": True, "approval": approval}
 
 
+DEFAULT_DISCOUNT_APPROVAL_THRESHOLD_PCT = 0
+
+
+def _discount_approval_threshold_pct() -> float:
+	"""BRD C.7.3's own rule for Pacific is "even a one-rupee change" -- no
+	threshold, hence the 0 default (same "get_single_value(...) or DEFAULT"
+	pattern pricing.dealer_classification._classification_window_days already
+	uses for its own BRD-left-open config knob). This app is white-labeled,
+	though, so a different client's own business rule may be looser -- e.g.
+	discounts up to 5% auto-apply, only above that needs Management approval.
+	`DMS Sales Settings.discount_approval_threshold_pct` is that per-site knob;
+	changing a client's threshold is a config change, not a code change."""
+	return frappe.db.get_single_value("DMS Sales Settings", "discount_approval_threshold_pct") or DEFAULT_DISCOUNT_APPROVAL_THRESHOLD_PCT
+
+
 def gate_discount_over_price_list(
 	*, reference_doctype: str, lines: list[dict], create_fn, create_kwargs: dict
 ) -> dict:
-	"""BRD C.11 trigger #4 / C.7.3: "any transaction-level price or discount
-	change -- even a one-rupee change -- is an override requiring approval,"
-	with no threshold anywhere in the BRD. `discount_percentage` (0-100, set per
-	line at create_quotation/create_order time) is this codebase's only
-	transaction-level pricing lever, so any line with a nonzero one is the whole
-	detection point -- a caller with no discounted lines never touches the
+	"""BRD C.11 trigger #4 / C.7.3: a transaction-level price or discount
+	change is an override requiring approval once it's above
+	`_discount_approval_threshold_pct()` -- 0 by default (Pacific's own rule is
+	"even a one-rupee change", i.e. no threshold at all), but configurable per
+	site for a different client. `discount_percentage` (0-100, set per line at
+	create_quotation/create_order time) is this codebase's only
+	transaction-level pricing lever, so any line above the threshold is the
+	whole detection point -- a caller with no line over it never touches the
 	approval queue at all.
 
 	(Trigger #3, "any pricing override," is deliberately not wired separately --
 	see approvals.api's own module docstring for why it collapses into this
 	same check here.)"""
-	if not any(float(line.get("discount_percentage") or 0) > 0 for line in lines):
+	threshold = _discount_approval_threshold_pct()
+	if not any(float(line.get("discount_percentage") or 0) > threshold for line in lines):
 		return create_fn(**create_kwargs)
 
 	discounted_items = [
-		line["item"] for line in lines if float(line.get("discount_percentage") or 0) > 0
+		line["item"] for line in lines if float(line.get("discount_percentage") or 0) > threshold
 	]
 	return gate_document_creation(
 		trigger_type="Discount Over Price List",
 		reference_doctype=reference_doctype,
-		reason=f"{frappe.session.user} applied a discount on {', '.join(discounted_items)}.",
+		reason=f"{frappe.session.user} applied a discount on {', '.join(discounted_items)} (over the {threshold:.0f}% approval threshold).",
 		create_fn=create_fn,
 		create_kwargs=create_kwargs,
 	)
