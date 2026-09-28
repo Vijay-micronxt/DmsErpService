@@ -45,6 +45,47 @@ def _assert_can_manage_dealers():
 		frappe.throw(_("Only Sales or Management can manage dealers."), frappe.PermissionError)
 
 
+@frappe.whitelist(methods=["GET"])
+def list_customer_groups(search: str | None = None):
+	"""Real, assignable (leaf, non-group) Customer Groups only -- a group-type node
+	(e.g. "All Customer Groups") is rejected by ERPNext itself if passed to a
+	Customer, so there's no point surfacing it as a pickable option here."""
+	filters = {"is_group": 0}
+	if search:
+		filters["name"] = ["like", f"%{search}%"]
+	names = frappe.get_all("Customer Group", filters=filters, pluck="name", order_by="name asc")
+	return names
+
+
+@frappe.whitelist(methods=["POST"])
+def create_customer_group(name: str, parent: str | None = None):
+	"""Creates a new leaf Customer Group so staff aren't blocked waiting on a
+	System Manager to add one via the Desk tree view. `parent` defaults to the
+	site's root Customer Group when omitted (same default ERPNext's own Customer
+	Group tree view uses)."""
+	_assert_can_manage_dealers()
+
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("name is required."), frappe.ValidationError)
+	if frappe.db.exists("Customer Group", name):
+		frappe.throw(_("Customer Group {0} already exists.").format(name), frappe.DuplicateEntryError)
+
+	parent = parent or frappe.db.get_single_value("Selling Settings", "customer_group") or frappe.db.get_value(
+		"Customer Group", {"is_group": 1, "parent_customer_group": ["is", "not set"]}, "name"
+	)
+	doc = frappe.get_doc(
+		{
+			"doctype": "Customer Group",
+			"customer_group_name": name,
+			"parent_customer_group": parent,
+			"is_group": 0,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+
 def _serialize(
 	name: str,
 	customer_name: str,
