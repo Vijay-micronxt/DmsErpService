@@ -24,8 +24,11 @@ list_quotations is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list.
 
 An explicit `channel` differing from auto-classification (BRD C.11 trigger #6)
-goes through sales.order_channel.gate_channel_override -- an unauthorized caller
-gets `{"approvalRequired": True, "approval": {...}}` back instead of a serialized
+goes through sales.order_channel.gate_channel_override, and any line with a
+nonzero `discount_percentage` (BRD C.11 trigger #4 / C.7.3 -- no threshold,
+"even a one-rupee change") goes through approvals.api.
+gate_discount_over_price_list -- either way, an unauthorized caller gets
+`{"approvalRequired": True, "approval": {...}}` back instead of a serialized
 quotation, and the Quotation itself isn't created until Management approves the
 queued Approval Request (approvals.api.decide_approval).
 """
@@ -280,11 +283,28 @@ def create_quotation(
 		channel=channel,
 		taxes_and_charges=taxes_and_charges,
 	)
+
+	def _create_after_discount_gate(**kwargs):
+		# BRD C.7.3/C.11#4: any transaction-level discount at all -- even a
+		# one-rupee change -- is audit-locked, no threshold (see
+		# gate_discount_over_price_list). Nested inside gate_channel_override so
+		# an authorized caller who does BOTH in one call gets an audit record for
+		# each; an unauthorized caller's channel override is what blocks document
+		# creation first, so this never even runs for that call.
+		from dms_erp.approvals.api import gate_discount_over_price_list
+
+		return gate_discount_over_price_list(
+			reference_doctype="Quotation",
+			lines=kwargs["lines"],
+			create_fn=_create_quotation,
+			create_kwargs=kwargs,
+		)
+
 	return gate_channel_override(
 		requested_channel=channel,
 		default_channel=default_channel,
 		reference_doctype="Quotation",
-		create_fn=_create_quotation,
+		create_fn=_create_after_discount_gate,
 		create_kwargs=create_kwargs,
 	)
 

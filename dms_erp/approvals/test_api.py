@@ -302,3 +302,145 @@ class TestApprovalsApi(FrappeTestCase):
 		self.assertEqual(decided["referenceName"], order["id"])
 
 		self.assertEqual(frappe.db.get_value("Sales Order", order["id"], "custom_fulfillment_stage"), "Cancelled")
+
+	# ---------------- gate_discount_over_price_list, exercised via create_quotation/create_order (trigger #4) ----------------
+
+	def test_authorized_user_discount_applies_immediately_and_logs_an_approved_request(self):
+		before = frappe.db.count("Approval Request")
+
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
+			markup_pct=12,
+		)
+		self.assertEqual(quotation["lines"][0]["discountPercentage"], 5)
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Discount Over Price List")
+		self.assertEqual(approval.status, "Approved")
+		self.assertEqual(approval.reference_doctype, "Quotation")
+		self.assertEqual(approval.reference_name, quotation["id"])
+		self.assertEqual(approval.decided_by, "Administrator")
+
+	def test_unauthorized_user_discount_is_queued_instead_of_applied(self):
+		frappe.set_user(self.sales_user)
+		before = frappe.db.count("Quotation")
+
+		result = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 1}],
+			markup_pct=12,
+		)
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["status"], "Pending")
+		self.assertEqual(result["approval"]["triggerType"], "Discount Over Price List")
+		self.assertIsNone(result["approval"]["referenceName"])
+		# Even a 1% discount is an override -- BRD C.7.3 sets no threshold.
+		self.assertEqual(frappe.db.count("Quotation"), before)
+
+	def test_zero_discount_never_raises_an_approval_request(self):
+		before = frappe.db.count("Approval Request")
+		quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 0}], markup_pct=12
+		)
+		quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)  # discount_percentage omitted entirely
+		self.assertEqual(frappe.db.count("Approval Request"), before)
+
+	def test_approving_a_queued_discount_creates_the_quotation(self):
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
+			markup_pct=12,
+		)
+		approval_id = queued["approval"]["id"]
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Approved")
+
+		self.assertEqual(decided["status"], "Approved")
+		self.assertEqual(decided["referenceDoctype"], "Quotation")
+		self.assertIsNotNone(decided["referenceName"])
+
+		quotation = quotation_api.get_quotation(decided["referenceName"])
+		self.assertEqual(quotation["lines"][0]["discountPercentage"], 10)
+
+	def test_rejecting_a_queued_discount_creates_nothing(self):
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
+			markup_pct=12,
+		)
+		approval_id = queued["approval"]["id"]
+		before = frappe.db.count("Quotation")
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(approval_id, "Rejected")
+
+		self.assertEqual(decided["status"], "Rejected")
+		self.assertIsNone(decided["referenceName"])
+		self.assertEqual(frappe.db.count("Quotation"), before)
+
+	def test_authorized_user_doing_both_channel_and_discount_overrides_logs_two_approved_requests(self):
+		before = frappe.db.count("Approval Request")
+
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
+			markup_pct=12,
+			channel="Bulk",
+		)
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 2)
+
+		trigger_types = set(
+			frappe.get_all(
+				"Approval Request",
+				filters={"reference_name": quotation["id"]},
+				pluck="trigger_type",
+			)
+		)
+		self.assertEqual(trigger_types, {"Channel Override", "Discount Over Price List"})
+
+	def test_authorized_user_order_discount_applies_immediately_and_logs_an_approved_request(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=10, source="Phone")
+		before = frappe.db.count("Approval Request")
+
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+		self.assertEqual(order["lines"][0]["discountPercentage"], 5)
+
+		after = frappe.db.count("Approval Request")
+		self.assertEqual(after, before + 1)
+		approval = frappe.get_last_doc("Approval Request")
+		self.assertEqual(approval.trigger_type, "Discount Over Price List")
+		self.assertEqual(approval.reference_doctype, "Sales Order")
+		self.assertEqual(approval.reference_name, order["id"])
+
+	def test_unauthorized_user_order_discount_is_queued_instead_of_applied(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=10, source="Phone")
+		before = frappe.db.count("Sales Order")
+
+		frappe.set_user(self.sales_user)
+		result = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 2}],
+			expected_dispatch="2026-09-01",
+			inquiry=inquiry["id"],
+		)
+
+		self.assertTrue(result["approvalRequired"])
+		self.assertEqual(result["approval"]["triggerType"], "Discount Over Price List")
+		self.assertEqual(frappe.db.count("Sales Order"), before)

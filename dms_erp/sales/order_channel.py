@@ -14,7 +14,6 @@ it (see approvals.api.decide_approval / APPLIERS["Channel Override"]).
 """
 
 import frappe
-from frappe.utils import now_datetime
 
 DEALER_TYPES = ["Retail", "Bulk", "Project"]
 CHANNEL_OVERRIDE_AUTHORIZED_ROLES = {"DMS Management", "System Manager"}
@@ -55,33 +54,16 @@ def gate_channel_override(
 	if requested_channel == default_channel:
 		return create_fn(**create_kwargs)
 
-	from dms_erp.approvals.api import raise_approval_request
+	from dms_erp.approvals.api import gate_document_creation
 
-	authorized = bool(set(frappe.get_roles(frappe.session.user)) & CHANNEL_OVERRIDE_AUTHORIZED_ROLES)
-	reason = (
-		f"{frappe.session.user} set channel to {requested_channel} "
-		f"(auto-classified: {default_channel})."
-	)
-
-	if authorized:
-		result = create_fn(**create_kwargs)
-		raise_approval_request(
-			trigger_type="Channel Override",
-			reason=reason,
-			payload=create_kwargs,
-			reference_doctype=reference_doctype,
-			reference_name=result["id"],
-			status="Approved",
-			decided_by=frappe.session.user,
-			decided_at=now_datetime(),
-			decision_note="Auto-approved: raised by an already-authorized user.",
-		)
-		return result
-
-	approval = raise_approval_request(
+	return gate_document_creation(
 		trigger_type="Channel Override",
-		reason=reason + " Needs Management approval before the document is created.",
-		payload=create_kwargs,
 		reference_doctype=reference_doctype,
+		reason=(
+			f"{frappe.session.user} set channel to {requested_channel} "
+			f"(auto-classified: {default_channel})."
+		),
+		create_fn=create_fn,
+		create_kwargs=create_kwargs,
+		authorized_roles=CHANNEL_OVERRIDE_AUTHORIZED_ROLES,
 	)
-	return {"approvalRequired": True, "approval": approval}

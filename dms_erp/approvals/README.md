@@ -16,12 +16,13 @@ condition. See `api.py`'s own module docstring for the exact contract.
 5. Amendment or cancellation of a submitted sales/purchase document
 6. Retail-vs-bulk classification override
 
-Two are wired today:
+Three are wired today:
 
 - **#6 (Channel Override)**: `sales.order_channel.gate_channel_override`, called
   from `quotation_api.create_quotation` and `order_api.create_order` whenever an
   explicit `channel` differs from `auto_classify_channel`'s own answer. Gates a
-  document's own *creation* -- there's no `reference_name` yet at gate time.
+  document's own *creation* (`approvals.api.gate_document_creation`) -- there's
+  no `reference_name` yet at gate time.
 - **#5 (Amend Or Cancel Submitted Document)**: `approvals.api.
   gate_authorized_action`, called from `quotation_api.add_quotation_line`/
   `remove_quotation_line`/`update_quotation_line_qty` (the amend cycle) and
@@ -30,9 +31,24 @@ Two are wired today:
   (though the amend cycle replaces the document with a new one on success --
   `gate_authorized_action` re-points `reference_name` at whatever the action
   actually returns, not the pre-action name).
+- **#4 (Discount Over Price List)**: `approvals.api.
+  gate_discount_over_price_list`, called from `quotation_api.create_quotation`
+  and `order_api.create_order` whenever any line carries a nonzero
+  `discount_percentage`. BRD C.7.3 sets no threshold ("even a one-rupee
+  change"), so any discount at all triggers this -- gates creation, same as #6,
+  and the two compose: an authorized caller doing both in one call gets an
+  audit record for each (see quotation_api.create_quotation's nested
+  `_create_after_discount_gate`).
 
-The other four (#1-#4) are reserved `trigger_type` values on the doctype, not
-yet raised by any code path.
+**#3 (Pricing Override) is deliberately not wired separately.** BRD C.7.3 talks
+about "any transaction-level price or discount change" as one idea, but this
+codebase only has one transaction-level pricing lever -- `discount_percentage`
+-- already covered by #4. There's no explicit-rate-override field a caller can
+set instead; building a real, distinct #3 means adding that capability first,
+not just another gate.
+
+The remaining two (#1 credit-limit exceedance, #2 overdue outstanding) are
+reserved `trigger_type` values on the doctype, not yet raised by any code path.
 
 ## How a trigger plugs in
 
@@ -40,8 +56,9 @@ yet raised by any code path.
    - run the action immediately when the caller already holds the trigger's
      authorized role, logging an auto-approved `Approval Request` for audit
      (`raise_approval_request(..., status="Approved", decided_by=..., decided_at=...)`
-     -- or just call `gate_authorized_action`, which already does this for any
-     trigger gating an existing document), or
+     -- or just call `gate_authorized_action` (gates an action on a document
+     that already exists) or `gate_document_creation` (gates a document's own
+     creation), which already do this), or
    - queue a Pending one instead of running the action
      (`raise_approval_request(...)`, then return `{"approvalRequired": True,
      "approval": {...}}` to the caller rather than the normal result).

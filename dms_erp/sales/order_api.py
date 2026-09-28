@@ -280,8 +280,11 @@ def create_order(
 	the queued Approval Request (see sales.order_channel.gate_channel_override).
 
 	Each line in `lines` may carry `discount_percentage` (0-100) and/or
-	`delivery_date` -- see _priced_order_line. `taxes_and_charges` names an
-	existing Sales Taxes and Charges Template; see sales.utils.apply_tax_template."""
+	`delivery_date` -- see _priced_order_line. Any line with a nonzero discount
+	is BRD C.11 trigger #4 (no threshold -- see approvals.api.
+	gate_discount_over_price_list) and gates the same way channel override does.
+	`taxes_and_charges` names an existing Sales Taxes and Charges Template; see
+	sales.utils.apply_tax_template."""
 	_assert_can_manage_orders()
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
@@ -298,11 +301,25 @@ def create_order(
 		customer_po=customer_po,
 		taxes_and_charges=taxes_and_charges,
 	)
+
+	def _create_after_discount_gate(**kwargs):
+		# BRD C.7.3/C.11#4: see quotation_api.create_quotation's own copy of this
+		# nested gate for why it's nested inside gate_channel_override rather than
+		# checked separately.
+		from dms_erp.approvals.api import gate_discount_over_price_list
+
+		return gate_discount_over_price_list(
+			reference_doctype="Sales Order",
+			lines=kwargs["lines"],
+			create_fn=_create_order,
+			create_kwargs=kwargs,
+		)
+
 	return gate_channel_override(
 		requested_channel=resolved_channel,
 		default_channel=default_channel,
 		reference_doctype="Sales Order",
-		create_fn=_create_order,
+		create_fn=_create_after_discount_gate,
 		create_kwargs=create_kwargs,
 	)
 

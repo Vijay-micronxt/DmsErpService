@@ -14,10 +14,17 @@ sales.order_channel.gate_channel_override, called from quotation_api.create_quot
 and order_api.create_order) already gates who can attempt the underlying action in
 the first place.
 
-Wired so far: trigger #6 (Channel Override) and trigger #5 (Amend Or Cancel
-Submitted Document). The other four reserved `trigger_type` values are designed
-but not yet raised by any code path -- see docs/BRD.md C.11 and this module's
-README for the planned detection points.
+Wired so far: trigger #6 (Channel Override), trigger #5 (Amend Or Cancel
+Submitted Document), and trigger #4 (Discount Over Price List). Trigger #3
+(Pricing Override) is deliberately NOT separately wired -- in this codebase's
+data model there's no transaction-level pricing lever apart from the same
+per-line `discount_percentage` #4 already gates (BRD C.7.3's "any
+transaction-level price or discount change" collapses to one field here); a
+real #3 would need a genuine explicit-rate-override capability this API
+doesn't have. The remaining two (#1 credit-limit exceedance, #2 overdue
+outstanding) are reserved `trigger_type` values, not yet raised by any code
+path -- see docs/BRD.md C.11 and this module's README for the planned
+detection points.
 """
 
 import json
@@ -163,11 +170,12 @@ def gate_authorized_action(
 	applier_action: str | None = None,
 ) -> dict:
 	"""Shared gate for a BRD C.11 trigger that acts on an *already-existing*
-	document -- amend/cancel (#5) today; credit-limit/overdue/pricing/discount
-	(#1-#4) can reuse this once they're wired, since they're all "is this caller
-	authorized to do this to a document that already exists" checks, unlike
-	gate_channel_override (order_channel.py), which gates a document's own
-	creation and so never has a reference_name yet at gate time.
+	document -- amend/cancel (#5) today; credit-limit/overdue (#1-#2) can reuse
+	this once they're wired, since they're all "is this caller authorized to do
+	this to a document that already exists" checks. Discount Over Price List
+	(#4) and Channel Override (#6) instead gate a document's own *creation* --
+	see gate_document_creation below -- since neither has a reference_name yet
+	at gate time.
 
 	`authorized_roles` defaults to DECIDE_ROLES -- the same bar every one of the
 	six triggers sets. A caller outside it gets `action_fn` queued as a Pending
@@ -214,18 +222,95 @@ def gate_authorized_action(
 	return {"approvalRequired": True, "approval": approval}
 
 
-def _apply_channel_override(doc) -> dict:
+def gate_document_creation(
+	*,
+	trigger_type: str,
+	reference_doctype: str,
+	reason: str,
+	create_fn,
+	create_kwargs: dict,
+	authorized_roles: set[str] | None = None,
+) -> dict:
+	"""Shared gate for a BRD C.11 trigger that gates a document's own *creation*
+	-- discount-over-price-list (#4) today, alongside channel override (#6,
+	sales.order_channel.gate_channel_override, kept as its own function since it
+	also has to compare the requested channel against auto_classify_channel's
+	default before deciding whether this gate even applies). Unlike
+	gate_authorized_action, there's no reference_name yet at gate time -- the
+	document doesn't exist until `create_fn` actually runs.
+
+	`authorized_roles` defaults to DECIDE_ROLES -- the same bar every one of the
+	six triggers sets. A caller outside it gets `create_fn` queued as a Pending
+	Approval Request instead of run; `create_fn(**create_kwargs)` never executes
+	until Management approves it (see APPLIERS)."""
+	roles = authorized_roles or DECIDE_ROLES
+	if set(frappe.get_roles(frappe.session.user)) & roles:
+		result = create_fn(**create_kwargs)
+		raise_approval_request(
+			trigger_type=trigger_type,
+			reason=reason,
+			payload=create_kwargs,
+			reference_doctype=reference_doctype,
+			reference_name=result["id"],
+			status="Approved",
+			decided_by=frappe.session.user,
+			decided_at=now_datetime(),
+			decision_note="Auto-approved: raised by an already-authorized user.",
+		)
+		return result
+
+	approval = raise_approval_request(
+		trigger_type=trigger_type,
+		reason=reason + " Needs Management approval before the document is created.",
+		payload=create_kwargs,
+		reference_doctype=reference_doctype,
+	)
+	return {"approvalRequired": True, "approval": approval}
+
+
+def gate_discount_over_price_list(
+	*, reference_doctype: str, lines: list[dict], create_fn, create_kwargs: dict
+) -> dict:
+	"""BRD C.11 trigger #4 / C.7.3: "any transaction-level price or discount
+	change -- even a one-rupee change -- is an override requiring approval,"
+	with no threshold anywhere in the BRD. `discount_percentage` (0-100, set per
+	line at create_quotation/create_order time) is this codebase's only
+	transaction-level pricing lever, so any line with a nonzero one is the whole
+	detection point -- a caller with no discounted lines never touches the
+	approval queue at all.
+
+	(Trigger #3, "any pricing override," is deliberately not wired separately --
+	see approvals.api's own module docstring for why it collapses into this
+	same check here.)"""
+	if not any(float(line.get("discount_percentage") or 0) > 0 for line in lines):
+		return create_fn(**create_kwargs)
+
+	discounted_items = [
+		line["item"] for line in lines if float(line.get("discount_percentage") or 0) > 0
+	]
+	return gate_document_creation(
+		trigger_type="Discount Over Price List",
+		reference_doctype=reference_doctype,
+		reason=f"{frappe.session.user} applied a discount on {', '.join(discounted_items)}.",
+		create_fn=create_fn,
+		create_kwargs=create_kwargs,
+	)
+
+
+def _apply_document_creation(doc) -> dict:
 	"""Replays the original creation call now that Management has approved it --
-	`doc.reference_doctype` was set at raise time (gate_channel_override always
-	knows which doctype it's gating before the document exists), so no dispatch
-	table keyed on trigger_type+doctype is needed beyond this if/elif."""
+	`doc.reference_doctype` was set at raise time (both gate_document_creation and
+	gate_channel_override always know which doctype they're gating before the
+	document exists), so no dispatch table keyed on trigger_type+doctype is
+	needed beyond this if/elif. Shared by every trigger that gates a creation
+	(Channel Override, Discount Over Price List)."""
 	payload = json.loads(doc.payload or "{}")
 	if doc.reference_doctype == "Quotation":
 		from dms_erp.sales.quotation_api import _create_quotation as create_fn
 	elif doc.reference_doctype == "Sales Order":
 		from dms_erp.sales.order_api import _create_order as create_fn
 	else:
-		frappe.throw(_("Unknown reference doctype for Channel Override: {0}").format(doc.reference_doctype))
+		frappe.throw(_("Unknown reference doctype for {0}: {1}").format(doc.trigger_type, doc.reference_doctype))
 	result = create_fn(**payload)
 	return {"doctype": doc.reference_doctype, "name": result["id"]}
 
@@ -261,6 +346,7 @@ def _apply_amend_or_cancel(doc) -> dict:
 
 
 APPLIERS = {
-	"Channel Override": _apply_channel_override,
+	"Channel Override": _apply_document_creation,
+	"Discount Over Price List": _apply_document_creation,
 	"Amend Or Cancel Submitted Document": _apply_amend_or_cancel,
 }
