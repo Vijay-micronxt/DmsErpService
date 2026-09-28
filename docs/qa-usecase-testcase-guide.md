@@ -318,7 +318,7 @@ Inquiry workflow it says is in scope), Wave 1.*
 | TC-SO-06 | Create an order with a mandatory delivery date | Orders → New → try to save with no delivery date. | Blocked — delivery date is mandatory. | C.3.1 | M2 / Wave 1 |
 | TC-SO-07 | Per-item delivery date on a multi-item order | Create a multi-line order, set a different delivery date per line. | Each line's own delivery date is respected independently. | C.3.1 | M2 / Wave 1 |
 | TC-SO-08 | Stage lifecycle | Advance an order Confirmed → Picking → Ready to Dispatch → Dispatched → Delivered. | Each stage transition is tracked (`custom_fulfillment_stage` + history), visible consistently across Orders, WhatsApp status checks, and Recent Orders. | C.3.1 | M2 / Wave 1 |
-| TC-SO-09 | Cancellation before dispatch | Cancel an order before it reaches Dispatched. | Allowed; blocked once past that point (see §12 for whether this is enforced with a formal approval routing — currently a straightforward status transition, not a workflow-gated one). | C.3.1 / C.11 | M2 / Wave 1 |
+| TC-SO-09 | Cancellation before dispatch | Cancel an order before it reaches Dispatched. | Allowed; blocked once past that point (Delivered/already-Cancelled). As Sales, the cancellation itself is now audit-locked — queued for Management approval, not applied immediately (BRD C.11 trigger #5, see §13 TC-APR-09); as Management, it applies immediately. | C.3.1 / C.11 | M2 / Wave 1 |
 | TC-SO-10 | Dispatch payment lock (interim manual gate) | Attempt to dispatch an order for a dealer under an advance-payment condition, with the required advance not yet confirmed. | Dispatch is blocked until Management manually confirms the advance — this is an **interim manual checkbox**, not the real VALS API integration (that integration is not built; blocked on external banking credentials). | C.3.4 | M2 / Wave 1 |
 | TC-SO-11 | Order traces back to its source | Open an order that originated from an Inquiry or Quotation. | The originating Inquiry/Quotation reference is visible on the order detail. | C.3.1 | M2 / Wave 1 |
 | TC-SO-12 | Real GST display | Open an order/quotation with a tax template applied. | GST amount displayed is computed from the real tax template, not a placeholder. | C.3.1 | M2 / Wave 1 |
@@ -490,7 +490,7 @@ picker, and a Pending/Allocated/Picked status.
 | TC-PRC-04 | Per-dealer tier price override | Set an explicit tier-price override for one dealer (`set_dealer_tier_price`), distinct from that dealer's default classification-based rate. | The override applies for that dealer specifically; other dealers on the same tier are unaffected. | C.7.1 / C.1.4 | M2 / Wave 1 |
 | TC-PRC-05 | Quotation-level price rework doesn't touch the master list | Rework freight/margin/discount inside a single quotation. | The change is scoped to that quotation only; the published dealer price list is untouched. | C.7.2 | M2 / Wave 1 |
 | TC-PRC-06 | Retail markup override | Apply a markup % on a retail quotation. | Applies only at the quotation level, never mutating the base dealer price. | C.7.2 | M2 / Wave 1 |
-| TC-PRC-07 | Price/discount change requires approval framing | Change a price below the dealer's default list price. | Flagged as an override (see §12 for the current, partial approval-routing state). | C.7.3 / C.11 | M2 / Wave 1 |
+| TC-PRC-07 | Any discount at all is audit-locked | Apply any nonzero `discount_percentage` on a Quotation/Order line, even 1%. | No threshold — this is BRD C.11 trigger #4, fully wired (see §13 TC-APR-06): Management applies it immediately (audit-logged), any other role gets the request queued for approval instead of applied. | C.7.3 / C.11 | M2 / Wave 1 |
 
 ---
 
@@ -552,25 +552,65 @@ also be reachable from the Products/item detail panel.
 
 ---
 
-## 13. Approvals & Workflow (BRD C.11) — Known gap, mostly not yet built
+## 13. Approvals & Workflow (BRD C.11)
 
 *Not explicitly named under any milestone in BRD F.1/F.2 — inferred here as Milestone 2-3
 (a cross-cutting control layer over masters/pricing/orders that are themselves M2/M3),
 Wave 1.*
 
-Per the BRD, six explicit override triggers require approval + notification: credit-limit
-exceedance, overdue outstanding, any pricing/discount override, amendment/cancellation of a
-submitted document, and audit-locked retail-vs-bulk override. **None of the formal
-routing/notification workflow exists yet** — no sales-override approval routing, no
-credit-limit/overdue controls beyond the numbers already shown on dashboards, no
-mobile-approval flow. Submission does freeze documents in the underlying Frappe sense, but
-there is no custom amend/cancel version-diff or owner-notification-on-critical-action layer
-on top of that yet.
+Per BRD C.11, six explicit override triggers are audit-locked (need Management approval,
+not just a submission): (1) credit-limit exceedance, (2) overdue outstanding, (3) any
+pricing override — even ₹1, (4) any discount over the default price list, (5)
+amendment/cancellation of a submitted sales/purchase document, (6) retail-vs-bulk
+classification override. Rather than a bespoke approval flow per trigger or Frappe's native
+Workflow doctype, this is one generic queue/ledger (`Approval Request`) plus three
+endpoints (`list_pending_approvals`/`get_approval`/`decide_approval`) and a small
+per-trigger "applier" — the same screen and decision flow works for every trigger as it
+gets wired up.
 
-**No test cases** for the formal workflow — don't file a bug for its absence. Do verify,
-opportunistically, that the underlying document submit/cancel primitives behave sanely
-(e.g. TC-SO-09 above) since those are real ERPNext behavior, just not yet wrapped in the
-BRD's approval routing. *(BRD ref C.11, Milestone 2-3, Wave 1.)*
+**Four of the six are wired and testable: #6, #5, #4, #1.** In every case, an
+already-authorized caller (Management/System Manager) still gets their action applied
+immediately — just now with an audit-trail `Approval Request` logged as auto-approved —
+while anyone else's attempt is queued as **Pending** instead of applied; the API returns
+`{"approvalRequired": true, "approval": {...}}` in place of the normal result, and nothing
+changes until Management decides it.
+
+**Where:** `pacific-tileflow` → Approvals (`/approvals`) for listing/deciding; the triggers
+themselves fire from `dms_erp.sales.quotation_api`/`order_api`'s own write endpoints
+(create/edit/cancel), not from a dedicated screen.
+
+| ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
+|---|---|---|---|---|---|
+| TC-APR-01 | List pending approvals (Management) | Sign in as Management/System Manager, open `/approvals`. | Lists Approval Requests, default-filtered to Pending; filterable by status and by trigger type (all six named, even the two not yet raised). | C.11 | M2-3 / Wave 1 |
+| TC-APR-02 | Non-Management cannot list or decide | Sign in as Sales/Warehouse/Purchase, call `list_pending_approvals`/`decide_approval` (or open `/approvals`). | A permission error, not an empty list — "Only Management can decide approval requests." | C.11 | M2-3 / Wave 1 |
+| TC-APR-03 | Channel Override (#6) by Management — applies immediately | As Management, create a Quotation/Order passing an explicit `channel` that differs from what the dealer/lines would auto-classify to. | The document is created with the requested channel right away; an Approval Request is logged with status **Approved**, `decidedBy` = the acting user, referencing the new document. | C.4.3 / C.11 | M2-3 / Wave 1 |
+| TC-APR-04 | Channel Override (#6) by Sales — queued | As Sales, do the same explicit-channel override. | No document is created. Response is `{"approvalRequired": true, "approval": {...status: "Pending"}}`; the request shows up in `/approvals`. | C.4.3 / C.11 | M2-3 / Wave 1 |
+| TC-APR-05 | Channel matching auto-classification never gates | As Sales, create a Quotation/Order with `channel` left unset (or matching what auto-classification would pick anyway). | Created normally, no Approval Request raised at all — not even an Approved one. | C.4.3 / C.11 | M2-3 / Wave 1 |
+| TC-APR-06 | Discount Over Price List (#4) — any discount at all | As Sales, create a Quotation or Order with any line's `discount_percentage` above 0 (even 1%). | Same queued/immediate split as TC-APR-03/04, trigger type "Discount Over Price List" — no threshold; a 1% discount gates exactly like a 50% one. | C.7.3 / C.11 | M2-3 / Wave 1 |
+| TC-APR-07 | Combined override in one call | As Management, create a Quotation with both an explicit channel override AND a discounted line in the same call. | Both apply immediately; **two** separate Approval Request rows are logged (one per trigger type), both referencing the same created Quotation. | C.7.3 / C.4.3 / C.11 | M2-3 / Wave 1 |
+| TC-APR-08 | Amend/Cancel (#5) — editing a submitted quotation | As Sales, add/remove a line or change a line's qty on an already-submitted Quotation (`add_quotation_line`/`remove_quotation_line`/`update_quotation_line_qty`). | Queued, not applied — the quotation is untouched (still its original line values) until Management decides it. As Management, the same edit applies immediately (new amended document, audit-logged). | C.11 | M2-3 / Wave 1 |
+| TC-APR-09 | Amend/Cancel (#5) — cancelling a submitted order | As Sales, move a Sales Order's fulfillment stage to "Cancelled" (`advance_order_stage`). | Queued, not applied — order stays at its current stage. As Management, cancels immediately, audit-logged. Every other forward-flow transition (Confirmed→Picking→…) is unaffected — only "Cancelled" gates. | C.11 | M2-3 / Wave 1 |
+| TC-APR-10 | Credit Limit Exceeded (#1) — order creation | As Sales, create/convert an order for a dealer whose `Customer Credit Limit` (configured per company) would be exceeded by this order's own value plus their already-committed Sales Order value. | Queued for both `create_order` (Inquiry-sourced) and `convert_to_order` (Quotation-sourced); Management's own attempt applies immediately, audit-logged. | C.11 | M2-3 / Wave 1 |
+| TC-APR-11 | Credit Limit Exceeded (#1) — no limit configured | Create a large order for a dealer with no `Customer Credit Limit` row at all. | Never gates, regardless of order size — an untagged dealer behaves exactly as before this feature existed. | C.11 | M2-3 / Wave 1 |
+| TC-APR-12 | Approve a queued request | As Management, open a Pending request in `/approvals` and Approve it (optionally with a note). | The original action replays and actually happens now (document created/edited/cancelled); the request's status becomes Approved, `referenceName` is stamped to whatever was actually created/changed. | C.11 | M2-3 / Wave 1 |
+| TC-APR-13 | Reject a queued request | As Management, Reject a Pending request instead. | Nothing is created/changed; status becomes Rejected. The requester must resubmit without the override (or get it resolved directly). | C.11 | M2-3 / Wave 1 |
+| TC-APR-14 | Deciding an already-decided request | Try to Approve/Reject a request that's already Approved or Rejected. | Rejected with a validation error — a decision is final, not re-appliable. | C.11 | M2-3 / Wave 1 |
+
+### Known gaps — not yet built
+
+- **#2 Overdue Outstanding** — not wired, and not buildable with a gate alone. "Overdue"
+  means an invoice past its due date and still unpaid; this app posts no Sales Invoice or
+  Payment Entry at all (dashboards' own `outstandingReceivables` is a documented, honest
+  `0`). A real #2 needs an AR/invoicing subsystem built first — don't file a bug for its
+  absence, there's nothing today to build a check against.
+- **#3 Pricing Override** — not wired as a separate trigger. BRD C.7.3 talks about "any
+  transaction-level price or discount change" as one idea, but this codebase only has one
+  transaction-level pricing lever (`discount_percentage`), already fully covered by #4
+  (TC-APR-06/07 above exercise it). There's no explicit-rate-override field a caller can
+  set instead of a discount — a real, distinct #3 needs that capability built first.
+- No mobile-specific approval flow, no WhatsApp/email/SMS notification-on-raise (the BRD's
+  `channels_notified` concept) — deciding still requires opening `/approvals` in the staff
+  web app.
 
 ---
 
@@ -681,8 +721,12 @@ For quick reference — do not file these as bugs, and don't spend QA time hunti
 - **C.5/C.5.1** Multi-supplier route planning, map/GPS, drag-drop stops, live vehicle
   tracking, driver master, "Share with driver." Milestone 4, Wave 2 — scheduled later, not
   simply missing.
-- **C.11** Formal approval/override routing, credit-limit/overdue enforcement, mobile
-  approvals, amend/cancel version-diff.
+- **C.11** Four of six override triggers are built (§13): credit-limit exceedance,
+  discount-over-price-list, amend/cancel, and channel override. Still missing: overdue
+  outstanding (needs an AR/invoicing subsystem this app doesn't have at all — not a gap to
+  chase, there's nothing to check), a separate "pricing override" trigger distinct from
+  discount (collapses into the same field in this data model), mobile-specific approvals,
+  and WhatsApp/email/SMS notification-on-raise.
 - **C.12.4** Customer PO OCR — feasibility itself still open per the BRD.
 - **C.12.5** Image-based AI search/recommendation/forecasting — explicitly Wave 2,
   Milestone 4, deferred by the BRD itself, not a gap to chase now.
