@@ -22,6 +22,15 @@ the one they started with.
 
 list_quotations is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list.
+
+An explicit `channel` differing from auto-classification (BRD C.11 trigger #6)
+goes through sales.order_channel.gate_channel_override, and any line with a
+nonzero `discount_percentage` (BRD C.11 trigger #4 / C.7.3 -- no threshold,
+"even a one-rupee change") goes through approvals.api.
+gate_discount_over_price_list -- either way, an unauthorized caller gets
+`{"approvalRequired": True, "approval": {...}}` back instead of a serialized
+quotation, and the Quotation itself isn't created until Management approves the
+queued Approval Request (approvals.api.decide_approval).
 """
 
 import frappe
@@ -38,7 +47,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
-from dms_erp.sales.order_channel import auto_classify_channel
+from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.setup import ORDER_CHANNELS
 from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
@@ -93,7 +102,7 @@ def _serialize_line(row) -> dict:
 		"discountPercentage": row.discount_percentage,
 		"rate": row.rate,
 		"amount": row.amount,
-		"deliveryDate": row.delivery_date,
+		"deliveryDate": row.custom_delivery_date,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -129,7 +138,14 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 				"price_list_rate": price_list_rate,
 				"discount_percentage": discount_pct,
 				"rate": rate,
-				"delivery_date": line.get("delivery_date"),
+				# custom_delivery_date, not delivery_date -- Quotation Item has no
+				# native delivery_date field (unlike Sales Order Item, which does);
+				# writing the wrong key here silently no-ops on insert (Frappe's
+				# append() just sets a throwaway Python attribute for an unknown
+				# field) and only surfaces as a real AttributeError the next time
+				# this document is reloaded and something reads it back -- see
+				# _lines_from_items below and sales/setup.py's own docstring.
+				"custom_delivery_date": line.get("delivery_date"),
 			}
 		)
 	return items
@@ -147,7 +163,7 @@ def _lines_from_items(rows) -> list[dict]:
 			"item": row.item_code,
 			"qty": row.qty,
 			"discount_percentage": row.discount_percentage,
-			"delivery_date": row.delivery_date,
+			"delivery_date": row.custom_delivery_date,
 		}
 		for row in rows
 	]
@@ -247,13 +263,67 @@ def create_quotation(
 				),
 				frappe.ValidationError,
 			)
-	# BRD C.4.3: an explicit channel (including "Retail") is the audit-locked manual
-	# override and always wins; only an unset channel triggers auto-classification.
+	# BRD C.4.3/C.11#6: an explicit channel (including "Retail") is the audit-locked
+	# manual override and always wins over auto-classification -- but *making it
+	# stick* runs through gate_channel_override, which only lets it straight through
+	# when the caller already holds an authorized role (see order_channel.py).
+	default_channel = auto_classify_channel(dealer, lines)
 	if channel is None:
-		channel = auto_classify_channel(dealer, lines)
+		channel = default_channel
 	elif channel not in ORDER_CHANNELS:
 		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
 
+	create_kwargs = dict(
+		dealer=dealer,
+		lines=lines,
+		markup_pct=markup_pct,
+		freight=freight,
+		validity_days=validity_days,
+		inquiries=inquiries,
+		channel=channel,
+		taxes_and_charges=taxes_and_charges,
+	)
+
+	def _create_after_discount_gate(**kwargs):
+		# BRD C.7.3/C.11#4: any transaction-level discount at all -- even a
+		# one-rupee change -- is audit-locked, no threshold (see
+		# gate_discount_over_price_list). Nested inside gate_channel_override so
+		# an authorized caller who does BOTH in one call gets an audit record for
+		# each; an unauthorized caller's channel override is what blocks document
+		# creation first, so this never even runs for that call.
+		from dms_erp.approvals.api import gate_discount_over_price_list
+
+		return gate_discount_over_price_list(
+			reference_doctype="Quotation",
+			lines=kwargs["lines"],
+			create_fn=_create_quotation,
+			create_kwargs=kwargs,
+		)
+
+	return gate_channel_override(
+		requested_channel=channel,
+		default_channel=default_channel,
+		reference_doctype="Quotation",
+		create_fn=_create_after_discount_gate,
+		create_kwargs=create_kwargs,
+	)
+
+
+def _create_quotation(
+	dealer: str,
+	lines: list[dict],
+	markup_pct: float,
+	freight: float = 0,
+	validity_days: int = 7,
+	inquiries: list[str] | None = None,
+	channel: str = "Retail",
+	taxes_and_charges: str | None = None,
+) -> dict:
+	"""Unguarded core of create_quotation -- `channel` here is always already
+	resolved (never None) and already past the audit-locked-override gate. Also
+	called directly by approvals.api's Channel-Override applier once Management
+	approves a previously-queued override request: replaying this function IS the
+	gate's own resolution, so it must never call gate_channel_override itself."""
 	items = _priced_items(dealer, markup_pct, lines)
 
 	doc = frappe.get_doc(
@@ -284,7 +354,30 @@ def create_quotation(
 
 @frappe.whitelist(methods=["POST"])
 def add_quotation_line(quotation: str, item: str, qty: float):
+	"""BRD C.11 trigger #5: amending a submitted quotation is audit-locked, same as
+	the Channel Override gate on create_quotation -- an unauthorized caller gets
+	`{"approvalRequired": True, "approval": {...}}` back instead of the updated
+	quotation, and nothing changes until Management approves it (see
+	approvals.api.gate_authorized_action / APPLIERS)."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is adding line {item} (qty {qty}) to quotation {quotation}.",
+		action_fn=_add_quotation_line_action,
+		action_kwargs=dict(quotation=quotation, item=item, qty=qty),
+		applier_action="add_line",
+	)
+
+
+def _add_quotation_line_action(quotation: str, item: str, qty: float) -> dict:
+	"""Unguarded core of add_quotation_line -- see gate_authorized_action. Re-checks
+	the quotation's current lines at call time (not just at gate time), since
+	nothing stops them changing between an unauthorized request being queued and
+	Management deciding it."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -297,7 +390,23 @@ def add_quotation_line(quotation: str, item: str, qty: float):
 
 @frappe.whitelist(methods=["POST"])
 def remove_quotation_line(quotation: str, item: str):
+	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is removing line {item} from quotation {quotation}.",
+		action_fn=_remove_quotation_line_action,
+		action_kwargs=dict(quotation=quotation, item=item),
+		applier_action="remove_line",
+	)
+
+
+def _remove_quotation_line_action(quotation: str, item: str) -> dict:
+	"""Unguarded core of remove_quotation_line -- see gate_authorized_action."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -312,7 +421,23 @@ def remove_quotation_line(quotation: str, item: str):
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_quotation_line_qty(quotation: str, item: str, qty: float):
+	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is changing line {item}'s qty to {qty} on quotation {quotation}.",
+		action_fn=_update_quotation_line_qty_action,
+		action_kwargs=dict(quotation=quotation, item=item, qty=qty),
+		applier_action="update_qty",
+	)
+
+
+def _update_quotation_line_qty_action(quotation: str, item: str, qty: float) -> dict:
+	"""Unguarded core of update_quotation_line_qty -- see gate_authorized_action."""
 	doc = frappe.get_doc("Quotation", quotation)
 	_guard_editable(doc)
 
@@ -324,6 +449,13 @@ def update_quotation_line_qty(quotation: str, item: str, qty: float):
 		if l["item"] == item:
 			l["qty"] = qty
 	return _amend_with_lines(doc, lines)
+
+
+AMEND_ACTIONS = {
+	"add_line": _add_quotation_line_action,
+	"remove_line": _remove_quotation_line_action,
+	"update_qty": _update_quotation_line_qty_action,
+}
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
@@ -357,11 +489,38 @@ def update_quotation_status(quotation: str, status: str, lost_reasons: list[str]
 
 @frappe.whitelist(methods=["POST"])
 def convert_to_order(quotation: str, expected_dispatch=None):
+	"""BRD C.11 trigger #1: converting a quotation whose value would push the
+	dealer's committed order value over their configured credit limit is
+	audit-locked -- an unauthorized caller gets `{"approvalRequired": True,
+	"approval": {...}}` back instead of the new order, and nothing is created
+	until Management approves it (see sales.credit_limit.gate_credit_limit).
+	The quotation's own `grand_total` is exact (it's already priced and
+	submitted), so this is a real check, not order_api.create_order's
+	pre-creation estimate."""
+	_assert_can_manage_quotations()
+
+	qtn = frappe.get_doc("Quotation", quotation)
+
+	from dms_erp.sales.credit_limit import gate_credit_limit
+
+	return gate_credit_limit(
+		dealer=qtn.party_name,
+		additional_value=qtn.grand_total,
+		reference_doctype="Sales Order",
+		applier_action="convert_to_order",
+		create_fn=_convert_to_order,
+		create_kwargs=dict(quotation=quotation, expected_dispatch=expected_dispatch),
+	)
+
+
+def _convert_to_order(quotation: str, expected_dispatch=None) -> dict:
+	"""Unguarded core of convert_to_order -- see gate_credit_limit. Re-fetches
+	the Quotation fresh (the wrapper above already loaded one, just for its
+	party_name/grand_total) since this also has to run standalone when replayed
+	from an approved request."""
 	from erpnext.selling.doctype.quotation.quotation import make_sales_order
 
 	from dms_erp.sales.order_api import finalize_new_order
-
-	_assert_can_manage_quotations()
 
 	qtn = frappe.get_doc("Quotation", quotation)
 	so = make_sales_order(quotation)

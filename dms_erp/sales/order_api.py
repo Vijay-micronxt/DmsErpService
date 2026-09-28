@@ -25,7 +25,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
-from dms_erp.sales.order_channel import auto_classify_channel
+from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
@@ -213,7 +213,13 @@ def _create_order(
 	same rate/catalog rules as any other order, just nothing to close on creation.
 	`taxes_and_charges` (optional) names an existing Sales Taxes and Charges
 	Template -- see sales.utils.apply_tax_template; left unset, the order is
-	simply untaxed, same as any ERPNext site with no GST template configured."""
+	simply untaxed, same as any ERPNext site with no GST template configured.
+
+	`channel` here is always already resolved (never None) -- create_order (the
+	whitelisted wrapper) resolves and gates it before this ever runs; only
+	dealer_portal_api.convert_to_order still calls this directly with channel
+	unset, since a dealer's self-service order was never a BRD C.11#6 override
+	candidate in the first place."""
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
 	if channel is None:
@@ -268,13 +274,85 @@ def create_order(
 
 	`channel` left unset auto-classifies from the dealer's type / item Series
 	thresholds (BRD C.4.3); passing one explicitly (including "Retail") is the
-	audit-locked manual override.
+	audit-locked manual override (BRD C.11 trigger #6) -- an unauthorized caller
+	gets `{"approvalRequired": True, "approval": {...}}` back instead of a
+	serialized order, and the Sales Order isn't created until Management approves
+	the queued Approval Request (see sales.order_channel.gate_channel_override).
 
 	Each line in `lines` may carry `discount_percentage` (0-100) and/or
-	`delivery_date` -- see _priced_order_line. `taxes_and_charges` names an
-	existing Sales Taxes and Charges Template; see sales.utils.apply_tax_template."""
+	`delivery_date` -- see _priced_order_line. Any line with a nonzero discount
+	is BRD C.11 trigger #4 (no threshold -- see approvals.api.
+	gate_discount_over_price_list) and gates the same way channel override does.
+	So does a dealer whose committed order value (this order's own estimated
+	value included) would exceed their configured credit limit (BRD C.11
+	trigger #1 -- see sales.credit_limit.gate_credit_limit). `taxes_and_charges`
+	names an existing Sales Taxes and Charges Template; see
+	sales.utils.apply_tax_template."""
 	_assert_can_manage_orders()
-	return _create_order(dealer, lines, expected_dispatch, inquiry, channel, customer_po, taxes_and_charges)
+	if not lines:
+		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+
+	default_channel = auto_classify_channel(dealer, lines)
+	resolved_channel = channel if channel is not None else default_channel
+
+	create_kwargs = dict(
+		dealer=dealer,
+		lines=lines,
+		expected_dispatch=expected_dispatch,
+		inquiry=inquiry,
+		channel=resolved_channel,
+		customer_po=customer_po,
+		taxes_and_charges=taxes_and_charges,
+	)
+
+	def _create_after_discount_gate(**kwargs):
+		# BRD C.7.3/C.11#4: see quotation_api.create_quotation's own copy of this
+		# nested gate for why it's nested inside the other gates rather than
+		# checked separately.
+		from dms_erp.approvals.api import gate_discount_over_price_list
+
+		return gate_discount_over_price_list(
+			reference_doctype="Sales Order",
+			lines=kwargs["lines"],
+			create_fn=_create_order,
+			create_kwargs=kwargs,
+		)
+
+	def _create_after_credit_gate(**kwargs):
+		from dms_erp.sales.credit_limit import gate_credit_limit
+
+		return gate_credit_limit(
+			dealer=kwargs["dealer"],
+			additional_value=_estimate_order_value(kwargs["dealer"], kwargs["lines"]),
+			reference_doctype="Sales Order",
+			applier_action="create_order",
+			create_fn=_create_after_discount_gate,
+			create_kwargs=kwargs,
+		)
+
+	return gate_channel_override(
+		requested_channel=resolved_channel,
+		default_channel=default_channel,
+		reference_doctype="Sales Order",
+		create_fn=_create_after_credit_gate,
+		create_kwargs=create_kwargs,
+	)
+
+
+def _estimate_order_value(dealer: str, lines: list[dict]) -> float:
+	"""Pre-tax, pre-rounding approximate order value for the credit-limit gate
+	(BRD C.11 trigger #1) -- the same kind of approximation dashboard.api.
+	_credit_exposure_alerts already accepts for this app's whole credit-exposure
+	signal (no Sales Invoice ledger exists to compute a true one from). Real
+	per-line rate/rounding still happens in _priced_order_line at actual
+	creation time; this is only ever used to decide whether to gate, never
+	written anywhere."""
+	total = 0.0
+	for line in lines:
+		price = get_price_for_dealer(line["item"], dealer) or 0
+		discount_pct = float(line.get("discount_percentage") or 0)
+		total += price * (1 - discount_pct / 100) * line["qty"]
+	return total
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
@@ -292,6 +370,13 @@ def confirm_advance_payment(order: str, confirmed: bool = True):
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def advance_order_stage(order: str, next_stage: str, note: str | None = None):
+	"""Moving to "Cancelled" is BRD C.11 trigger #5 (amend/cancel of a submitted
+	document is audit-locked) -- an unauthorized caller gets
+	`{"approvalRequired": True, "approval": {...}}` back instead of the updated
+	order, and the order isn't actually cancelled until Management approves it
+	(see approvals.api.gate_authorized_action / APPLIERS). Every other forward
+	step is unaffected -- that's routine fulfillment progress, not a
+	cancellation."""
 	_assert_can_manage_orders()
 
 	if next_stage not in ORDER_STAGES:
@@ -311,6 +396,19 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 			frappe.ValidationError,
 		)
 
+	if is_cancel:
+		from dms_erp.approvals.api import gate_authorized_action
+
+		return gate_authorized_action(
+			trigger_type="Amend Or Cancel Submitted Document",
+			reference_doctype="Sales Order",
+			reference_name=order,
+			reason=f"{frappe.session.user} is cancelling Sales Order {order} (was {current}).",
+			action_fn=_cancel_order_action,
+			action_kwargs=dict(order=order, note=note),
+			applier_action="cancel",
+		)
+
 	doc.custom_fulfillment_stage = next_stage
 	doc.append("custom_stage_history", {"stage": next_stage, "at": now_datetime(), "by": frappe.session.user, "note": note})
 	doc.save(ignore_permissions=True)
@@ -320,4 +418,20 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 
 		ensure_pick_tasks(order)
 
+	return _serialize(doc)
+
+
+def _cancel_order_action(order: str, note: str | None = None) -> dict:
+	"""Unguarded core of the Cancelled transition -- see gate_authorized_action.
+	Re-checks the order's current stage at call time (not just at gate time),
+	since nothing stops it moving on between an unauthorized request being
+	queued and Management deciding it."""
+	doc = frappe.get_doc("Sales Order", order)
+	current = doc.custom_fulfillment_stage
+	if current in ("Delivered", "Cancelled"):
+		frappe.throw(_("Cannot move an order from {0} to Cancelled.").format(current), frappe.ValidationError)
+
+	doc.custom_fulfillment_stage = "Cancelled"
+	doc.append("custom_stage_history", {"stage": "Cancelled", "at": now_datetime(), "by": frappe.session.user, "note": note})
+	doc.save(ignore_permissions=True)
 	return _serialize(doc)
