@@ -12,6 +12,17 @@ re-import it into whats91's Flow Builder; this repo's own `dms_erp` code only ev
 handles what happens *after* a node calls into it (see `dms_erp/comms/flow_api.py`), not
 the menu/node graph itself.
 
+**Importing back into whats91 (paste-based import): minify first.** whats91's import box
+takes pasted text, not a file upload, and a large multi-line pretty-printed JSON paste can
+come back "unexpected content after top-level value, line 1, col N" even though the file
+itself is completely valid JSON (confirmed: same content round-trips fine once minified) —
+almost certainly the paste target's own editor mangling the paste (e.g. auto-bracket-
+closing firing per line), not a real JSON problem. Minify before pasting:
+
+```bash
+python3 -c "import json,sys; json.dump(json.load(open('docs/whatsapp-flows/dealer-portal-pacific.json')), sys.stdout, ensure_ascii=False, separators=(',',':'))" > /tmp/dealer-portal-pacific.min.json
+```
+
 Status: nothing below has been verified end-to-end yet except the one partial test noted.
 
 ---
