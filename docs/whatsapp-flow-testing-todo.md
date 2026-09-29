@@ -5,6 +5,13 @@ Flow, before considering BRD C.2.2's automated menu production-ready. Check item
 you go; the step-by-step click-path for most of these is also in the in-app help panel —
 `pacific-tileflow`'s Communications screen → "Testing this flow (QA)" section.
 
+The Flow itself — the whats91 Flow Builder graph this checklist exercises — is version-
+controlled at `docs/whatsapp-flows/dealer-portal-pacific.json`, exported from whats91.
+Edit that file for structural Flow changes (new menu options, new nodes/edges) and
+re-import it into whats91's Flow Builder; this repo's own `dms_erp` code only ever
+handles what happens *after* a node calls into it (see `dms_erp/comms/flow_api.py`), not
+the menu/node graph itself.
+
 Status: nothing below has been verified end-to-end yet except the one partial test noted.
 
 ---
@@ -72,9 +79,15 @@ Status: nothing below has been verified end-to-end yet except the one partial te
 
 ## 6. My Profile
 
-- [ ] Tap **My Profile** on the main menu — confirm it opens `pd.storenxt.in` directly
-      (a whats91 Flow-side `Action Button → Website` — no dms_erp call involved, so
-      there's no backend behavior to verify here beyond the link itself resolving).
+A dedicated node (`n_show_profile` in `docs/whatsapp-flows/dealer-portal-pacific.json`),
+not just a bare button on the menu — shows a welcome message, then a `Website` action
+button below it. No `dms_erp` call involved either way.
+
+- [ ] **Set the real link first** — `n_show_profile`'s `action_buttons[0].url` is still
+      the placeholder `"https://"`. Re-import the Flow after filling in the real profile
+      URL; testing before that just confirms the placeholder opens, not the real page.
+- [ ] Tap **6. My Profile** on the main menu — confirm the welcome message + link button
+      show, and the link opens the intended page.
 
 ## 7. Request More Info / Place Order (after an availability check)
 

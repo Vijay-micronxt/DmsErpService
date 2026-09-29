@@ -1,0 +1,2807 @@
+{
+  "schema_version": "2026-04",
+  "channel": "whatsapp_cloud",
+  "flow_uid": "24e79009-cc03-4490-a485-3d5a08bbd05f",
+  "name": "Dealer Portal",
+  "entry_node_id": "n_start",
+  "nodes": [
+    {
+      "id": "n_start",
+      "data": {
+        "label": "Inbound Trigger",
+        "config": {
+          "keywords": [
+            "Tiles",
+            "Hello"
+          ],
+          "match_mode": "exact",
+          "case_sensitive": false
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Match"
+          }
+        ]
+      },
+      "type": "trigger.inbound_message",
+      "width": 232,
+      "height": 136,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "selected": false
+    },
+    {
+      "id": "n_main_menu",
+      "data": {
+        "label": "Main Menu",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_stock",
+              "title": "1. Check Stock"
+            },
+            {
+              "id": "btn_delivery",
+              "title": "2. Delivery Status"
+            }
+          ],
+          "body_text": "👋 Welcome to the Dealer Portal!\n\nPlease choose an option:",
+          "list_data": [
+            {
+              "rows": [
+                {
+                  "id": "btn_stock",
+                  "title": "1. Availability & Price",
+                  "description": "Check stock and price by item code"
+                },
+                {
+                  "id": "btn_delivery",
+                  "title": "2. Delivery Status",
+                  "description": "Track your delivery"
+                },
+                {
+                  "id": "btn_order",
+                  "title": "3. Order Status",
+                  "description": "Status of a specific order"
+                },
+                {
+                  "id": "btn_outstanding",
+                  "title": "4. Payment Due",
+                  "description": "Check your dues"
+                },
+                {
+                  "id": "btn_last5",
+                  "title": "5. Recent 5 Orders",
+                  "description": "Pending or recently delivered orders"
+                },
+                {
+                  "id": "btn_profile",
+                  "title": "6. My Profile",
+                  "description": "View and manage your profile"
+                }
+              ],
+              "title": "Main Menu"
+            }
+          ],
+          "footer_text": "Reply with a number or select from list",
+          "header_text": "🏭 Dealer Portal",
+          "interactive_type": "list",
+          "list_button_text": "View Options"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_stock",
+            "label": "Main Menu: 1. Availability & Price"
+          },
+          {
+            "key": "btn_delivery",
+            "label": "Main Menu: 2. Delivery Status"
+          },
+          {
+            "key": "btn_order",
+            "label": "Main Menu: 3. Order Status"
+          },
+          {
+            "key": "btn_outstanding",
+            "label": "Main Menu: 4. Payment Due"
+          },
+          {
+            "key": "btn_last5",
+            "label": "Main Menu: 5. Recent 5 Orders"
+          },
+          {
+            "key": "btn_profile",
+            "label": "Main Menu: 6. My Profile"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 213,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 208
+      },
+      "selected": true,
+      "positionAbsolute": {
+        "x": 0,
+        "y": 208
+      }
+    },
+    {
+      "id": "n_ask_item_code",
+      "data": {
+        "label": "Ask Item Code",
+        "config": {
+          "buttons": [],
+          "body_text": "Please enter the *Item Code* (and quantity, if you know it) to check availability and price.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: 105107 40 boxes",
+          "header_text": "📦 Item Availability & Price",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 496
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -800,
+        "y": 496
+      }
+    },
+    {
+      "id": "n_wait_item_code",
+      "data": {
+        "label": "Wait Item Code",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 720
+      },
+      "selected": false
+    },
+    {
+      "id": "n_set_item_code",
+      "data": {
+        "label": "Set Item Code",
+        "config": {
+          "key": "customer_name",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 944
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -800,
+        "y": 944
+      }
+    },
+    {
+      "id": "n_api_stock",
+      "data": {
+        "label": "Get Item Info",
+        "config": {
+          "method": "POST",
+          "event_name": "item.lookup",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_item_info",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "erpnext_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 1168
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -800,
+        "y": 1168
+      }
+    },
+    {
+      "id": "n_show_stock",
+      "data": {
+        "label": "Show Stock Info",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_request_more",
+              "title": "🔔 Request More Info"
+            },
+            {
+              "id": "btn_place_order",
+              "title": "🛒 Place Order"
+            }
+          ],
+          "body_text": "{{erpnext_response.message.message}}\n\nWould you like to request more details or place an enquiry?",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "📦 Item Details",
+          "media_filename": "",
+          "interactive_type": "button"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_request_more",
+            "label": "🔔 Request More Info"
+          },
+          {
+            "key": "btn_place_order",
+            "label": "🛒 Place Order"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 188,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 1380
+      },
+      "selected": false
+    },
+    {
+      "id": "n_ask_opportunity_note",
+      "data": {
+        "label": "Ask Opportunity Note",
+        "config": {
+          "buttons": [],
+          "body_text": "Please enter your enquiry or requirement for this item. We will get back to you shortly.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: Need 500 units by end of month",
+          "header_text": "📝 Raise Enquiry",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1104,
+        "y": 1600
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1104,
+        "y": 1600
+      }
+    },
+    {
+      "id": "n_wait_opportunity_note",
+      "data": {
+        "label": "Wait Opportunity Note",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -1104,
+        "y": 1824
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1104,
+        "y": 1824
+      }
+    },
+    {
+      "id": "n_set_opportunity_note",
+      "data": {
+        "label": "Set Opportunity Note",
+        "config": {
+          "key": "customer_name",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 2040
+      },
+      "selected": false
+    },
+    {
+      "id": "n_api_opportunity",
+      "data": {
+        "label": "Create Opportunity",
+        "config": {
+          "method": "POST",
+          "event_name": "opportunity.create",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_dealer_opportunity",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "opportunity_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1104,
+        "y": 2256
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1104,
+        "y": 2256
+      }
+    },
+    {
+      "id": "n_opportunity_success",
+      "data": {
+        "label": "Opportunity Created",
+        "config": {
+          "buttons": [],
+          "body_text": "{{opportunity_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "✅ Enquiry Raised",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 2480
+      },
+      "selected": false
+    },
+    {
+      "id": "n_ask_delivery_ref",
+      "data": {
+        "label": "Ask Delivery Reference",
+        "config": {
+          "buttons": [],
+          "body_text": "Please enter your *Sales Order number* to track delivery.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: SAL-ORD-2025-00123",
+          "header_text": "🚚 Delivery Status",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -400,
+        "y": 496
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -400,
+        "y": 496
+      }
+    },
+    {
+      "id": "n_wait_delivery_ref",
+      "data": {
+        "label": "Wait Delivery Ref",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -400,
+        "y": 720
+      },
+      "selected": false
+    },
+    {
+      "id": "n_set_delivery_ref",
+      "data": {
+        "label": "Set Delivery Ref",
+        "config": {
+          "key": "customer_name",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -400,
+        "y": 940
+      },
+      "selected": false
+    },
+    {
+      "id": "n_api_delivery",
+      "data": {
+        "label": "Get Delivery Status",
+        "config": {
+          "method": "POST",
+          "event_name": "delivery.status",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_delivery_status",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "delivery_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -400,
+        "y": 1160
+      },
+      "selected": false
+    },
+    {
+      "id": "n_show_delivery",
+      "data": {
+        "label": "Show Delivery Status",
+        "config": {
+          "buttons": [],
+          "body_text": "{{delivery_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "🚚 Delivery Status",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -400,
+        "y": 1380
+      },
+      "selected": false
+    },
+    {
+      "id": "n_ask_order_ref",
+      "data": {
+        "label": "Ask Order Reference",
+        "config": {
+          "buttons": [],
+          "body_text": "Please enter your *Sales Order number* to check its status.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: SAL-ORD-2025-00123",
+          "header_text": "📋 Order Status",
+          "media_filename": "",
+          "interactive_type": "none",
+          "action_buttons": [
+            {
+              "kind": "website",
+              "title": "Visit Site",
+              "url": "https://"
+            }
+          ]
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 496
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 0,
+        "y": 496
+      }
+    },
+    {
+      "id": "n_show_profile",
+      "data": {
+        "label": "My Profile",
+        "config": {
+          "buttons": [],
+          "body_text": "👋 Welcome to your Pacific Dealer profile!\n\nTap the link below to view and manage your profile.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "👤 My Profile",
+          "media_filename": "",
+          "interactive_type": "none",
+          "action_buttons": [
+            {
+              "kind": "website",
+              "title": "View My Profile",
+              "url": "https://"
+            }
+          ]
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 800,
+        "y": 496
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 800,
+        "y": 496
+      }
+    },
+    {
+      "id": "n_wait_order_ref",
+      "data": {
+        "label": "Wait Order Ref",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "position": {
+        "x": 0,
+        "y": 720
+      }
+    },
+    {
+      "id": "n_set_order_ref",
+      "data": {
+        "label": "Set Order Ref",
+        "config": {
+          "key": "customer_name",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "position": {
+        "x": 0,
+        "y": 940
+      }
+    },
+    {
+      "id": "n_api_order",
+      "data": {
+        "label": "Get Order Status",
+        "config": {
+          "method": "POST",
+          "event_name": "order.status",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_order_status",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "order_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 1168
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 0,
+        "y": 1168
+      }
+    },
+    {
+      "id": "n_show_order",
+      "data": {
+        "label": "Show Order Status",
+        "config": {
+          "buttons": [],
+          "body_text": "{{order_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "📋 Order Status",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 1380
+      },
+      "selected": false
+    },
+    {
+      "id": "n_api_outstanding",
+      "data": {
+        "label": "Get Outstanding Due",
+        "config": {
+          "method": "POST",
+          "event_name": "outstanding.check",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_outstanding_due",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "outstanding_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "position": {
+        "x": 400,
+        "y": 496
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 400,
+        "y": 496
+      },
+      "dragging": false
+    },
+    {
+      "id": "n_show_outstanding",
+      "data": {
+        "label": "Show Outstanding Due",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_pay_now",
+              "title": "💳 Pay Now"
+            }
+          ],
+          "body_text": "{{outstanding_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "💰 Outstanding Due",
+          "media_filename": "",
+          "interactive_type": "button"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_pay_now",
+            "label": "💳 Pay Now"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 159,
+      "position": {
+        "x": 400,
+        "y": 720
+      }
+    },
+    {
+      "id": "n_api_last5",
+      "data": {
+        "label": "Get Recent 5 Orders",
+        "config": {
+          "method": "POST",
+          "event_name": "orders.recent5",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_recent_orders",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "last5_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": 1200,
+        "y": 500
+      },
+      "selected": false
+    },
+    {
+      "id": "n_show_last5",
+      "data": {
+        "label": "Show Recent Orders",
+        "config": {
+          "buttons": [],
+          "body_text": "{{last5_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "📦 Recent 5 Orders",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 1200,
+        "y": 720
+      },
+      "selected": false
+    },
+    {
+      "id": "n_error",
+      "data": {
+        "label": "Error",
+        "config": {
+          "buttons": [],
+          "body_text": "❌ Something went wrong. Please check your input and send *Hello* to start again.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "Error",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "position": {
+        "x": 1600,
+        "y": 500
+      }
+    },
+    {
+      "id": "n_end",
+      "data": {
+        "label": "End",
+        "config": {
+          "result": "completed"
+        },
+        "outputs": []
+      },
+      "type": "control.end",
+      "width": 232,
+      "height": 94,
+      "position": {
+        "x": 0,
+        "y": 2800
+      }
+    },
+    {
+      "id": "n_set_stock_order_ref",
+      "data": {
+        "label": "Set Order Item Ref (Stock)",
+        "config": {
+          "key": "order_item_code",
+          "value": "{{erpnext_response.message.item_code}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1400,
+        "y": 2200
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1400,
+        "y": 2200
+      }
+    },
+    {
+      "id": "n_ask_place_order",
+      "data": {
+        "label": "Ask Place Order",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_order_yes",
+              "title": "✅ Yes, place order"
+            },
+            {
+              "id": "btn_order_no",
+              "title": "❌ No, thanks"
+            }
+          ],
+          "body_text": "🛒 Would you like to place an order for this item?",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "Place Order",
+          "media_filename": "",
+          "interactive_type": "button"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_order_yes",
+            "label": "✅ Yes, place order"
+          },
+          {
+            "key": "btn_order_no",
+            "label": "❌ No, thanks"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 188,
+      "dragging": false,
+      "position": {
+        "x": -1250,
+        "y": 2400
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1250,
+        "y": 2400
+      }
+    },
+    {
+      "id": "n_order_declined",
+      "data": {
+        "label": "Order Declined",
+        "config": {
+          "buttons": [],
+          "body_text": "👍 No problem! Send *Hello* to return to the main menu.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1550,
+        "y": 2600
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1550,
+        "y": 2600
+      }
+    },
+    {
+      "id": "n_ask_order_qty_list",
+      "data": {
+        "label": "Ask Order Quantity (List)",
+        "config": {
+          "buttons": [],
+          "body_text": "📦 How many units/boxes would you like to order?\n👇 Select the closest range.",
+          "list_data": [
+            {
+              "rows": [
+                {
+                  "id": "qty_10_50",
+                  "title": "10 - 50 units",
+                  "description": "Small order"
+                },
+                {
+                  "id": "qty_50_100",
+                  "title": "50 - 100 units",
+                  "description": "Medium order"
+                },
+                {
+                  "id": "qty_100_200",
+                  "title": "100 - 200 units",
+                  "description": "Large order"
+                },
+                {
+                  "id": "qty_200_500",
+                  "title": "200 - 500 units",
+                  "description": "Bulk order"
+                },
+                {
+                  "id": "qty_500_plus",
+                  "title": "500+ units",
+                  "description": "Very large order"
+                }
+              ],
+              "title": "Quantity"
+            }
+          ],
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Select a range",
+          "header_text": "Order Quantity",
+          "media_filename": "",
+          "interactive_type": "list",
+          "list_button_text": "Select Quantity"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "qty_10_50",
+            "label": "Quantity: 10 - 50 units"
+          },
+          {
+            "key": "qty_50_100",
+            "label": "Quantity: 50 - 100 units"
+          },
+          {
+            "key": "qty_100_200",
+            "label": "Quantity: 100 - 200 units"
+          },
+          {
+            "key": "qty_200_500",
+            "label": "Quantity: 200 - 500 units"
+          },
+          {
+            "key": "qty_500_plus",
+            "label": "Quantity: 500+ units"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 213,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 2600
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 2600
+      }
+    },
+    {
+      "id": "n_set_qty_10_50",
+      "data": {
+        "label": "Set Qty: 10 - 50 units",
+        "config": {
+          "key": "order_qty_band",
+          "value": "10 - 50 units"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_qty_50_100",
+      "data": {
+        "label": "Set Qty: 50 - 100 units",
+        "config": {
+          "key": "order_qty_band",
+          "value": "50 - 100 units"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -840,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -840,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_qty_100_200",
+      "data": {
+        "label": "Set Qty: 100 - 200 units",
+        "config": {
+          "key": "order_qty_band",
+          "value": "100 - 200 units"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -580,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -580,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_qty_200_500",
+      "data": {
+        "label": "Set Qty: 200 - 500 units",
+        "config": {
+          "key": "order_qty_band",
+          "value": "200 - 500 units"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -320,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -320,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_qty_500_plus",
+      "data": {
+        "label": "Set Qty: 500+ units",
+        "config": {
+          "key": "order_qty_band",
+          "value": "500+ units"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -60,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -60,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_ask_order_note_list",
+      "data": {
+        "label": "Ask Order Note (List)",
+        "config": {
+          "buttons": [],
+          "body_text": "📝 Any note or delivery preference for this order?",
+          "list_data": [
+            {
+              "rows": [
+                {
+                  "id": "note_none",
+                  "title": "No note",
+                  "description": "No special instructions"
+                },
+                {
+                  "id": "note_urgent",
+                  "title": "Urgent",
+                  "description": "Please prioritize this order"
+                },
+                {
+                  "id": "note_call",
+                  "title": "Call before delivery",
+                  "description": "Confirm before dispatch"
+                },
+                {
+                  "id": "note_other",
+                  "title": "Other",
+                  "description": "Will share details via call"
+                }
+              ],
+              "title": "Note"
+            }
+          ],
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Select an option",
+          "header_text": "Order Note",
+          "media_filename": "",
+          "interactive_type": "list",
+          "list_button_text": "Select Note"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "note_none",
+            "label": "Note: No note"
+          },
+          {
+            "key": "note_urgent",
+            "label": "Note: Urgent"
+          },
+          {
+            "key": "note_call",
+            "label": "Note: Call before delivery"
+          },
+          {
+            "key": "note_other",
+            "label": "Note: Other"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 213,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3040
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3040
+      }
+    },
+    {
+      "id": "n_set_note_none",
+      "data": {
+        "label": "Set Note: No note",
+        "config": {
+          "key": "order_note",
+          "value": "No note"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3260
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3260
+      }
+    },
+    {
+      "id": "n_set_note_urgent",
+      "data": {
+        "label": "Set Note: Urgent - please prioritize",
+        "config": {
+          "key": "order_note",
+          "value": "Urgent - please prioritize"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -840,
+        "y": 3260
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -840,
+        "y": 3260
+      }
+    },
+    {
+      "id": "n_set_note_call",
+      "data": {
+        "label": "Set Note: Call before delivery",
+        "config": {
+          "key": "order_note",
+          "value": "Call before delivery"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -580,
+        "y": 3260
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -580,
+        "y": 3260
+      }
+    },
+    {
+      "id": "n_set_note_other",
+      "data": {
+        "label": "Set Note: Other - will share via call",
+        "config": {
+          "key": "order_note",
+          "value": "Other - will share via call"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -320,
+        "y": 3260
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -320,
+        "y": 3260
+      }
+    },
+    {
+      "id": "n_ask_pay_confirm",
+      "data": {
+        "label": "Confirm Payment",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_pay_yes",
+              "title": "✅ Yes, pay now"
+            },
+            {
+              "id": "btn_pay_no",
+              "title": "❌ Not now"
+            }
+          ],
+          "body_text": "💳 Would you like to make a payment now for your outstanding due?",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "Confirm Payment",
+          "media_filename": "",
+          "interactive_type": "button"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_pay_yes",
+            "label": "✅ Yes, pay now"
+          },
+          {
+            "key": "btn_pay_no",
+            "label": "❌ Not now"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 188,
+      "dragging": false,
+      "position": {
+        "x": -1700,
+        "y": 3200
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1700,
+        "y": 3200
+      }
+    },
+    {
+      "id": "n_pay_declined",
+      "data": {
+        "label": "Payment Declined",
+        "config": {
+          "buttons": [],
+          "body_text": "👍 No problem! Send *Hello* to return to the main menu.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1900,
+        "y": 3400
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1900,
+        "y": 3400
+      }
+    },
+    {
+      "id": "n_api_generate_payment_link",
+      "data": {
+        "label": "Generate Payment Link",
+        "config": {
+          "method": "POST",
+          "event_name": "payment.generate_link",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/erpnext_enhancements.api.paytm_payment_link.generate_payment_link",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "payment_link_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1500,
+        "y": 3400
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1500,
+        "y": 3400
+      }
+    },
+    {
+      "id": "n_show_payment_link",
+      "data": {
+        "label": "Show Payment Link",
+        "config": {
+          "buttons": [],
+          "body_text": "{{payment_link_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "💳 Payment Link",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1500,
+        "y": 3600
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1500,
+        "y": 3600
+      }
+    },
+    {
+      "id": "n_ask_po_number",
+      "data": {
+        "label": "Ask PO Number",
+        "config": {
+          "buttons": [],
+          "body_text": "Please share your *PO Number* to confirm this order.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: PO-2026-00123",
+          "header_text": "🧾 Confirm Order",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3480
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3480
+      }
+    },
+    {
+      "id": "n_wait_po_number",
+      "data": {
+        "label": "Wait PO Number",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3700
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3700
+      }
+    },
+    {
+      "id": "n_set_po_number",
+      "data": {
+        "label": "Set PO Number",
+        "config": {
+          "key": "po_number",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3920
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3920
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_menu",
+      "type": "smoothstep",
+      "source": "n_start",
+      "target": "n_main_menu",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_item_wait",
+      "type": "smoothstep",
+      "source": "n_ask_item_code",
+      "target": "n_wait_item_code",
+      "selected": false,
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_item_set",
+      "type": "smoothstep",
+      "source": "n_wait_item_code",
+      "target": "n_set_item_code",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_item_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_item_code",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_item_api",
+      "type": "smoothstep",
+      "source": "n_set_item_code",
+      "target": "n_api_stock",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_stock_show",
+      "type": "smoothstep",
+      "source": "n_api_stock",
+      "target": "n_show_stock",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_stock_err",
+      "type": "smoothstep",
+      "source": "n_api_stock",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_stock_request",
+      "type": "smoothstep",
+      "source": "n_show_stock",
+      "target": "n_ask_opportunity_note",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_request_more",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_opp_wait",
+      "type": "smoothstep",
+      "source": "n_ask_opportunity_note",
+      "target": "n_wait_opportunity_note",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_opp_set",
+      "type": "smoothstep",
+      "source": "n_wait_opportunity_note",
+      "target": "n_set_opportunity_note",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_opp_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_opportunity_note",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_opp_api",
+      "type": "smoothstep",
+      "source": "n_set_opportunity_note",
+      "target": "n_api_opportunity",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_opp_success",
+      "type": "smoothstep",
+      "source": "n_api_opportunity",
+      "target": "n_opportunity_success",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_opp_err",
+      "type": "smoothstep",
+      "source": "n_api_opportunity",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_del_wait",
+      "type": "smoothstep",
+      "source": "n_ask_delivery_ref",
+      "target": "n_wait_delivery_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_del_set",
+      "type": "smoothstep",
+      "source": "n_wait_delivery_ref",
+      "target": "n_set_delivery_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_del_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_delivery_ref",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_del_api",
+      "type": "smoothstep",
+      "source": "n_set_delivery_ref",
+      "target": "n_api_delivery",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_del_show",
+      "type": "smoothstep",
+      "source": "n_api_delivery",
+      "target": "n_show_delivery",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_del_err",
+      "type": "smoothstep",
+      "source": "n_api_delivery",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_ord_wait",
+      "type": "smoothstep",
+      "source": "n_ask_order_ref",
+      "target": "n_wait_order_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_ord_set",
+      "type": "smoothstep",
+      "source": "n_wait_order_ref",
+      "target": "n_set_order_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_ord_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_order_ref",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_ord_api",
+      "type": "smoothstep",
+      "source": "n_set_order_ref",
+      "target": "n_api_order",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_ord_show",
+      "type": "smoothstep",
+      "source": "n_api_order",
+      "target": "n_show_order",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_ord_err",
+      "type": "smoothstep",
+      "source": "n_api_order",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_outstanding",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_api_outstanding",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_outstanding",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_out_show",
+      "type": "smoothstep",
+      "source": "n_api_outstanding",
+      "target": "n_show_outstanding",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_out_err",
+      "type": "smoothstep",
+      "source": "n_api_outstanding",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_last5_show",
+      "type": "smoothstep",
+      "source": "n_api_last5",
+      "target": "n_show_last5",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_last5_err",
+      "type": "smoothstep",
+      "source": "n_api_last5",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_stock",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_ask_item_code",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_stock",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_delivery",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_ask_delivery_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_delivery",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_order",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_ask_order_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_order",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_stock_end",
+      "type": "smoothstep",
+      "source": "n_show_stock",
+      "target": "n_end",
+      "selected": false,
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_delivery_end",
+      "type": "smoothstep",
+      "source": "n_show_delivery",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_order_end",
+      "type": "smoothstep",
+      "source": "n_show_order",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_outstanding_end",
+      "type": "smoothstep",
+      "source": "n_show_outstanding",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_last5_end",
+      "type": "smoothstep",
+      "source": "n_show_last5",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_profile",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_show_profile",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_profile",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_profile_end",
+      "type": "smoothstep",
+      "source": "n_show_profile",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_opp_success_end",
+      "type": "smoothstep",
+      "source": "n_opportunity_success",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_error_end",
+      "type": "smoothstep",
+      "source": "n_error",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "edge_n_show_stock_btn_request_more_n_ask_opportunity_note",
+      "type": "smoothstep",
+      "source": "n_show_stock",
+      "target": "n_ask_opportunity_note",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_request_more",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_menu_last5",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_api_last5",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_last5",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_stock_place_order",
+      "type": "smoothstep",
+      "source": "n_show_stock",
+      "target": "n_set_stock_order_ref",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_place_order",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_stock_ref_ask",
+      "type": "smoothstep",
+      "source": "n_set_stock_order_ref",
+      "target": "n_ask_place_order",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_order_no_decline",
+      "type": "smoothstep",
+      "source": "n_ask_place_order",
+      "target": "n_order_declined",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_order_no",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_decline_end",
+      "type": "smoothstep",
+      "source": "n_order_declined",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_order_yes_qtylist",
+      "type": "smoothstep",
+      "source": "n_ask_place_order",
+      "target": "n_ask_order_qty_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_order_yes",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qtylist_qty_10_50",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_set_qty_10_50",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_10_50",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qty_10_50_notelist",
+      "type": "smoothstep",
+      "source": "n_set_qty_10_50",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qtylist_qty_50_100",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_set_qty_50_100",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_50_100",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qty_50_100_notelist",
+      "type": "smoothstep",
+      "source": "n_set_qty_50_100",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qtylist_qty_100_200",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_set_qty_100_200",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_100_200",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qty_100_200_notelist",
+      "type": "smoothstep",
+      "source": "n_set_qty_100_200",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qtylist_qty_200_500",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_set_qty_200_500",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_200_500",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qty_200_500_notelist",
+      "type": "smoothstep",
+      "source": "n_set_qty_200_500",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qtylist_qty_500_plus",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_set_qty_500_plus",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_500_plus",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_qty_500_plus_notelist",
+      "type": "smoothstep",
+      "source": "n_set_qty_500_plus",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_notelist_note_none",
+      "type": "smoothstep",
+      "source": "n_ask_order_note_list",
+      "target": "n_set_note_none",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "note_none",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_note_none_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_note_none",
+      "target": "n_ask_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_notelist_note_urgent",
+      "type": "smoothstep",
+      "source": "n_ask_order_note_list",
+      "target": "n_set_note_urgent",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "note_urgent",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_note_urgent_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_note_urgent",
+      "target": "n_ask_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_notelist_note_call",
+      "type": "smoothstep",
+      "source": "n_ask_order_note_list",
+      "target": "n_set_note_call",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "note_call",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_note_call_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_note_call",
+      "target": "n_ask_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_notelist_note_other",
+      "type": "smoothstep",
+      "source": "n_ask_order_note_list",
+      "target": "n_set_note_other",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "note_other",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_note_other_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_note_other",
+      "target": "n_ask_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_outstanding_pay",
+      "type": "smoothstep",
+      "source": "n_show_outstanding",
+      "target": "n_ask_pay_confirm",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_pay_now",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_pay_yes_api",
+      "type": "smoothstep",
+      "source": "n_ask_pay_confirm",
+      "target": "n_api_generate_payment_link",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_pay_yes",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_pay_no_decline",
+      "type": "smoothstep",
+      "source": "n_ask_pay_confirm",
+      "target": "n_pay_declined",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_pay_no",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_decline_end2",
+      "type": "smoothstep",
+      "source": "n_pay_declined",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_paylink_show",
+      "type": "smoothstep",
+      "source": "n_api_generate_payment_link",
+      "target": "n_show_payment_link",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_paylink_err",
+      "type": "smoothstep",
+      "source": "n_api_generate_payment_link",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_paylink_end",
+      "type": "smoothstep",
+      "source": "n_show_payment_link",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_po_wait",
+      "type": "smoothstep",
+      "source": "n_ask_po_number",
+      "target": "n_wait_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_po_set",
+      "type": "smoothstep",
+      "source": "n_wait_po_number",
+      "target": "n_set_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_po_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_po_number",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_po_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_po_number",
+      "target": "n_api_opportunity",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    }
+  ],
+  "settings": {
+    "max_hops_per_message": 30,
+    "timezone": "Asia/Kolkata",
+    "salesforce": {
+      "enabled": false,
+      "environment": "production",
+      "auth_mode": "auto",
+      "lead_payload_mode": "new",
+      "instance_url": "",
+      "endpoint_url": "",
+      "api_version": "v60.0",
+      "access_token": "",
+      "default_lead_source": "Whats91 Flow Builder"
+    },
+    "action_definitions": [],
+    "fallback_behavior": "legacy_advance_bot"
+  }
+}
