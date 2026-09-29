@@ -94,11 +94,12 @@ A dedicated node (`n_show_profile` in `docs/whatsapp-flows/dealer-portal-pacific
 not just a bare button on the menu — shows a welcome message, then a `Website` action
 button below it. No `dms_erp` call involved either way.
 
-- [ ] **Set the real link first** — `n_show_profile`'s `action_buttons[0].url` is still
-      the placeholder `"https://"`. Re-import the Flow after filling in the real profile
-      URL; testing before that just confirms the placeholder opens, not the real page.
 - [ ] Tap **6. My Profile** on the main menu — confirm the welcome message + link button
-      show, and the link opens the intended page.
+      show, and the link opens `pd.storenxt.in` (`n_show_profile`'s `action_buttons[0].url`,
+      now set — was a bare `"https://"` placeholder before, which whats91's *publish*-time
+      validation rejects outright ("website action button URL must be valid") even though
+      it imports fine; `n_ask_order_ref` had the same unset placeholder and hit the same
+      publish error before its URL was set here too).
 
 ## 7. Request More Info / Place Order (after an availability check)
 
