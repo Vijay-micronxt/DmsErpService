@@ -70,7 +70,13 @@ Status: nothing below has been verified end-to-end yet except the one partial te
 - [ ] Dealer with several orders — confirm the 5 most recent show with correct stages.
 - [ ] Dealer with zero orders — confirm the "no orders yet" wording.
 
-## 6. Request More Info / Place Order (after an availability check)
+## 6. My Profile
+
+- [ ] Tap **My Profile** on the main menu — confirm it opens `pd.storenxt.in` directly
+      (a whats91 Flow-side `Action Button → Website` — no dms_erp call involved, so
+      there's no backend behavior to verify here beyond the link itself resolving).
+
+## 7. Request More Info / Place Order (after an availability check)
 
 - [ ] **Request More Info** — confirm it raises an Inquiry with the dealer's own typed
       note attached.

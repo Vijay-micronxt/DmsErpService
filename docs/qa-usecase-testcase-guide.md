@@ -247,7 +247,7 @@ thread a staff member would see.
 
 | ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
 |---|---|---|---|---|---|
-| TC-WA-01 | Menu appears | Message the business WhatsApp number. | Get the 5-option menu: Item Availability & Price / Delivery Status / Order Status / Payment Due / Recent 5 Orders. | C.2.2 | M3 / Wave 1 |
+| TC-WA-01 | Menu appears | Message the business WhatsApp number. | Get the 6-option menu: Item Availability & Price / Delivery Status / Order Status / Payment Due / Recent 5 Orders / My Profile. | C.2.2 | M3 / Wave 1 |
 | TC-WA-02 | In-stock item lookup | Pick option 1 → type a real item code in the test dealer's catalog with stock. | Reply shows size/finish, stock count, and price (if `custom_price_visible` is on for that dealer). | C.2.2 | M3 / Wave 1 |
 | TC-WA-03 | Price hidden when dealer's account has it off | Same as above, dealer with `custom_price_visible` off. | No price line at all — never a placeholder or zero. | C.2.2 / C.7.1 | M3 / Wave 1 |
 | TC-WA-04 | Out-of-stock item with lead time + alternative | Look up an item with zero stock, `Supplier lead time (days)` set, and a real, catalog-visible, in-stock Alternative Item. | Reply states out of stock, expected lead time in days, and "You may also consider …" naming the real alternative. | C.2.2 | M3 / Wave 1 |
@@ -269,6 +269,7 @@ thread a staff member would see.
 | TC-WA-19 | Delivery/Order Status — cross-dealer security | Enter a Sales Order number belonging to a **different** dealer. | Comes back "not found" — never reveals the other dealer's order or its stage. | C.2.2 / B.2 | M3 / Wave 1 |
 | TC-WA-20 | Payment Due | Pick option 4, dealer with a real outstanding balance, then a dealer with zero. | Correct amount shown; zero case shows "no outstanding dues." | C.2.2 | M3 / Wave 1 |
 | TC-WA-21 | Recent 5 Orders | Pick option 5, dealer with several orders, then a dealer with none. | Up to 5 most recent orders with correct stages; "no orders yet" for the empty case. | C.2.2 | M3 / Wave 1 |
+| TC-WA-21b | My Profile | Pick option 6 ("My Profile"). | Opens `pd.storenxt.in` directly — a whats91 Flow-side `Action Button → Website`, not a dms_erp call, so there's no reply text or Inquiry/Communications side effect to check, just that the link opens. | C.2.2 | M3 / Wave 1 |
 | TC-WA-22 | Diagnosing "nothing arrived" | If a real WhatsApp message produces nothing in Communications. | `/app/whats91-webhook-log` will show **nothing** (menu Flow calls ERPNext directly, bypassing that log) — check `/app/error-log` for a failed call instead, then whats91's own Flow setup if there's nothing there either. | C.2.2 | M3 / Wave 1 |
 
 ### 4.5 Inquiry Status & Closure (C.2.3), Duplicate Detection (C.2.4), Missed Demand (C.2.5)
