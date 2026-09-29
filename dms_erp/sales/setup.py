@@ -171,7 +171,7 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Data",
 			"options": "Email",
 			"label": "Email",
-			"description": "BRD C.13 — WhatsApp + email follow-up (BRD C.2.6/C.10.2) and a future email-based dealer app login channel. Not used elsewhere in the app yet.",
+			"description": "BRD C.13 — WhatsApp + email follow-up (BRD C.2.6/C.10.2), and the dealer portal's second login identifier (auth.dealer_api.login_with_password) once a dealer sets their own password. Must stay unique across dealers once it's used as a login key — see sales.dealer_api._assert_email_available.",
 			"insert_after": "custom_price_visible",
 		},
 		{

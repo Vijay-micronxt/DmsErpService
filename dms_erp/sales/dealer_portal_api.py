@@ -27,6 +27,7 @@ from dms_erp.catalog.dealer_catalog_api import catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
+from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.inquiry_api import _create_inquiry, _inquiry_filters, _serialize as _serialize_inquiry
 from dms_erp.sales.order_api import _create_order, _serialize as _serialize_order
 from dms_erp.warehouse.utils import top_batches, total_stock_for_item
@@ -268,5 +269,28 @@ def my_profile() -> dict:
 		"id": doc.name,
 		"name": doc.customer_name,
 		"phone": doc.custom_phone,
+		"email": doc.custom_email,
 		"classification": doc.custom_dealer_classification,
 	}
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_my_email(email: str):
+	"""BRD C.13 — a dealer sets their own email here (not phone, which stays
+	OTP-delivery-only and whatever staff set it to at onboarding). This is the one
+	prerequisite auth.dealer_api.set_my_password checks for before letting a dealer
+	set a portal password: email + password is a second way in, so the email that
+	login resolves by has to come from somewhere, and self-service here (rather
+	than only ever staff-set, like phone) is what makes that actually reachable
+	without staff having to do it for every dealer first."""
+	dealer = _current_dealer()
+	email = (email or "").strip()
+	if not email:
+		frappe.throw(_("An email is required."), frappe.ValidationError)
+
+	_assert_email_available(email, exclude=dealer)
+
+	doc = frappe.get_doc("Customer", dealer)
+	doc.custom_email = email
+	doc.save(ignore_permissions=True)
+	return my_profile()
