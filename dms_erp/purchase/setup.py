@@ -12,6 +12,21 @@ lifecycle's unused "Mapped to PO" state), not just a remarks note.
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 CUSTOM_FIELDS = {
+	"Purchase Receipt": [
+		{
+			"fieldname": "custom_supplier_invoice_no",
+			"fieldtype": "Data",
+			"label": "Supplier Invoice No",
+			"description": "BRD C.4.4 -- \"supplier invoice reference\" captured at receipt. ERPNext's native Purchase Receipt has no such field (bill_no/bill_date live on Purchase Invoice only, which this app doesn't post -- see finance.claims_api's own note on the Insurance Claim -> Purchase Receipt link).",
+			"insert_after": "supplier_delivery_note",
+		},
+		{
+			"fieldname": "custom_supplier_invoice_date",
+			"fieldtype": "Date",
+			"label": "Supplier Invoice Date",
+			"insert_after": "custom_supplier_invoice_no",
+		},
+	],
 	"Purchase Order": [
 		{"fieldname": "custom_remarks", "fieldtype": "Small Text", "label": "Remarks", "insert_after": "schedule_date"},
 		{
