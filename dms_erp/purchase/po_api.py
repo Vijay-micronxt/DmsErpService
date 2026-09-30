@@ -86,35 +86,62 @@ def get_purchase_order(po: str):
 
 @frappe.whitelist(methods=["POST"])
 def create_purchase_order(
-	item: str,
-	ordered_qty: float,
-	expected_ready_date,
+	item: str | None = None,
+	ordered_qty: float | None = None,
+	expected_ready_date=None,
 	supplier: str | None = None,
 	remarks: str | None = None,
 	source_inquiry: str | None = None,
+	lines: list[dict] | None = None,
 ):
+	"""BRD C.3.1's "item-wise, multi-item" order pattern applies equally to a PO --
+	ERPNext's own Purchase Order was never single-item, only this API's original
+	shape was. `lines` (each `{item, qty, expected_ready_date?}`) is the multi-item
+	path; the single `item`/`ordered_qty`/`expected_ready_date` kwargs remain as a
+	shorthand for the common one-item case and every existing caller, translated
+	into a single-row `lines` list internally so both paths share one code path."""
 	_assert_can_manage_purchase()
 
-	# BRD D.2 -- fall back to the item's own default supplier (its Series' supplier,
-	# unless the item overrides it) when the caller doesn't name one explicitly.
+	if not lines:
+		if not item or not ordered_qty or not expected_ready_date:
+			frappe.throw(_("item, ordered_qty and expected_ready_date are required when lines isn't given."), frappe.ValidationError)
+		lines = [{"item": item, "ordered_qty": ordered_qty, "expected_ready_date": expected_ready_date}]
+
+	po_lines = []
+	for line in lines:
+		line_item = line.get("item")
+		line_qty = line.get("ordered_qty") or line.get("qty")
+		if not line_item or not line_qty or float(line_qty) <= 0:
+			frappe.throw(_("Each line needs an item and a quantity greater than 0."), frappe.ValidationError)
+		line_ready_date = line.get("expected_ready_date") or expected_ready_date
+		if not line_ready_date:
+			frappe.throw(_("expected_ready_date is required, either per line or for the whole order."), frappe.ValidationError)
+		po_lines.append({"item_code": line_item, "qty": line_qty, "schedule_date": line_ready_date})
+
+	# BRD D.2 -- fall back to the first line's own default supplier (its Series'
+	# supplier, unless the item overrides it) when the caller doesn't name one
+	# explicitly. A PO is one supplier for every line, same as ERPNext's own model.
 	if not supplier:
-		supplier = item_default_supplier(item)
+		supplier = item_default_supplier(po_lines[0]["item_code"])
 	if not supplier:
 		frappe.throw(
-			_("{0} has no default supplier set — specify one, or set a default supplier on the item or its Series.").format(item),
+			_("{0} has no default supplier set — specify one, or set a default supplier on the item or its Series.").format(
+				po_lines[0]["item_code"]
+			),
 			frappe.ValidationError,
 		)
 
+	overall_ready_date = expected_ready_date or po_lines[0]["schedule_date"]
 	po = frappe.get_doc(
 		{
 			"doctype": "Purchase Order",
 			"supplier": supplier,
 			"company": default_company(),
 			"transaction_date": today(),
-			"schedule_date": expected_ready_date,
+			"schedule_date": overall_ready_date,
 			"custom_remarks": remarks,
 			"custom_source_inquiry": source_inquiry,
-			"items": [{"item_code": item, "qty": ordered_qty, "schedule_date": expected_ready_date}],
+			"items": po_lines,
 		}
 	)
 	po.insert(ignore_permissions=True)

@@ -124,13 +124,19 @@ def get_allocation(allocation: str):
 @frappe.whitelist(methods=["POST"])
 def create_allocation(
 	item: str,
-	batch_no: str,
 	total_qty: float,
 	lines: list[dict],
+	batch_no: str | None = None,
 	inward_truck: str | None = None,
 	supplier: str | None = None,
 	weight_per_box_kg: float | None = None,
 ):
+	"""7.11 -- batch_no is now optional here: inward_api.add_truck/
+	update_truck_batch is the preferred place to capture it, "while purchase
+	of that item," rather than this (a separate, later, purely internal
+	warehouse-placement step) being the first time it's ever asked for. A
+	caller-supplied batch_no still wins when given (e.g. no inward_truck at
+	all -- unallocated_stock_api's resolution path -- or correcting it here)."""
 	_assert_can_allocate()
 
 	if not lines:
@@ -155,6 +161,10 @@ def create_allocation(
 	supplier = supplier or (truck.supplier if truck else None)
 	if not supplier:
 		frappe.throw(_("A supplier is required (directly, or via inward_truck)."), frappe.ValidationError)
+
+	batch_no = batch_no or (truck.batch_no if truck else None)
+	if not batch_no:
+		frappe.throw(_("A batch number is required (directly, or already captured on the inward_truck)."), frappe.ValidationError)
 
 	ensure_batch(item, batch_no, weight_per_box_kg=weight_per_box_kg)
 

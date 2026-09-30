@@ -18,6 +18,29 @@ from dms_erp.pagination import clamp
 
 SERIES_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
+FINISH_DEFAULTS = ["Matt", "Glossy"]
+SUB_FINISH_DEFAULTS = ["Rocker", "Carving", "Stone-Art", "GVT/PGVT"]
+
+
+def _distinct_values(fieldname: str, defaults: list[str]) -> list[str]:
+	"""Distinct real values already in use across Series for the given field's
+	picker (BRD C.1.1 -- finish/sub_finish are free text, not a closed list, see
+	product_series.json's own field descriptions), falling back to the BRD's own
+	example values when nothing's been entered yet, so the picker isn't empty on
+	a fresh site."""
+	values = frappe.get_all("Product Series", filters={fieldname: ["is", "set"]}, pluck=fieldname, distinct=True)
+	return sorted(set(values)) or defaults
+
+
+@frappe.whitelist(methods=["GET"])
+def list_series_finishes():
+	return _distinct_values("finish", FINISH_DEFAULTS)
+
+
+@frappe.whitelist(methods=["GET"])
+def list_series_sub_finishes():
+	return _distinct_values("sub_finish", SUB_FINISH_DEFAULTS)
+
 
 def _assert_can_manage_series():
 	if not set(frappe.get_roles(frappe.session.user)) & SERIES_WRITE_ROLES:

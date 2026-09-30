@@ -53,6 +53,10 @@ def _serialize_vehicle(row) -> dict:
 		"standardRateBasis": row.standard_rate_basis,
 		"driverName": row.driver_name,
 		"driverMobile": row.driver_mobile,
+		"heightFt": row.height_ft,
+		"widthFt": row.width_ft,
+		"breadthFt": row.breadth_ft,
+		"loadingAreaSqft": row.loading_area_sqft,
 	}
 
 
@@ -122,6 +126,10 @@ def _validate_vehicle(vehicle: dict, exclude_row_name: str | None = None) -> dic
 		"standard_rate_basis": vehicle.get("standard_rate_basis"),
 		"driver_name": vehicle.get("driver_name"),
 		"driver_mobile": _clean_driver_mobile(vehicle.get("driver_mobile")),
+		"height_ft": vehicle.get("height_ft"),
+		"width_ft": vehicle.get("width_ft"),
+		"breadth_ft": vehicle.get("breadth_ft"),
+		"loading_area_sqft": vehicle.get("loading_area_sqft"),
 	}
 
 
@@ -214,6 +222,10 @@ def update_vehicle(transporter: str, vehicle_name: str, patch: dict):
 		"standard_rate_basis": row.standard_rate_basis,
 		"driver_name": row.driver_name,
 		"driver_mobile": row.driver_mobile,
+		"height_ft": row.height_ft,
+		"width_ft": row.width_ft,
+		"breadth_ft": row.breadth_ft,
+		"loading_area_sqft": row.loading_area_sqft,
 	}
 	current.update(patch)
 	validated = _validate_vehicle(current, exclude_row_name=vehicle_name)
