@@ -84,7 +84,37 @@ def _serialize(doc) -> dict:
 			{"stage": row.stage, "at": row.at, "by": row.by, "note": row.note}
 			for row in sorted(doc.custom_stage_history, key=lambda r: r.idx)
 		],
+		"invoices": _order_invoices(doc.name),
 	}
+
+
+def _order_invoices(order: str) -> list[dict]:
+	"""BRD Figure 4's Sales Invoice step (see create_sales_invoice) — real data
+	the moment one exists for this order, empty list until then. Cancelled
+	invoices are excluded; a cancelled-and-reinvoiced order should read as
+	invoiced against the live one, not double-counted or hidden."""
+	names = frappe.db.sql(
+		"select distinct parent from `tabSales Invoice Item` where sales_order=%s", (order,), as_dict=True
+	)
+	invoices = []
+	for row in names:
+		inv = frappe.db.get_value(
+			"Sales Invoice",
+			row.parent,
+			["name", "posting_date", "grand_total", "outstanding_amount", "status", "docstatus"],
+			as_dict=True,
+		)
+		if inv and inv.docstatus != 2:
+			invoices.append(
+				{
+					"id": inv.name,
+					"date": inv.posting_date,
+					"grandTotal": inv.grand_total,
+					"outstandingAmount": inv.outstanding_amount,
+					"status": inv.status,
+				}
+			)
+	return invoices
 
 
 def _serialize_line(row) -> dict:
@@ -435,3 +465,60 @@ def _cancel_order_action(order: str, note: str | None = None) -> dict:
 	doc.append("custom_stage_history", {"stage": "Cancelled", "at": now_datetime(), "by": frappe.session.user, "note": note})
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
+
+
+def _serialize_invoice(doc) -> dict:
+	return {
+		"id": doc.name,
+		"date": doc.posting_date,
+		"dealerId": doc.customer,
+		"salesOrder": doc.items[0].sales_order if doc.items else None,
+		"grandTotal": doc.grand_total,
+		"outstandingAmount": doc.outstanding_amount,
+		"status": doc.status,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_sales_invoice(order: str):
+	"""BRD Figure 4's order-to-cash flow (Sales Order -> reserve stock -> Delivery
+	Note -> Sales Invoice + e-Way bill -> Payment Tracking) has never had a Sales
+	Invoice step anywhere in this app -- every "this app posts no Sales Invoice"
+	caveat across sales.credit_limit, dashboard.api, dealer_portal_api.my_dues
+	and approvals.api's trigger #2 note is about this exact gap. This uses
+	ERPNext's own Sales Order -> Sales Invoice mapper (make_sales_invoice) so
+	items/rates/taxes are carried over from the already-approved order, never
+	re-derived, then inserts and submits a real Sales Invoice the same way
+	every other action here creates its document (ignore_permissions=True,
+	gated by role instead).
+
+	Gated to Dispatched/Delivered -- billing an order that hasn't actually
+	started moving has no basis in the BRD's own diagram or in ordinary
+	invoicing practice. One live invoice per order: a second call against an
+	already-invoiced order is rejected rather than silently double-billing it.
+
+	The separate Delivery Note / real stock-movement step the BRD diagram
+	shows ahead of this, and real payment/AR tracking after it, remain their
+	own separate, larger, not-yet-scoped pieces of work -- this only closes
+	the Sales Invoice gap itself. _order_invoices (see _serialize) starts
+	returning real rows for this order the moment this runs."""
+	_assert_can_manage_orders()
+
+	doc = frappe.get_doc("Sales Order", order)
+	if doc.custom_fulfillment_stage not in ("Dispatched", "Delivered"):
+		frappe.throw(
+			_("{0} must be Dispatched or Delivered before it can be invoiced (currently {1}).").format(
+				order, doc.custom_fulfillment_stage
+			),
+			frappe.ValidationError,
+		)
+	if _order_invoices(order):
+		frappe.throw(_("{0} is already invoiced.").format(order), frappe.ValidationError)
+
+	from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+
+	invoice = make_sales_invoice(order, ignore_permissions=True)
+	invoice.insert(ignore_permissions=True)
+	invoice.submit()
+
+	return _serialize_invoice(invoice)
