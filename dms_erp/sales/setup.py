@@ -116,6 +116,17 @@ CUSTOM_FIELDS = {
 			"insert_after": "discount_percentage",
 		},
 	],
+	"Opportunity": [
+		{
+			"fieldname": "custom_dms_inquiry",
+			"fieldtype": "Link",
+			"label": "Source Inquiry (DMS)",
+			"options": "Inquiry",
+			"read_only": 1,
+			"insert_after": "customer_name",
+			"description": "sales.inquiry_api._mirror_to_opportunity — set once, at creation, when this Opportunity was auto-created as a one-way visibility mirror of a dms_erp Inquiry. Never updated afterwards; the Inquiry's own status lifecycle (Quoted/Converted/Rejected/etc.) is not pushed back here.",
+		},
+	],
 	"Customer": [
 		{
 			"fieldname": "dms_classification_section",

@@ -42,7 +42,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.sales.utils import find_open_duplicate_inquiries
-from dms_erp.warehouse.utils import total_stock_for_item
+from dms_erp.warehouse.utils import default_company, total_stock_for_item
 
 INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
@@ -84,7 +84,49 @@ def _serialize(doc) -> dict:
 		"customerPo": doc.customer_po,
 		"linkedSalesOrder": doc.linked_sales_order,
 		"linkedQuotation": doc.linked_quotation,
+		"linkedOpportunity": doc.linked_opportunity,
 	}
+
+
+def _mirror_to_opportunity(doc) -> str | None:
+	"""7.9 -- every Inquiry, whatever its source (frontend, dealer portal,
+	WhatsApp, staff -- every real creation path runs through _create_inquiry,
+	this function's only caller), should be visible in ERPNext's native
+	Opportunity list so desk staff have one list to work from instead of a
+	separate native Inquiry-style list. One-way, create-time mirror only: the
+	native "Create Quotation" button on the Opportunity is deliberately left
+	unwired -- dms_erp's own Quotation flow (quotation_api.py) remains the real
+	one. Later Inquiry status changes (Quoted/Converted to Order/Rejected/etc.)
+	are NOT pushed back to the Opportunity -- every one of those happens via
+	frappe.db.set_value elsewhere (quotation_api.py, order_api.py, this
+	module's own convert_to_purchase_requirement), which bypasses Document
+	hooks entirely, so keeping the two in lockstep would mean touching every
+	one of those call sites -- a separate, bigger piece of work than what was
+	asked for here.
+
+	Best-effort: a dealer or staff member raising an Inquiry must never fail
+	because this secondary, visibility-only mirror couldn't be created."""
+	try:
+		opportunity = frappe.get_doc(
+			{
+				"doctype": "Opportunity",
+				"opportunity_from": "Customer",
+				"party_name": doc.dealer,
+				"company": default_company(),
+				"transaction_date": doc.date,
+				"custom_dms_inquiry": doc.name,
+				# No pricing decision has been made at Inquiry stage — rate 0 is a
+				# placeholder, not a real quote; Opportunity Item's rate/amount are
+				# reqd=1 on the child table, so an explicit 0 (not just an unset
+				# field) is required to pass validation.
+				"items": [{"item_code": doc.item, "qty": doc.qty, "rate": 0}],
+			}
+		)
+		opportunity.insert(ignore_permissions=True)
+		return opportunity.name
+	except Exception:
+		frappe.log_error(title="Failed to mirror Inquiry to Opportunity", message=frappe.get_traceback())
+		return None
 
 
 def _inquiry_filters(dealer: str | None, status: str | None, search: str | None) -> dict:
@@ -186,6 +228,11 @@ def _create_inquiry(
 		}
 	)
 	doc.insert(ignore_permissions=True)
+
+	opportunity = _mirror_to_opportunity(doc)
+	if opportunity:
+		doc.db_set("linked_opportunity", opportunity, update_modified=False)
+
 	result = _serialize(doc)
 	result["duplicateOf"] = duplicates[0]["id"] if duplicates else None
 	return result
