@@ -42,6 +42,7 @@ def _serialize(doc) -> dict:
 		"ratePerBox": doc.rate_per_box,
 		"chargeAmount": truck.boxes * doc.rate_per_box,
 		"paymentMode": doc.payment_mode,
+		"upiReference": doc.upi_reference,
 		"status": doc.status,
 		"recordedAt": doc.recorded_at,
 		"recordedBy": doc.recorded_by,
@@ -89,7 +90,17 @@ def get_charge_for_truck(inward_truck: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def record_charge(inward_truck: str, contractor: str, rate_per_box: float, payment_mode: str, remarks: str | None = None):
+def record_charge(
+	inward_truck: str,
+	contractor: str,
+	rate_per_box: float,
+	payment_mode: str,
+	remarks: str | None = None,
+	upi_reference: str | None = None,
+):
+	"""BRD C.9.1 -- `upi_reference` is only meaningful for UPI/PhonePe/GPay
+	payment_mode, same as the doctype's own depends_on; left unset for
+	Cash/Bank Transfer/Cheque/NEFT, which have no such reference."""
 	_assert_can_manage_charges()
 
 	if frappe.db.exists("Unloading Charge", {"inward_truck": inward_truck}):
@@ -102,6 +113,7 @@ def record_charge(inward_truck: str, contractor: str, rate_per_box: float, payme
 			"contractor": contractor,
 			"rate_per_box": rate_per_box,
 			"payment_mode": payment_mode,
+			"upi_reference": upi_reference,
 			"status": "Pending",
 			"recorded_at": today(),
 			"recorded_by": frappe.session.user,
