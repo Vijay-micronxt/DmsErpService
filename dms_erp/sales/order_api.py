@@ -92,28 +92,19 @@ def _order_invoices(order: str) -> list[dict]:
 	"""BRD Figure 4's Sales Invoice step (see create_sales_invoice) — real data
 	the moment one exists for this order, empty list until then. Cancelled
 	invoices are excluded; a cancelled-and-reinvoiced order should read as
-	invoiced against the live one, not double-counted or hidden."""
+	invoiced against the live one, not double-counted or hidden. Reuses
+	_serialize_invoice (one frappe.get_doc per invoice -- normally 0-1 per
+	order) rather than duplicating its field list, so weight (BRD C.1.3) and
+	anything else added there stays consistent everywhere an invoice shows up,
+	not just right after create_sales_invoice runs."""
 	names = frappe.db.sql(
 		"select distinct parent from `tabSales Invoice Item` where sales_order=%s", (order,), as_dict=True
 	)
 	invoices = []
 	for row in names:
-		inv = frappe.db.get_value(
-			"Sales Invoice",
-			row.parent,
-			["name", "posting_date", "grand_total", "outstanding_amount", "status", "docstatus"],
-			as_dict=True,
-		)
-		if inv and inv.docstatus != 2:
-			invoices.append(
-				{
-					"id": inv.name,
-					"date": inv.posting_date,
-					"grandTotal": inv.grand_total,
-					"outstandingAmount": inv.outstanding_amount,
-					"status": inv.status,
-				}
-			)
+		docstatus = frappe.db.get_value("Sales Invoice", row.parent, "docstatus")
+		if docstatus != 2:
+			invoices.append(_serialize_invoice(frappe.get_doc("Sales Invoice", row.parent)))
 	return invoices
 
 
@@ -468,6 +459,31 @@ def _cancel_order_action(order: str, note: str | None = None) -> dict:
 
 
 def _serialize_invoice(doc) -> dict:
+	"""BRD C.1.3 -- "Weight (in the correct UOM) must be displayed on every
+	relevant document... invoice..." -- per-line and invoice-total weight,
+	same item_weight_per_box_kg derivation every other document here already
+	uses (Inquiry/Quotation/Sales Order/Purchase Order/Bay Allocation/
+	stickers/Pickup Run all had this; this was the one left out when Sales
+	Invoice itself was first built)."""
+	lines = []
+	total_weight_kg = 0.0
+	any_weight = False
+	for row in doc.items:
+		weight_per_box_kg = item_weight_per_box_kg(row.item_code)
+		line_weight_kg = (weight_per_box_kg or 0) * row.qty if weight_per_box_kg is not None else None
+		if line_weight_kg is not None:
+			any_weight = True
+			total_weight_kg += line_weight_kg
+		lines.append(
+			{
+				"itemCode": row.item_code,
+				"qty": row.qty,
+				"rate": row.rate,
+				"amount": row.amount,
+				"weightPerBoxKg": weight_per_box_kg,
+				"totalWeightKg": line_weight_kg,
+			}
+		)
 	return {
 		"id": doc.name,
 		"date": doc.posting_date,
@@ -476,6 +492,8 @@ def _serialize_invoice(doc) -> dict:
 		"grandTotal": doc.grand_total,
 		"outstandingAmount": doc.outstanding_amount,
 		"status": doc.status,
+		"lines": lines,
+		"totalWeightKg": round(total_weight_kg, 2) if any_weight else None,
 	}
 
 
