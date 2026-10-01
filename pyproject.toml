@@ -9,6 +9,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     "PyJWT~=2.8.0",
+    "qrcode~=7.4",
 ]
 
 [build-system]
