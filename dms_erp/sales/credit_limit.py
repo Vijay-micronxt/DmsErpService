@@ -40,14 +40,37 @@ CREDIT_LIMIT_AUTHORIZED_ROLES = {"DMS Management", "System Manager"}
 
 
 def get_credit_limit(dealer: str) -> float:
-	return (
-		frappe.db.get_value(
-			"Customer Credit Limit",
-			{"parent": dealer, "company": default_company()},
-			"credit_limit",
-		)
-		or 0
+	"""Mirrors ERPNext's own erpnext.selling.doctype.customer.customer.
+	get_credit_limit fallback chain exactly (Customer -> Customer Group ->
+	Company's own default). This used to check only the Customer-level row --
+	a dealer whose limit actually came from their Customer Group or the
+	Company default (not set directly on the Customer) read as "no limit
+	configured" here and skipped this gate entirely, while ERPNext's own
+	native credit check (which does fall back) still caught it at Sales
+	Order submit time -- too late for the intended "queue for Management
+	approval" flow, so the caller hit ERPNext's raw, unhandled "Credit Limit
+	Crossed" error directly instead."""
+	company = default_company()
+
+	limit = frappe.db.get_value(
+		"Customer Credit Limit",
+		{"parent": dealer, "parenttype": "Customer", "company": company},
+		"credit_limit",
 	)
+	if limit:
+		return limit
+
+	customer_group = frappe.get_cached_value("Customer", dealer, "customer_group")
+	row = frappe.db.get_value(
+		"Customer Credit Limit",
+		{"parent": customer_group, "parenttype": "Customer Group", "company": company},
+		["credit_limit", "bypass_credit_limit_check"],
+		as_dict=True,
+	)
+	if row and not row.bypass_credit_limit_check:
+		return row.credit_limit or 0
+
+	return frappe.get_cached_value("Company", company, "credit_limit") or 0
 
 
 def committed_order_value(dealer: str) -> float:

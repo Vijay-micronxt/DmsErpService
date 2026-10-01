@@ -32,6 +32,26 @@ def _assert_valid_main_bay_link(linked_main_bay: str | None):
 
 
 @frappe.whitelist(methods=["GET"])
+def list_bay_dimensions():
+	"""Distinct `custom_dimensions` values already in use across real bays, for the
+	Bay Master form's size picker -- BRD Part F.9 treats real bay sizes as a
+	client-provided dependency, not a fixed list (see warehouse/setup.py's own
+	custom_dimensions field, freed from a closed Select for exactly this reason),
+	so the picker's options are whatever's actually been used so far, not a
+	hardcoded set. Falls back to the original 4 example presets when nothing's
+	been entered yet, so the picker isn't empty on a fresh site."""
+	from dms_erp.warehouse.setup import BAY_DIMENSIONS
+
+	values = frappe.get_all(
+		"Warehouse",
+		filters={"custom_bay_code": ["is", "set"], "custom_dimensions": ["is", "set"]},
+		pluck="custom_dimensions",
+		distinct=True,
+	)
+	return sorted(set(values)) or BAY_DIMENSIONS
+
+
+@frappe.whitelist(methods=["GET"])
 def list_warehouse_groups(search: str | None = None):
 	# The other half of "bays are ERPNext Warehouses" (see module docstring):
 	# create_bay's parent_warehouse wants a group Warehouse's raw `name`, which

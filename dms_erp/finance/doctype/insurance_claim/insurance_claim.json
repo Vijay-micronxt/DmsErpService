@@ -9,6 +9,7 @@
   "claim_type",
   "supplier",
   "stock_entry",
+  "purchase_receipt",
   "insurer",
   "claim_amount",
   "column_break_1",
@@ -52,6 +53,14 @@
    "options": "Stock Entry",
    "unique": 1,
    "description": "The Damage → Insurance Claim bay transfer this claim is the financial companion record for. Only set for claim_type Insurance/Transit — a Shortage claim (identified at receipt, BRD C.4.4/C.8.3) has none."
+  },
+  {
+   "description": "BRD D.3 Claim Voucher's \"invoice/consignment ref\" -- traced from the originating Bay Allocation when derivable from stock_entry, or set directly for a Shortage claim. The linked Purchase Receipt's own native bill_no/bill_date (ERPNext core) is the actual supplier invoice reference (BRD C.4.4), read from there rather than duplicated onto this doctype.",
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Purchase Receipt",
+   "options": "Purchase Receipt"
   },
   {
    "fieldname": "insurer",

@@ -31,7 +31,7 @@ that's noted rather than guessed silently.
 |---|---|---|
 | Backend | `DmsErpService` | Frappe/ERPNext app (`dms_erp`) — all business logic and data. |
 | Staff web app | `pacific-tileflow` | Internal ERP UI for Sales/Warehouse/Purchase/Finance/Management roles. |
-| Dealer web portal | `dms-dealer-portal` | Dealer-facing self-service app (BRD C.13) — phone+OTP login. |
+| Dealer web portal | `dms-dealer-portal` | Dealer-facing self-service app (BRD C.13) — phone+OTP login, or email+password once a dealer sets one up. |
 | WhatsApp | whats91 "Dealer Portal" Flow + `dms_erp/comms/flow_api.py`, plus the free-text path (`dms_erp/comms/api.py`, `intent.py`, `whats91.py`) | Automated dealer-facing WhatsApp menu (BRD C.2.2) and the separate LLM-classified free-text auto-reply path. |
 
 ## Roles referenced in test cases
@@ -247,7 +247,7 @@ thread a staff member would see.
 
 | ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
 |---|---|---|---|---|---|
-| TC-WA-01 | Menu appears | Message the business WhatsApp number. | Get the 5-option menu: Item Availability & Price / Delivery Status / Order Status / Payment Due / Recent 5 Orders. | C.2.2 | M3 / Wave 1 |
+| TC-WA-01 | Menu appears | Message the business WhatsApp number. | Get the 6-option menu: Item Availability & Price / Delivery Status / Order Status / Payment Due / Recent 5 Orders / My Profile. | C.2.2 | M3 / Wave 1 |
 | TC-WA-02 | In-stock item lookup | Pick option 1 → type a real item code in the test dealer's catalog with stock. | Reply shows size/finish, stock count, and price (if `custom_price_visible` is on for that dealer). | C.2.2 | M3 / Wave 1 |
 | TC-WA-03 | Price hidden when dealer's account has it off | Same as above, dealer with `custom_price_visible` off. | No price line at all — never a placeholder or zero. | C.2.2 / C.7.1 | M3 / Wave 1 |
 | TC-WA-04 | Out-of-stock item with lead time + alternative | Look up an item with zero stock, `Supplier lead time (days)` set, and a real, catalog-visible, in-stock Alternative Item. | Reply states out of stock, expected lead time in days, and "You may also consider …" naming the real alternative. | C.2.2 | M3 / Wave 1 |
@@ -269,6 +269,7 @@ thread a staff member would see.
 | TC-WA-19 | Delivery/Order Status — cross-dealer security | Enter a Sales Order number belonging to a **different** dealer. | Comes back "not found" — never reveals the other dealer's order or its stage. | C.2.2 / B.2 | M3 / Wave 1 |
 | TC-WA-20 | Payment Due | Pick option 4, dealer with a real outstanding balance, then a dealer with zero. | Correct amount shown; zero case shows "no outstanding dues." | C.2.2 | M3 / Wave 1 |
 | TC-WA-21 | Recent 5 Orders | Pick option 5, dealer with several orders, then a dealer with none. | Up to 5 most recent orders with correct stages; "no orders yet" for the empty case. | C.2.2 | M3 / Wave 1 |
+| TC-WA-21b | My Profile | Pick option 6 ("My Profile"). | Shows a welcome message with a link button below it (`n_show_profile` in `docs/whatsapp-flows/dealer-portal-pacific.json`), not a dms_erp call, so there's no reply text or Inquiry/Communications side effect to check — just the message + link, which opens `pd.storenxt.in`. | C.2.2 | M3 / Wave 1 |
 | TC-WA-22 | Diagnosing "nothing arrived" | If a real WhatsApp message produces nothing in Communications. | `/app/whats91-webhook-log` will show **nothing** (menu Flow calls ERPNext directly, bypassing that log) — check `/app/error-log` for a failed call instead, then whats91's own Flow setup if there's nothing there either. | C.2.2 | M3 / Wave 1 |
 
 ### 4.5 Inquiry Status & Closure (C.2.3), Duplicate Detection (C.2.4), Missed Demand (C.2.5)
@@ -666,8 +667,12 @@ categories: Sales, Warehouse, Purchase, Finance, Catalog, Forecasting.
 
 | ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
 |---|---|---|---|---|---|
-| TC-DP-01 | Phone + OTP login, no password | Open the dealer portal → enter the test dealer's phone number → enter the OTP received. | Logs in; session is scoped server-side to that dealer only. | C.13.1 | M3 / Wave 1 |
+| TC-DP-01 | Phone + OTP login | Open the dealer portal → enter the test dealer's phone number → enter the OTP received. | Logs in; session is scoped server-side to that dealer only. | C.13.1 | M3 / Wave 1 |
 | TC-DP-02 | Wrong/expired OTP rejected | Enter an incorrect OTP, then a correct one after the code has expired. | Both rejected cleanly; a fresh OTP request succeeds. | C.13.1 | M3 / Wave 1 |
+| TC-DP-02b | Set an email + password from Profile, then log in with it | After OTP login, add an email in Profile, set a password, sign out, sign back in with email + password instead of OTP. | Email save succeeds; password sign-in succeeds and lands in the same account (same dealer session). | C.13 | M3 / Wave 1 |
+| TC-DP-02c | Email/password failures never distinguish the reason | Try password login with an email that isn't registered, then a registered email that's never had a password set, then the right email with a wrong password. | All three get the identical generic "Invalid email or password" — never reveals which case it was. | C.13 / B.2 | M3 / Wave 1 |
+| TC-DP-02d | Email must stay unique across dealers | As Dealer A, try to set an email already on file for Dealer B (set via either dealer's own Profile or the staff dealer master). | Rejected — an email already registered to another dealer can't be reused, since password login would otherwise resolve to the wrong one. | C.13 | M3 / Wave 1 |
+| TC-DP-02e | No password ever forces a fallback to OTP, not a dead end | A dealer who never set a password (or forgot it) has no "forgot password" link. | OTP login is always available regardless — this app sends no real email, so there's deliberately no reset-link flow to be missing. | C.13 | M3 / Wave 1 |
 | TC-DP-03 | Catalog scoped to this dealer | Browse the catalog. | Only items in this dealer's Dealer Catalog assignment appear, each with images (product/application/additional) and price where enabled. | C.13.1 | M3 / Wave 1 |
 | TC-DP-04 | Search by either code | Search using the dealer's own private code, then the company code, for the same item. | Both resolve to the same item detail page. | C.13.1 / C.1.5 | M3 / Wave 1 |
 | TC-DP-05 | Item detail shows stock/batches/price | Open an item's detail page. | Real-time stock, top-3 batches, and price (if enabled for this dealer) are shown. | C.13.1 / C.6.2 | M3 / Wave 1 |

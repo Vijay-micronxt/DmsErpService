@@ -11,6 +11,7 @@
   "rate_per_box",
   "column_break_1",
   "payment_mode",
+  "upi_reference",
   "status",
   "section_break_1",
   "recorded_at",
@@ -52,8 +53,15 @@
    "fieldname": "payment_mode",
    "fieldtype": "Select",
    "label": "Payment Mode",
-   "options": "Cash\nBank Transfer\nUPI\nCheque",
+   "options": "Cash\nBank Transfer\nUPI\nCheque\nPhonePe\nGPay\nNEFT",
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:['UPI','PhonePe','GPay'].includes(doc.payment_mode)",
+   "description": "BRD C.9.1 -- UPI transaction reference, for UPI/PhonePe/GPay payments.",
+   "fieldname": "upi_reference",
+   "fieldtype": "Data",
+   "label": "UPI Reference"
   },
   {
    "default": "Pending",

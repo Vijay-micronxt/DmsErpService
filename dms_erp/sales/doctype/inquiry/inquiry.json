@@ -22,7 +22,8 @@
   "remarks",
   "customer_po",
   "linked_sales_order",
-  "linked_quotation"
+  "linked_quotation",
+  "linked_opportunity"
  ],
  "fields": [
   {
@@ -133,6 +134,14 @@
    "fieldtype": "Link",
    "label": "Linked Quotation",
    "options": "Quotation",
+   "read_only": 1
+  },
+  {
+   "description": "Set once, at creation (sales.inquiry_api._mirror_to_opportunity) — the native ERPNext Opportunity this Inquiry was mirrored into, so desk staff have one list to work from instead of a separate Inquiry list. One-way, create-time only; later status changes on this Inquiry are not pushed to the Opportunity.",
+   "fieldname": "linked_opportunity",
+   "fieldtype": "Link",
+   "label": "Linked Opportunity",
+   "options": "Opportunity",
    "read_only": 1
   }
  ],

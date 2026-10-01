@@ -5,6 +5,24 @@ Flow, before considering BRD C.2.2's automated menu production-ready. Check item
 you go; the step-by-step click-path for most of these is also in the in-app help panel —
 `pacific-tileflow`'s Communications screen → "Testing this flow (QA)" section.
 
+The Flow itself — the whats91 Flow Builder graph this checklist exercises — is version-
+controlled at `docs/whatsapp-flows/dealer-portal-pacific.json`, exported from whats91.
+Edit that file for structural Flow changes (new menu options, new nodes/edges) and
+re-import it into whats91's Flow Builder; this repo's own `dms_erp` code only ever
+handles what happens *after* a node calls into it (see `dms_erp/comms/flow_api.py`), not
+the menu/node graph itself.
+
+**Importing back into whats91 (paste-based import): minify first.** whats91's import box
+takes pasted text, not a file upload, and a large multi-line pretty-printed JSON paste can
+come back "unexpected content after top-level value, line 1, col N" even though the file
+itself is completely valid JSON (confirmed: same content round-trips fine once minified) —
+almost certainly the paste target's own editor mangling the paste (e.g. auto-bracket-
+closing firing per line), not a real JSON problem. Minify before pasting:
+
+```bash
+python3 -c "import json,sys; json.dump(json.load(open('docs/whatsapp-flows/dealer-portal-pacific.json')), sys.stdout, ensure_ascii=False, separators=(',',':'))" > /tmp/dealer-portal-pacific.min.json
+```
+
 Status: nothing below has been verified end-to-end yet except the one partial test noted.
 
 ---
@@ -70,7 +88,20 @@ Status: nothing below has been verified end-to-end yet except the one partial te
 - [ ] Dealer with several orders — confirm the 5 most recent show with correct stages.
 - [ ] Dealer with zero orders — confirm the "no orders yet" wording.
 
-## 6. Request More Info / Place Order (after an availability check)
+## 6. My Profile
+
+A dedicated node (`n_show_profile` in `docs/whatsapp-flows/dealer-portal-pacific.json`),
+not just a bare button on the menu — shows a welcome message, then a `Website` action
+button below it. No `dms_erp` call involved either way.
+
+- [ ] Tap **6. My Profile** on the main menu — confirm the welcome message + link button
+      show, and the link opens `pd.storenxt.in` (`n_show_profile`'s `action_buttons[0].url`,
+      now set — was a bare `"https://"` placeholder before, which whats91's *publish*-time
+      validation rejects outright ("website action button URL must be valid") even though
+      it imports fine; `n_ask_order_ref` had the same unset placeholder and hit the same
+      publish error before its URL was set here too).
+
+## 7. Request More Info / Place Order (after an availability check)
 
 - [ ] **Request More Info** — confirm it raises an Inquiry with the dealer's own typed
       note attached.

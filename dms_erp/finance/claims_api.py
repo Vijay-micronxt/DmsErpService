@@ -65,11 +65,43 @@ def _stock_entry_snapshot(stock_entry: str | None) -> dict:
 
 
 def _supplier_from_stock_entry(stock_entry: str) -> str | None:
-	"""Best-effort trace back to the originating Bay Allocation's supplier for the
-	same item+batch — Stock Entry itself carries no supplier field. None (not a
-	throw) when it can't be traced; accumulation just won't group that claim."""
+	"""Best-effort trace back to the originating Bay Allocation's Purchase
+	Receipt, then that receipt's own native supplier field -- Bay Allocation
+	itself has no supplier field of its own (a real, pre-existing bug: this
+	used to query one that doesn't exist, "Bay Allocation" has only item/
+	batch_no/purchase_order/purchase_receipt, confirmed via bay_allocation.
+	json -- it would have thrown OperationalError the moment it ever actually
+	matched a row). None (not a throw) when it can't be traced; accumulation
+	just won't group that claim."""
+	purchase_receipt = _purchase_receipt_from_stock_entry(stock_entry)
+	if not purchase_receipt:
+		return None
+	return frappe.db.get_value("Purchase Receipt", purchase_receipt, "supplier")
+
+
+def _purchase_receipt_from_stock_entry(stock_entry: str) -> str | None:
+	"""Same trace-back as _supplier_from_stock_entry, for the Purchase Receipt this
+	claim's underlying stock is financially tied to (BRD D.3's "invoice/consignment
+	ref" on the Claim Voucher). None when it can't be traced -- a claim with no
+	receipt reference is still valid, just not traceable to a specific receipt."""
 	row = frappe.get_doc("Stock Entry", stock_entry).items[0]
-	return frappe.db.get_value("Bay Allocation", {"item": row.item_code, "batch_no": row.batch_no}, "supplier")
+	return frappe.db.get_value("Bay Allocation", {"item": row.item_code, "batch_no": row.batch_no}, "purchase_receipt")
+
+
+def _supplier_invoice_ref(purchase_receipt: str | None) -> dict:
+	"""BRD C.4.4's "supplier invoice reference" is captured on Purchase Receipt as a
+	custom field (purchase/setup.py's custom_supplier_invoice_no/_date) -- ERPNext's
+	native Purchase Receipt has no such field of its own; bill_no/bill_date exist
+	only on Purchase Invoice, which this app doesn't post (see this module's own
+	docstring). Read from there rather than duplicating it onto Insurance Claim."""
+	if not purchase_receipt:
+		return {"supplierInvoiceNo": None, "supplierInvoiceDate": None}
+	row = frappe.db.get_value(
+		"Purchase Receipt", purchase_receipt, ["custom_supplier_invoice_no", "custom_supplier_invoice_date"], as_dict=True
+	)
+	if not row:
+		return {"supplierInvoiceNo": None, "supplierInvoiceDate": None}
+	return {"supplierInvoiceNo": row.custom_supplier_invoice_no, "supplierInvoiceDate": row.custom_supplier_invoice_date}
 
 
 def _serialize(doc) -> dict:
@@ -80,6 +112,8 @@ def _serialize(doc) -> dict:
 		"supplier": doc.supplier,
 		"stockEntry": doc.stock_entry,
 		**_stock_entry_snapshot(doc.stock_entry),
+		"purchaseReceipt": doc.purchase_receipt,
+		**_supplier_invoice_ref(doc.purchase_receipt),
 		"insurer": doc.insurer,
 		"claimAmount": doc.claim_amount,
 		"approvedAmount": doc.approved_amount,
@@ -179,7 +213,13 @@ def file_claim(
 	supplier: str | None = None,
 	insurer: str | None = None,
 	remarks: str | None = None,
+	purchase_receipt: str | None = None,
 ):
+	"""`purchase_receipt` (BRD D.3's "invoice/consignment ref") is auto-derived from
+	stock_entry's originating Bay Allocation when not given explicitly -- a Shortage
+	claim (BRD C.8.3, identified at receipt, no stock_entry) has no transfer to
+	derive it from, so pass it directly there if the receiving Purchase Receipt is
+	known."""
 	_assert_can_manage_claims()
 
 	if claim_type not in CLAIM_TYPES:
@@ -192,6 +232,7 @@ def file_claim(
 		if frappe.db.exists("Insurance Claim", {"stock_entry": stock_entry}):
 			frappe.throw(_("A claim has already been filed for this transfer."), frappe.DuplicateEntryError)
 		supplier = supplier or _supplier_from_stock_entry(stock_entry)
+		purchase_receipt = purchase_receipt or _purchase_receipt_from_stock_entry(stock_entry)
 	elif not supplier:
 		# No stock_entry to derive supplier from (typically a Shortage claim, BRD
 		# C.8.3) -- accumulation (BRD C.8's whole point) needs it up front.
@@ -203,6 +244,7 @@ def file_claim(
 			"claim_type": claim_type,
 			"supplier": supplier,
 			"stock_entry": stock_entry,
+			"purchase_receipt": purchase_receipt,
 			"insurer": insurer,
 			"claim_amount": claim_amount,
 			"status": "Filed",

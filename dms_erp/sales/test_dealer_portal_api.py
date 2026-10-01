@@ -200,3 +200,39 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.PermissionError):
 			dealer_portal_api.get_catalog()
+
+
+class TestUpdateMyEmail(FrappeTestCase):
+	"""A dedicated dealer+user, separate from TestDealerPortalApi's shared fixtures
+	above, since this mutates Customer.custom_email -- now a login-password lookup
+	key (auth.dealer_api.login_with_password), so it shouldn't bleed into any of
+	those other tests."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Update My Email Test Dealer")
+		cls.dealer_user = _dealer_portal_user(cls.dealer)
+		cls.other_dealer = make_dealer("Update My Email Other Test Dealer")
+		frappe.db.set_value("Customer", cls.other_dealer, "custom_email", "taken@pacific.example")
+
+	def setUp(self):
+		frappe.set_user(self.dealer_user)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("Customer", self.dealer, "custom_email", None)
+
+	def test_update_my_email_sets_it_and_returns_the_updated_profile(self):
+		profile = dealer_portal_api.update_my_email(email="dealer@pacific.example")
+		self.assertEqual(profile["email"], "dealer@pacific.example")
+		self.assertEqual(dealer_portal_api.my_profile()["email"], "dealer@pacific.example")
+
+	def test_update_my_email_rejects_an_email_already_used_by_another_dealer(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.update_my_email(email="taken@pacific.example")
+
+	def test_update_my_email_requires_a_value(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.update_my_email(email="")

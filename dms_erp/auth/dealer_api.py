@@ -1,6 +1,6 @@
 """Dealer-portal auth (BRD C.13) — the "no OTP, reserved for the dealer-facing app"
-gap auth/api.py's own docstring already flagged. Phone + OTP, not username/password
-(dealers never get a password at all): request_otp finds the Customer whose
+gap auth/api.py's own docstring already flagged. Phone + OTP is the only way in for
+a dealer with no password set yet: request_otp finds the Customer whose
 custom_phone matches, issues a short numeric code, and actually delivers it over
 WhatsApp via whats91's Meta-channel Authentication template (comms.whats91.
 send_otp_template — see that module for the required site_config keys).
@@ -14,14 +14,27 @@ Customer) and issues the exact same access/refresh token pair staff logins get
 (auth.api._issue_tokens) — the JWT middleware doesn't care which kind of account it
 resolves, only auth.middleware's dealer-scoping guard treats the two differently.
 
-Both endpoints return the same generic response/error regardless of whether the
-phone number is actually registered -- a dealer login surface is the one place in
-this app an unauthenticated caller can probe at all, so it must not leak which
-phone numbers exist.
+Email + password (login_with_password) is a second, faster way in for a dealer who
+has set one up -- but there's no email-delivery infrastructure anywhere in this app
+(no frappe.sendmail call exists in this codebase), so there is deliberately no
+"forgot password" email flow. OTP already fills that role: a dealer
+sets their own password from set_my_password once they're signed in (via OTP the
+first time, or an already-set password thereafter, same as changing it), and a
+dealer who forgets it just falls back to OTP again rather than needing a reset link
+that couldn't be delivered anyway. Resolving email -> dealer -> the one portal User
+(same account request_otp/verify_otp would resolve to) means Customer.custom_email
+must stay unique across dealers once it's used as a login key this way -- see
+sales.dealer_api._assert_email_available, the one guard that makes this safe.
 
-Not built here: rate-limiting request_otp beyond the one-per-cooldown-window check
-below. A dedicated per-phone/per-IP limiter is a real follow-up once this ships,
-not something to improvise without knowing the actual abuse patterns.
+All three of request_otp/verify_otp/login_with_password return the same generic
+response/error regardless of whether the phone or email is actually registered --
+a dealer login surface is the one place in this app an unauthenticated caller can
+probe at all, so it must not leak which phone numbers or emails exist.
+
+Not built here: rate-limiting request_otp/login_with_password beyond the one-per-
+cooldown-window check on OTP resend below. A dedicated per-identifier/per-IP
+limiter is a real follow-up once this ships, not something to improvise without
+knowing the actual abuse patterns.
 """
 
 import hashlib
@@ -30,6 +43,7 @@ import secrets
 import frappe
 from frappe import _
 from frappe.utils import add_to_date, now_datetime
+from frappe.utils.password import check_password, update_password
 
 from dms_erp.auth.api import _issue_tokens
 from dms_erp.auth.utils import hash_token
@@ -148,3 +162,60 @@ def verify_otp(phone: str, otp: str, device_id: str, device_name: str | None = N
 		frappe.throw(_("This account is disabled."), frappe.AuthenticationError)
 
 	return _issue_tokens(user, device_id, device_name)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def login_with_password(email: str, password: str, device_id: str, device_name: str | None = None):
+	"""Second way in, for a dealer who's already set a password (see set_my_password) --
+	resolves Customer.custom_email -> dealer -> the same portal User verify_otp would
+	resolve to (never the raw input treated as a Frappe login id, since that account's
+	real User.name is a synthetic, never-shown email -- see _dealer_portal_user), then
+	verifies the password the ordinary Frappe way (frappe.utils.password.check_password,
+	never rolled by hand, same as auth.api.login does for staff)."""
+	if not email or not password or not device_id:
+		frappe.throw(_("email, password and device_id are required"), frappe.ValidationError)
+
+	generic_error = _("Invalid email or password.")
+
+	dealer = frappe.db.get_value("Customer", {"custom_email": email.strip(), "disabled": 0}, "name")
+	if not dealer:
+		frappe.throw(generic_error, frappe.AuthenticationError)
+
+	user = frappe.db.get_value("User", {"custom_dealer": dealer}, "name")
+	if not user:
+		# No portal account exists yet at all (this dealer has never logged in via OTP,
+		# so set_my_password was never reachable either) -- same generic error, never
+		# reveal that the email itself is otherwise a real, registered dealer.
+		frappe.throw(generic_error, frappe.AuthenticationError)
+
+	try:
+		check_password(user, password)
+	except frappe.AuthenticationError:
+		frappe.throw(generic_error, frappe.AuthenticationError)
+
+	if not frappe.db.get_value("User", user, "enabled"):
+		frappe.throw(_("This account is disabled."), frappe.AuthenticationError)
+
+	return _issue_tokens(user, device_id, device_name)
+
+
+@frappe.whitelist(methods=["POST"])
+def set_my_password(password: str):
+	"""Lets an already-authenticated dealer (signed in via OTP the first time, or an
+	already-set password after that) set or change their own portal password, so
+	login_with_password has something to check next time. Scoped to
+	frappe.session.user, never a caller-supplied dealer id -- a dealer must already
+	hold a valid session to set their own password, the same way auth.api.logout_all
+	only ever acts on the caller's own sessions. Requires Customer.custom_email to
+	already be set (sales.dealer_portal_api.update_my_email) -- a password with no
+	email on file would have no way back in via login_with_password at all."""
+	dealer = frappe.db.get_value("User", frappe.session.user, "custom_dealer")
+	if not dealer:
+		frappe.throw(_("This isn't a dealer portal account."), frappe.PermissionError)
+	if not frappe.db.get_value("Customer", dealer, "custom_email"):
+		frappe.throw(_("Add an email to your profile before setting a password."), frappe.ValidationError)
+	if len(password or "") < 8:
+		frappe.throw(_("Password must be at least 8 characters."), frappe.ValidationError)
+
+	update_password(frappe.session.user, password)
+	return {"success": True}

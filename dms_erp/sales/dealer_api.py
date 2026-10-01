@@ -118,7 +118,9 @@ def _serialize(
 		# BRD C.13.1 — "price (if enabled for that dealer)". Gates price in the
 		# dealer portal only (sales.dealer_portal_api); staff screens are unaffected.
 		"priceVisible": bool(price_visible),
-		# BRD C.13 — WhatsApp + email follow-up and a future email-login channel.
+		# BRD C.13 — WhatsApp + email follow-up, and (once a dealer sets their own
+		# password via auth.dealer_api.set_my_password) the dealer portal's second
+		# login identifier alongside phone+OTP.
 		"email": email,
 		# BRD C.1.4 — a floor on classification (at least Master Dealer), applied by
 		# pricing.dealer_classification.recompute_dealer_classifications, not here.
@@ -240,6 +242,21 @@ def _clean_phone_or_throw(phone: str) -> str:
 	return clean
 
 
+def _assert_email_available(email: str, exclude: str | None = None):
+	"""Guards the one place email doubles as a login credential: auth.dealer_api's
+	login_with_password resolves Customer.custom_email -> dealer -> portal User, so
+	two dealers sharing the same email would make that lookup pick one arbitrarily
+	-- silently letting either one's password sign in as the other. No such
+	uniqueness constraint exists for phone (OTP resolves it the exact same way, same
+	latent risk) -- not retrofitting that here, since nothing about this feature
+	depends on it; email needs it now because password login is the first thing that
+	turns email into a lookup key at all. `exclude` is the dealer being edited, so
+	saving a dealer's own unchanged email doesn't trip over itself."""
+	existing = frappe.db.get_value("Customer", {"custom_email": email, "disabled": 0}, "name")
+	if existing and existing != exclude:
+		frappe.throw(_("{0} is already registered to another dealer.").format(email), frappe.ValidationError)
+
+
 def _set_credit_limit(doc, credit_limit: float | None):
 	company = default_company()
 	row = next((r for r in doc.get("credit_limits") or [] if r.company == company), None)
@@ -293,7 +310,9 @@ def create_dealer(
 	if price_visible is not None:
 		values["custom_price_visible"] = 1 if price_visible else 0
 	if email:
-		values["custom_email"] = email.strip()
+		email = email.strip()
+		_assert_email_available(email)
+		values["custom_email"] = email
 	if out_of_station is not None:
 		values["custom_out_of_station"] = 1 if out_of_station else 0
 	if gstin:
@@ -321,11 +340,12 @@ def update_dealer(dealer: str, patch: dict):
 		"territory": "territory",
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
-		"email": "custom_email",
 		"address": "custom_address",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
+	if patch.get("email"):
+		_assert_email_available(patch["email"].strip(), exclude=dealer)
 
 	doc = frappe.get_doc("Customer", dealer)
 	if "name" in patch:
@@ -343,6 +363,8 @@ def update_dealer(dealer: str, patch: dict):
 			doc.set("custom_phone", _clean_phone_or_throw(value) if value else None)
 		elif key == "gstin":
 			doc.set("custom_gstin", value.strip().upper() if value else None)
+		elif key == "email":
+			doc.set("custom_email", value.strip() if value else None)
 		elif key == "priceVisible":
 			doc.set("custom_price_visible", 1 if value else 0)
 		elif key == "outOfStation":

@@ -14,7 +14,13 @@
   "transit_days",
   "standard_rate_basis",
   "driver_name",
-  "driver_mobile"
+  "driver_mobile",
+  "dimensions_section",
+  "height_ft",
+  "width_ft",
+  "column_break_dimensions",
+  "breadth_ft",
+  "loading_area_sqft"
  ],
  "fields": [
   {
@@ -80,6 +86,35 @@
    "fieldname": "driver_mobile",
    "fieldtype": "Data",
    "label": "Driver Mobile"
+  },
+  {
+   "fieldname": "dimensions_section",
+   "fieldtype": "Section Break",
+   "label": "Cargo Dimensions"
+  },
+  {
+   "fieldname": "height_ft",
+   "fieldtype": "Float",
+   "label": "Height (ft)"
+  },
+  {
+   "fieldname": "width_ft",
+   "fieldtype": "Float",
+   "label": "Width (ft)"
+  },
+  {
+   "fieldname": "column_break_dimensions",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "breadth_ft",
+   "fieldtype": "Float",
+   "label": "Breadth (ft)"
+  },
+  {
+   "fieldname": "loading_area_sqft",
+   "fieldtype": "Float",
+   "label": "Loading Area (sqft)"
   }
  ],
  "index_web_pages_for_search": 0,

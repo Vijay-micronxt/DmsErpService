@@ -15,6 +15,7 @@ from dms_erp.catalog.utils import (
 	item_weight_per_box_kg,
 )
 from dms_erp.pagination import clamp
+from dms_erp.warehouse.utils import ensure_batch
 
 INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
 TRUCK_FLOW = ["Scheduled", "At Gate", "Unloading", "Put-away"]
@@ -104,7 +105,16 @@ def add_truck(
 	purchase_order_item: str | None = None,
 	po_reference: str | None = None,
 	pickup_run: str | None = None,
+	batch_no: str | None = None,
 ):
+	"""7.11 -- "batch no ... should be added while purchase of that item," not
+	invented for the first time at Bay Allocation (a separate, later, purely
+	internal warehouse-placement step). `batch_no` here is the earliest point
+	it can be captured: as soon as a truck is logged, if the supplier's
+	batch/lot is already known (e.g. printed on the delivery challan). Optional
+	-- still frequently not known this early -- see update_truck_batch for
+	recording it once it becomes known, and allocation_api.create_allocation,
+	which now prefers whatever was captured here over asking again."""
 	_assert_can_manage_inward()
 
 	if eta:
@@ -115,6 +125,13 @@ def add_truck(
 				_('eta must be a valid date/time (e.g. "2026-09-05 10:00:00"), not "{0}".').format(eta),
 				frappe.ValidationError,
 			)
+
+	# batch_no is a Link to the real ERPNext Batch doctype -- same as
+	# allocation_api.create_allocation always had to, this must exist before
+	# it can be set on any document, including here now that it's the
+	# preferred earlier capture point.
+	if batch_no:
+		ensure_batch(item, batch_no)
 
 	truck = frappe.get_doc(
 		{
@@ -130,6 +147,7 @@ def add_truck(
 			"purchase_order_item": purchase_order_item,
 			"po_reference": po_reference,
 			"pickup_run": pickup_run,
+			"batch_no": batch_no,
 		}
 	)
 	truck.insert(ignore_permissions=True)
@@ -145,5 +163,29 @@ def advance_truck(truck: str, next_status: str):
 
 	doc = frappe.get_doc("Inward Truck", truck)
 	doc.status = next_status
+	doc.save(ignore_permissions=True)
+	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_truck_batch(truck: str, batch_no: str):
+	"""Records the batch/lot once it becomes known, any time between the truck
+	being logged and Bay Allocation actually confirming (allocation_api.
+	create_allocation) -- e.g. scheduled ahead of arrival, then read off the
+	delivery challan at the gate. Once an allocation has already been
+	confirmed against this truck, its own batch_no (set at that moment) is
+	the real record; correcting it there is out of this function's scope."""
+	_assert_can_manage_inward()
+
+	doc = frappe.get_doc("Inward Truck", truck)
+	if doc.allocation_slip:
+		frappe.throw(
+			_("{0} is already allocated (as {1}) -- its batch is fixed by that Bay Allocation now.").format(
+				truck, doc.allocation_slip
+			),
+			frappe.ValidationError,
+		)
+	ensure_batch(doc.item, batch_no)
+	doc.batch_no = batch_no
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
