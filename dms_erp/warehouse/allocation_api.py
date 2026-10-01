@@ -16,9 +16,12 @@ receipt against just the supplier.
 `get_allocation_qr_codes` (Phase 13) generates one QR image per bay split, encoding
 the exact "PI-ITEM|<item>|<batch>|<bayCode>" string `resolve_scan` below already
 parses — so a scan straight off the printed slip resolves the lot with no new scan
-format to support. Codes are generated on demand from `qrcode` (a real ERPNext
-dependency already, used for its own UPI/e-invoice QR features — not something
-this app needs to add) rather than stored: the payload is fully determined by the
+format to support. Codes are generated on demand from `qrcode` (declared as this
+app's own dependency in pyproject.toml/requirements.txt -- it's genuinely not
+bundled by ERPNext itself, despite ERPNext having its own UPI/e-invoice QR
+features; a prior version of this comment wrongly assumed it was, which left
+`import qrcode` failing with ModuleNotFoundError on every site until fixed)
+rather than stored: the payload is fully determined by the
 allocation's own fields, so there's nothing here worth persisting.
 """
 
@@ -353,17 +356,19 @@ def render_box_stickers_html(allocation: str, copies_per_box: int = 1) -> str:
 		weight = s.get("weightPerBoxKg")
 		weight_label = f"{weight} kg" if weight is not None else "—"
 		dom = s.get("dateOfManufacture")
+		series_label = f" &middot; {_esc(s['series'])}" if s.get("series") else ""
 		cards.append(
 			f"""<div class="sticker">
 	<img class="qr" src="{s['qrCode']}" alt="QR">
 	<div class="info">
 		<div class="code">{_esc(s['itemCode'])}</div>
-		<div class="name">{_esc(s.get('itemName') or '')}</div>
+		<div class="name">{_esc(s.get('itemName') or '')}{series_label}</div>
 		<div class="row"><span class="k">Size/Finish:</span> {_esc(s.get('size') or '—')} / {_esc(s.get('finish') or '—')}</div>
 		<div class="row"><span class="k">Batch:</span> {_esc(s['batchNumber'] or '')}</div>
 		<div class="row"><span class="k">DOM:</span> {_esc(str(dom) if dom else '—')}</div>
 		<div class="row"><span class="k">Weight:</span> {weight_label}</div>
-		<div class="row"><span class="k">Bay:</span> {_esc(s.get('bayCode') or '')}</div>
+		<div class="row"><span class="k">Bay:</span> {_esc(s.get('bayCode') or '')} &middot; <span class="k">Boxes:</span> {_esc(str(s.get('qty') or '—'))}</div>
+		<div class="row"><span class="k">PR:</span> {_esc(s.get('purchaseReceipt') or '—')} &middot; {_esc(s.get('supplier') or '—')}</div>
 	</div>
 </div>"""
 		)

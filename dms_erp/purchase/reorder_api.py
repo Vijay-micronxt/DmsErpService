@@ -31,6 +31,8 @@ so a fully-covered item's `suggestedQty` drops to 0 without a separate "covered"
 flag to keep in sync.
 """
 
+import math
+
 import frappe
 from frappe import _
 from frappe.utils import add_days, today
@@ -173,7 +175,10 @@ def _suggestion_for(
 		reasons.append(f"{open_po_qty} boxes already on order across {len(open_purchase_orders)} open PO(s)")
 
 	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + SAFETY_STOCK_BOXES - current_stock - open_po_qty
-	suggested_qty = 0 if non_reorderable else max(0, round(raw_need / 5) * 5)
+	# BRD C.4.1 -- round UP to the nearest 5 boxes, never down (a shortfall rounded
+	# down would under-order). round() rounds to nearest, which silently under-orders
+	# half the time (e.g. 65.1 -> 65 instead of 70) -- a real, previously-confirmed bug.
+	suggested_qty = 0 if non_reorderable else max(0, math.ceil(raw_need / 5) * 5)
 	if suggested_qty and moq and suggested_qty < moq:
 		suggested_qty = moq
 		reasons.append(f"Raised to the {moq}-box MOQ")
