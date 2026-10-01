@@ -15,7 +15,12 @@
   "purchase_order",
   "section_break_1",
   "lines",
-  "purchase_receipt"
+  "purchase_receipt",
+  "section_break_shortage",
+  "shortage_qty",
+  "damaged_qty",
+  "column_break_shortage",
+  "claim"
  ],
  "fields": [
   {
@@ -83,6 +88,37 @@
    "fieldtype": "Link",
    "label": "Purchase Receipt",
    "options": "Purchase Receipt",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_shortage",
+   "fieldtype": "Section Break",
+   "label": "Shortage / Damage at Receipt"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.4.4 -- boxes ordered but not actually received.",
+   "fieldname": "shortage_qty",
+   "fieldtype": "Float",
+   "label": "Shortage Qty (Boxes)"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.4.4 -- boxes received but damaged on arrival (distinct from damage discovered later in a bay, which goes through warehouse.transfer_api's Damage→Insurance Claim flow instead).",
+   "fieldname": "damaged_qty",
+   "fieldtype": "Float",
+   "label": "Damaged Qty (Boxes)"
+  },
+  {
+   "fieldname": "column_break_shortage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "BRD C.4.4 -- \"a claim ... is initiated\" the moment shortage/damage is recorded. Auto-filed, not manually linked.",
+   "fieldname": "claim",
+   "fieldtype": "Link",
+   "label": "Claim",
+   "options": "Insurance Claim",
    "read_only": 1
   }
  ],

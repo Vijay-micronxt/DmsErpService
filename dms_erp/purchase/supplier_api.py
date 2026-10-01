@@ -38,6 +38,8 @@ def _serialize(
 	insurance_holder: str | None = None,
 	address: str | None = None,
 	contact_person: str | None = None,
+	moq: int = 0,
+	production_moq: int = 0,
 ) -> dict:
 	return {
 		"id": name,
@@ -53,6 +55,9 @@ def _serialize(
 		"address": address,
 		# BRD C.1.6 — who to reach for vendor enquiry / material-ready follow-up.
 		"contactPerson": contact_person,
+		# BRD C.4.2 -- this vendor's own floor, between the Item's and the company default.
+		"moq": moq or 0,
+		"productionMoq": production_moq or 0,
 	}
 
 
@@ -75,6 +80,8 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			"custom_insurance_holder",
 			"custom_address",
 			"custom_contact_person",
+			"custom_moq",
+			"custom_production_moq",
 		],
 		order_by="supplier_name asc",
 	)
@@ -90,6 +97,8 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			r.custom_insurance_holder,
 			r.custom_address,
 			r.custom_contact_person,
+			r.custom_moq,
+			r.custom_production_moq,
 		)
 		for r in rows
 	]
@@ -109,6 +118,8 @@ def get_supplier(supplier: str):
 		doc.custom_insurance_holder,
 		doc.custom_address,
 		doc.custom_contact_person,
+		doc.custom_moq,
+		doc.custom_production_moq,
 	)
 
 
@@ -133,6 +144,8 @@ def create_supplier(
 	insurance_holder: str | None = None,
 	address: str | None = None,
 	contact_person: str | None = None,
+	moq: int = 0,
+	production_moq: int = 0,
 ):
 	"""BRD MD-02 — create a supplier (a native Supplier). `group` falls back to the site's
 	Buying Settings default when omitted."""
@@ -160,6 +173,10 @@ def create_supplier(
 		values["custom_address"] = address.strip()
 	if contact_person:
 		values["custom_contact_person"] = contact_person.strip()
+	if moq:
+		values["custom_moq"] = moq
+	if production_moq:
+		values["custom_production_moq"] = production_moq
 
 	doc = frappe.get_doc(values)
 	doc.insert(ignore_permissions=True)
@@ -181,6 +198,8 @@ def update_supplier(supplier: str, patch: dict):
 		"insuranceHolder": "custom_insurance_holder",
 		"address": "custom_address",
 		"contactPerson": "custom_contact_person",
+		"moq": "custom_moq",
+		"productionMoq": "custom_production_moq",
 	}
 
 	doc = frappe.get_doc("Supplier", supplier)

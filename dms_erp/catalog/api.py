@@ -154,6 +154,10 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		# supplier (see catalog.utils.item_default_supplier).
 		"defaultSupplier": item_default_supplier(item_doc.name),
 		"leadTimeDays": item_doc.lead_time_days,
+		# BRD C.4.2 -- the floor this item itself carries; falls back to its Supplier's,
+		# then the company-wide default, when 0/unset (see purchase.utils.resolve_moq).
+		"moq": item_doc.custom_moq or 0,
+		"productionMoq": item_doc.custom_production_moq or 0,
 		"altItemId": _get_alt_item(item_doc.name),
 		"dealerCodes": [_serialize_dealer_code(row) for row in item_doc.custom_dealer_codes],
 		"images": [_serialize_image(row) for row in item_doc.custom_images],
@@ -269,6 +273,8 @@ def create_product(
 	lead_time_days: int = 0,
 	alt_item: str | None = None,
 	hsn_code: str | None = None,
+	moq: int = 0,
+	production_moq: int = 0,
 ):
 	_assert_can_manage_products()
 
@@ -315,6 +321,8 @@ def create_product(
 			# Purchase can still re-source it later via update_product's "defaultSupplier" patch.
 			"custom_default_supplier": default_supplier or supplier,
 			"lead_time_days": lead_time_days,
+			"custom_moq": moq,
+			"custom_production_moq": production_moq,
 			# Only meaningful (and only mandatory) when india_compliance is
 			# installed -- harmless to set on a site without it (Frappe just
 			# ignores a value for a field that doesn't exist in the doctype's
@@ -364,6 +372,8 @@ def update_product(item: str, patch: dict):
 		"bulkQtyThreshold": "custom_bulk_qty_threshold",
 		"retailQtyThreshold": "custom_retail_qty_threshold",
 		"defaultSupplier": "custom_default_supplier",
+		"moq": "custom_moq",
+		"productionMoq": "custom_production_moq",
 	}
 
 	if "seriesRef" in patch and patch["seriesRef"] and not frappe.db.exists("Product Series", patch["seriesRef"]):
