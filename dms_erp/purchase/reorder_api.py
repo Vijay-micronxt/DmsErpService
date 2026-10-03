@@ -38,10 +38,11 @@ from frappe import _
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.utils import is_reorderable, item_default_supplier
+from dms_erp.purchase.utils import resolve_moq
 from dms_erp.warehouse.utils import total_stock_for_item
 
-SAFETY_STOCK_BOXES = 100
 SALES_VELOCITY_WINDOW_DAYS = 180
+DEFAULT_TARGET_STOCK_MONTHS = 3
 
 PENDING_INQUIRY_STATUSES = ["Open", "Available", "Partially Available", "Quoted"]
 MISSED_DEMAND_STATUSES = ["Out of Stock", "Pre-order Required"]
@@ -122,7 +123,9 @@ def reorder_suggestions():
 	pending_by_item = _grouped_inquiry_qty(PENDING_INQUIRY_STATUSES)
 	sales_by_item = _grouped_recent_sales_qty()
 	open_po_by_item = _grouped_open_purchase_orders()
-	default_moq = frappe.db.get_single_value("DMS Purchase Settings", "default_moq") or 0
+	target_stock_months = (
+		frappe.db.get_single_value("DMS Purchase Settings", "target_stock_months") or DEFAULT_TARGET_STOCK_MONTHS
+	)
 
 	suggestions = [
 		_suggestion_for(
@@ -132,7 +135,9 @@ def reorder_suggestions():
 			pending_by_item.get(item.name, 0),
 			sales_by_item.get(item.name, 0),
 			open_po_by_item.get(item.name, []),
-			item.custom_moq or default_moq,
+			# BRD C.4.2 -- Item -> (default) Supplier -> Company, not just Item -> Company.
+			resolve_moq(item.name, item_default_supplier(item.name), kind="stock"),
+			target_stock_months,
 		)
 		for item in items
 	]
@@ -149,6 +154,7 @@ def _suggestion_for(
 	recent_retail_sales_qty: float,
 	open_purchase_orders: list[dict],
 	moq: float = 0,
+	target_stock_months: float = DEFAULT_TARGET_STOCK_MONTHS,
 ) -> dict:
 	status = item.custom_discontinuation_status or "Active"
 	non_reorderable = not is_reorderable(status)
@@ -156,6 +162,14 @@ def _suggestion_for(
 	daily_velocity = recent_retail_sales_qty / SALES_VELOCITY_WINDOW_DAYS
 	lead_time_demand_qty = round(daily_velocity * (item.lead_time_days or 0))
 	open_po_qty = sum(po["pendingQty"] for po in open_purchase_orders)
+
+	# BRD C.4.1 -- "targets a configurable stock level (~ three months mandatory)":
+	# average MONTHLY retail sales (the window is SALES_VELOCITY_WINDOW_DAYS days,
+	# i.e. SALES_VELOCITY_WINDOW_DAYS/30 months) x the configured number of months.
+	# Replaces the old flat SAFETY_STOCK_BOXES constant, which was the same 100 for
+	# every item regardless of how fast or slow it actually sells.
+	avg_monthly_sales = recent_retail_sales_qty / (SALES_VELOCITY_WINDOW_DAYS / 30)
+	target_stock_qty = round(avg_monthly_sales * target_stock_months)
 
 	reasons = []
 	if missed_demand_qty > 0:
@@ -169,12 +183,12 @@ def _suggestion_for(
 		)
 	if current_stock == 0:
 		reasons.append("Zero stock on hand")
-	elif current_stock < SAFETY_STOCK_BOXES:
-		reasons.append(f"Below {SAFETY_STOCK_BOXES}-box safety stock")
+	elif current_stock < target_stock_qty:
+		reasons.append(f"Below the {target_stock_qty}-box target ({target_stock_months} months of avg sales)")
 	if open_po_qty > 0:
 		reasons.append(f"{open_po_qty} boxes already on order across {len(open_purchase_orders)} open PO(s)")
 
-	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + SAFETY_STOCK_BOXES - current_stock - open_po_qty
+	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + target_stock_qty - current_stock - open_po_qty
 	# BRD C.4.1 -- round UP to the nearest 5 boxes, never down (a shortfall rounded
 	# down would under-order). round() rounds to nearest, which silently under-orders
 	# half the time (e.g. 65.1 -> 65 instead of 70) -- a real, previously-confirmed bug.
@@ -205,6 +219,7 @@ def _suggestion_for(
 		"recentRetailSalesQty": recent_retail_sales_qty,
 		"openPurchaseOrderQty": open_po_qty,
 		"openPurchaseOrders": open_purchase_orders,
+		"moq": moq or 0,
 		"suggestedQty": suggested_qty,
 		"urgency": urgency,
 		"reasons": reasons,
@@ -225,14 +240,15 @@ def _users_with_any_role(roles: list[str]) -> list[str]:
 
 
 def notify_reorder_review(suggestions: list[dict] | None = None) -> int:
-	"""Daily digest (BRD C.4.1) telling Purchase/Management a draft reorder plan is
-	waiting on review — reorder_suggestions() is a live read with no persisted plan
-	of its own to flag as "pending", so the notification is the review prompt itself
-	rather than a status on a stored record. Returns the number of users notified,
-	so callers (and tests) don't have to re-query Notification Log to check it ran.
-	`suggestions` is accepted so tests/callers who already computed them once don't
-	pay for a second reorder_suggestions() run; the daily scheduler hook always
-	passes None and lets this compute them itself."""
+	"""Daily digest (BRD C.4.1): "when the scheduled job generates a draft reorder
+	plan, the responsible members are notified to review it." Actually persists
+	that draft (reorder_plan_api.generate_reorder_plan) and names it in the
+	notification, rather than just restating the live suggestion count. Returns
+	the number of users notified, so callers (and tests) don't have to re-query
+	Notification Log to check it ran. `suggestions` is accepted so tests/callers
+	who already computed them once don't pay for a second reorder_suggestions()
+	run; the daily scheduler hook always passes None and lets this compute them
+	itself."""
 	if suggestions is None:
 		suggestions = reorder_suggestions()
 
@@ -244,7 +260,11 @@ def notify_reorder_review(suggestions: list[dict] | None = None) -> int:
 	if not users:
 		return 0
 
-	subject = _("{0} item(s) need reorder plan review").format(len(pending))
+	from dms_erp.purchase.reorder_plan_api import generate_reorder_plan
+
+	plan = generate_reorder_plan(suggestions)
+
+	subject = _("Reorder Plan {0}: {1} item(s) need review").format(plan["id"], len(pending))
 	for user in users:
 		frappe.get_doc(
 			{

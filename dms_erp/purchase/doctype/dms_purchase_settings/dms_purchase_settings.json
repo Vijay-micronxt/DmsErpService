@@ -4,15 +4,31 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "default_moq"
+  "target_stock_months",
+  "default_moq",
+  "default_production_moq"
  ],
  "fields": [
   {
+   "default": "3",
+   "description": "BRD C.4.1 -- \"targets a configurable stock level (≈ three months mandatory)\". The reorder engine's target stock = average monthly retail sales × this many months.",
+   "fieldname": "target_stock_months",
+   "fieldtype": "Int",
+   "label": "Target Stock (Months of Avg Sales)"
+  },
+  {
    "default": "0",
-   "description": "Fallback minimum order quantity applied to a reorder suggestion when the Item itself has no MOQ set. 0 means no site-wide floor.",
+   "description": "BRD C.4.2 -- company-level stock MOQ floor: applied to a reorder suggestion when neither the Item nor its default Supplier has one set. 0 means no site-wide floor.",
    "fieldname": "default_moq",
    "fieldtype": "Int",
    "label": "Default MOQ (Boxes)"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.4.2 -- \"production MOQ may differ from stock MOQ\" -- company-level floor for a quantity confirmed must-produce (not available from ready stock), same Item -> Supplier -> Company fallback as the stock MOQ. 0 means no site-wide floor.",
+   "fieldname": "default_production_moq",
+   "fieldtype": "Int",
+   "label": "Default Production MOQ (Boxes)"
   }
  ],
  "index_web_pages_for_search": 0,

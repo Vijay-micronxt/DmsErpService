@@ -214,6 +214,7 @@ def file_claim(
 	insurer: str | None = None,
 	remarks: str | None = None,
 	purchase_receipt: str | None = None,
+	responsibility: str | None = None,
 ):
 	"""`purchase_receipt` (BRD D.3's "invoice/consignment ref") is auto-derived from
 	stock_entry's originating Bay Allocation when not given explicitly -- a Shortage
@@ -251,6 +252,11 @@ def file_claim(
 			"filed_at": today(),
 			"filed_by": frappe.session.user,
 			"remarks": remarks,
+			# BRD C.4.4/C.8.3 -- "responsibility is recorded" is specifically a
+			# receipt-time Shortage-claim concept; the field already existed
+			# (update_claim_status could set it later), this just lets it be
+			# known and recorded at filing time instead of only afterwards.
+			"responsibility": responsibility,
 		}
 	)
 	doc.insert(ignore_permissions=True)

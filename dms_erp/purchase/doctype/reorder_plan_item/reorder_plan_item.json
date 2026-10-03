@@ -1,0 +1,157 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "default_supplier",
+  "column_break_1",
+  "urgency",
+  "moq",
+  "section_break_signals",
+  "current_stock",
+  "missed_demand_qty",
+  "pending_inquiry_qty",
+  "column_break_2",
+  "recent_retail_sales_qty",
+  "open_po_qty",
+  "reasons",
+  "section_break_qty",
+  "suggested_qty",
+  "column_break_3",
+  "adjusted_qty",
+  "section_break_po",
+  "purchase_order"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "default_supplier",
+   "fieldtype": "Link",
+   "label": "Default Supplier",
+   "options": "Supplier",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "urgency",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Urgency",
+   "options": "Critical\nHigh\nWatch\nHealthy",
+   "read_only": 1
+  },
+  {
+   "fieldname": "moq",
+   "fieldtype": "Float",
+   "label": "MOQ (Boxes)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_signals",
+   "fieldtype": "Section Break",
+   "label": "Demand Signals (frozen at generation)"
+  },
+  {
+   "fieldname": "current_stock",
+   "fieldtype": "Float",
+   "label": "Current Stock",
+   "read_only": 1
+  },
+  {
+   "fieldname": "missed_demand_qty",
+   "fieldtype": "Float",
+   "label": "Missed Demand Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pending_inquiry_qty",
+   "fieldtype": "Float",
+   "label": "Pending Inquiry Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "recent_retail_sales_qty",
+   "fieldtype": "Float",
+   "label": "Recent Retail Sales Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "open_po_qty",
+   "fieldtype": "Float",
+   "label": "Open PO Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reasons",
+   "fieldtype": "Small Text",
+   "label": "Reasons",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_qty",
+   "fieldtype": "Section Break",
+   "label": "Quantity"
+  },
+  {
+   "description": "The reorder engine's own computed figure at the moment this plan was generated -- never edited after the fact, so the review screen can show what changed.",
+   "fieldname": "suggested_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Suggested Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.4.1 -- \"the team reviews the auto-generated plan and adjusts quantity... before creating POs.\" Defaults to suggested_qty at generation; staff can revise it here.",
+   "fieldname": "adjusted_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Adjusted Qty"
+  },
+  {
+   "fieldname": "section_break_po",
+   "fieldtype": "Section Break",
+   "label": "Resulting Purchase Order"
+  },
+  {
+   "description": "Set once a PO is actually raised covering this item while referencing this plan (purchase.po_api.create_purchase_order's own reorder_plan param).",
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Purchase",
+ "name": "Reorder Plan Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

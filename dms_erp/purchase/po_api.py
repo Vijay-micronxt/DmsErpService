@@ -59,6 +59,8 @@ def _serialize(doc) -> dict:
 		"expectedReadyDate": doc.schedule_date,
 		"remarks": doc.custom_remarks,
 		"sourceInquiry": doc.custom_source_inquiry,
+		"vendorEnquiry": doc.custom_vendor_enquiry,
+		"reorderPlan": doc.custom_reorder_plan,
 		"lines": [_serialize_line(row) for row in doc.items],
 	}
 
@@ -93,6 +95,8 @@ def create_purchase_order(
 	remarks: str | None = None,
 	source_inquiry: str | None = None,
 	lines: list[dict] | None = None,
+	vendor_enquiry: str | None = None,
+	reorder_plan: str | None = None,
 ):
 	"""BRD C.3.1's "item-wise, multi-item" order pattern applies equally to a PO --
 	ERPNext's own Purchase Order was never single-item, only this API's original
@@ -141,11 +145,33 @@ def create_purchase_order(
 			"schedule_date": overall_ready_date,
 			"custom_remarks": remarks,
 			"custom_source_inquiry": source_inquiry,
+			"custom_vendor_enquiry": vendor_enquiry,
+			"custom_reorder_plan": reorder_plan,
 			"items": po_lines,
 		}
 	)
 	po.insert(ignore_permissions=True)
 	po.submit()
+
+	if vendor_enquiry:
+		# BRD C.4.2 -- closes the enquiry's own loop back to the PO it produced,
+		# same pattern inquiry_api.create_order already uses for the Inquiry
+		# ("Mapped to PO") -- not left as a dangling "Responded" row forever.
+		frappe.db.set_value("Vendor Enquiry", vendor_enquiry, {"status": "Closed", "purchase_order": po.name})
+
+	if reorder_plan:
+		# BRD C.4.1 -- "the team reviews the auto-generated plan and adjusts
+		# quantity... before creating POs": tag every plan line this PO actually
+		# covers, so the review screen can show which lines are already actioned.
+		item_codes = {ln["item_code"] for ln in po_lines}
+		plan_item_names = frappe.get_all(
+			"Reorder Plan Item",
+			filters={"parent": reorder_plan, "item": ["in", list(item_codes)]},
+			pluck="name",
+		)
+		for plan_item_name in plan_item_names:
+			frappe.db.set_value("Reorder Plan Item", plan_item_name, "purchase_order", po.name)
+
 	return _serialize(po)
 
 

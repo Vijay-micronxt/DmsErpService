@@ -36,6 +36,22 @@ CUSTOM_FIELDS = {
 			"label": "Source Inquiry",
 			"insert_after": "custom_remarks",
 		},
+		{
+			"fieldname": "custom_vendor_enquiry",
+			"fieldtype": "Link",
+			"options": "Vendor Enquiry",
+			"label": "Vendor Enquiry",
+			"description": "BRD C.4.2 -- real link back to the Vendor Enquiry that confirmed readiness for this PO, same pattern as custom_source_inquiry for the Inquiry side.",
+			"insert_after": "custom_source_inquiry",
+		},
+		{
+			"fieldname": "custom_reorder_plan",
+			"fieldtype": "Link",
+			"options": "Reorder Plan",
+			"label": "Reorder Plan",
+			"description": "BRD C.4.1 -- real link back to the Reorder Plan whose reviewed line produced this PO, same pattern as custom_vendor_enquiry.",
+			"insert_after": "custom_vendor_enquiry",
+		},
 	],
 	"Purchase Order Item": [
 		{
@@ -88,6 +104,26 @@ CUSTOM_FIELDS = {
 			"label": "Material-Ready Contact",
 			"description": "BRD C.1.6 — who to reach for vendor enquiry and material-ready follow-up. Free text (name and/or phone), not a Link to Contact.",
 			"insert_after": "custom_address",
+		},
+		{
+			"fieldname": "custom_moq_section",
+			"fieldtype": "Section Break",
+			"label": "MOQ (Vendor Level)",
+			"insert_after": "custom_contact_person",
+		},
+		{
+			"fieldname": "custom_moq",
+			"fieldtype": "Int",
+			"label": "Stock MOQ (Boxes)",
+			"description": "BRD C.4.2 -- this vendor's own stock MOQ tier, between an Item's own custom_moq and DMS Purchase Settings' site-wide default in the resolution order.",
+			"insert_after": "custom_moq_section",
+		},
+		{
+			"fieldname": "custom_production_moq",
+			"fieldtype": "Int",
+			"label": "Production MOQ (Boxes)",
+			"description": "BRD C.4.2 -- this vendor's own production MOQ tier, same resolution order as custom_moq.",
+			"insert_after": "custom_moq",
 		},
 	],
 }

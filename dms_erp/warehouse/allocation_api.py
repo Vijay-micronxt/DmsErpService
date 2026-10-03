@@ -72,6 +72,9 @@ def _serialize(doc) -> dict:
 		"totalQty": doc.total_qty,
 		"status": doc.status,
 		"purchaseReceipt": doc.purchase_receipt,
+		"shortageQty": doc.shortage_qty or 0,
+		"damagedQty": doc.damaged_qty or 0,
+		"claim": doc.claim,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.total_qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -133,14 +136,31 @@ def create_allocation(
 	inward_truck: str | None = None,
 	supplier: str | None = None,
 	weight_per_box_kg: float | None = None,
+	shortage_qty: float = 0,
+	damaged_qty: float = 0,
+	responsibility: str | None = None,
 ):
 	"""7.11 -- batch_no is now optional here: inward_api.add_truck/
 	update_truck_batch is the preferred place to capture it, "while purchase
 	of that item," rather than this (a separate, later, purely internal
 	warehouse-placement step) being the first time it's ever asked for. A
 	caller-supplied batch_no still wins when given (e.g. no inward_truck at
-	all -- unallocated_stock_api's resolution path -- or correcting it here)."""
+	all -- unallocated_stock_api's resolution path -- or correcting it here).
+
+	BRD C.4.4 -- "shortage and damaged quantity" are captured at the same
+	receipt moment this function already posts a Purchase Receipt at; on
+	either being > 0, "responsibility is recorded ... [and] a claim ... is
+	initiated" -- responsibility is required in that case, and a real
+	Shortage claim (same claim_type/responsibility this app's Insurance
+	Claim already modelled for exactly this, BRD C.8.3) is auto-filed
+	against this receipt, not left as a manual follow-up step."""
 	_assert_can_allocate()
+
+	if (shortage_qty or 0) + (damaged_qty or 0) > 0 and not responsibility:
+		frappe.throw(
+			_("Responsibility (Factory / Driver / Absorbed) is required when recording a shortage or damage."),
+			frappe.ValidationError,
+		)
 
 	if not lines:
 		frappe.throw(_("At least one bay allocation line is required."), frappe.ValidationError)
@@ -179,6 +199,12 @@ def create_allocation(
 			"batch_no": batch_no,
 			"total_qty": total_qty,
 			"status": "Confirmed",
+			# `purchase_order` has long existed as a real field here but was never
+			# actually set -- BRD C.4.4's "shortage is linked to the PO" (and every
+			# other reader of this field) needs it populated, not just present.
+			"purchase_order": truck.purchase_order if truck else None,
+			"shortage_qty": shortage_qty or 0,
+			"damaged_qty": damaged_qty or 0,
 			"lines": [{"bay": l["bay_name"], "qty": l["qty"], "confirmed": 1} for l in resolved_lines],
 		}
 	)
@@ -220,6 +246,27 @@ def create_allocation(
 	pr.submit()
 
 	alloc.purchase_receipt = pr.name
+
+	if (shortage_qty or 0) + (damaged_qty or 0) > 0:
+		from dms_erp.finance.claims_api import file_claim
+
+		claim = file_claim(
+			# Real money, not guessed: the same rate this receipt itself was just
+			# posted at for every box actually received, applied to the boxes that
+			# weren't.
+			claim_amount=(shortage_qty + damaged_qty) * rate,
+			claim_type="Shortage",
+			supplier=supplier,
+			purchase_receipt=pr.name,
+			responsibility=responsibility,
+			remarks=(
+				f"Auto-filed at receipt — {shortage_qty} short, {damaged_qty} damaged"
+				f"{f' (PO {truck.purchase_order})' if truck and truck.purchase_order else ''}"
+				f"{f', LR {truck.lr_number}' if truck else ''}."
+			),
+		)
+		alloc.claim = claim["id"]
+
 	alloc.save(ignore_permissions=True)
 
 	if truck:
