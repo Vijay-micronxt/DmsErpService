@@ -72,8 +72,15 @@ CUSTOM_FIELDS = {
 			"fieldname": "custom_moq",
 			"fieldtype": "Int",
 			"label": "MOQ (Boxes)",
-			"description": "Minimum order quantity for this item. When unset, the reorder engine falls back to DMS Purchase Settings' site-wide default MOQ.",
+			"description": "BRD C.4.2 -- stock MOQ for this item. Falls back to the item's default Supplier's own MOQ, then DMS Purchase Settings' site-wide default when unset at either level.",
 			"insert_after": "custom_discontinuation_status",
+		},
+		{
+			"fieldname": "custom_production_moq",
+			"fieldtype": "Int",
+			"label": "Production MOQ (Boxes)",
+			"description": "BRD C.4.2 -- \"production MOQ may differ from stock MOQ\": the floor once a Vendor Enquiry confirms this quantity must be produced rather than pulled from ready stock. Same Supplier -> Company fallback as custom_moq.",
+			"insert_after": "custom_moq",
 		},
 		{
 			"fieldname": "custom_default_supplier",
