@@ -129,8 +129,20 @@ def setup_catalog():
 def create_item_groups():
 	root = frappe.db.get_value("Item Group", {"is_group": 1, "parent_item_group": ["in", ["", None]]}, "name")
 	if not root:
-		# A fresh ERPNext install always ships "All Item Groups" as the tree root.
+		# ERPNext normally ships "All Item Groups" as the tree root, but a site
+		# installed purely via CLI (install-app without an intervening
+		# `bench migrate` to sync ERPNext's own fixtures, or before the Setup
+		# Wizard ever ran) can reach this point with no Item Group at all --
+		# a real deploy hit exactly this (LinkValidationError: Could not find
+		# Parent Item Group: All Item Groups). Create the root ourselves
+		# rather than hardcoding its name and letting the first child group's
+		# insert fail: it's a structural node with no business-decision
+		# content (unlike e.g. Company, which this app never invents on the
+		# site's behalf -- see warehouse.setup), so there's nothing to get
+		# wrong by creating it here.
 		root = "All Item Groups"
+		if not frappe.db.exists("Item Group", root):
+			frappe.get_doc({"doctype": "Item Group", "item_group_name": root, "is_group": 1}).insert(ignore_permissions=True)
 
 	for group in ITEM_GROUPS:
 		if frappe.db.exists("Item Group", group):
