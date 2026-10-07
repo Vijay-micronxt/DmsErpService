@@ -9,6 +9,8 @@
   "dealer",
   "item",
   "qty",
+  "contact_name",
+  "contact_phone",
   "column_break_1",
   "date",
   "status",
@@ -49,6 +51,17 @@
    "in_list_view": 1,
    "label": "Qty",
    "reqd": 1
+  },
+  {
+   "description": "Which of the dealer's own sales staff phoned this in -- a dealer can have several people inquiring about different items at once (client requirement 8.9). Free text, not a link: this app has no separate dealer-contacts master.",
+   "fieldname": "contact_name",
+   "fieldtype": "Data",
+   "label": "Contact Name"
+  },
+  {
+   "fieldname": "contact_phone",
+   "fieldtype": "Data",
+   "label": "Contact Phone"
   },
   {
    "fieldname": "column_break_1",
