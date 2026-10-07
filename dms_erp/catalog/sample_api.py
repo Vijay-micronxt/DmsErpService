@@ -261,6 +261,31 @@ def issue_sample(request: str, bay: str, batch_no: str | None = None, photo: str
 	return {"sampleRequest": _serialize_request(doc), "placement": _serialize_placement(placement)}
 
 
+@frappe.whitelist(methods=["POST"])
+def create_sample_requests_bulk(dealer: str, items: list[dict]):
+	"""Client requirement 8.7 -- "sample to be issued for multiple items at the same
+	time": lets one dialog raise several items' Sample Requests for the same dealer
+	in one call. Each item still becomes its own Sample Request with its own
+	approve/issue lifecycle, same as create_sample_request -- this only avoids
+	repeating the create step once per item. `items` is `[{"item": ..., "qty": ...}]`.
+	Stops at the first failure (e.g. a bad item code) rather than silently skipping it,
+	same fail-fast behaviour as any other create endpoint; whatever already inserted
+	before the failure stays, same as a partially-failed loop would anywhere else."""
+	if not items:
+		frappe.throw(_("Add at least one item."), frappe.ValidationError)
+	return {"items": [create_sample_request(row["item"], dealer, row.get("qty", 1)) for row in items]}
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_samples_bulk(requests: list[str], bay: str, batch_no: str | None = None):
+	"""The issuing half of 8.7 -- several already-Approved Sample Requests issued
+	together to the same bay/batch in one action. Each still gets its own Stock
+	Entry/QR/Display Placement Slip via issue_sample."""
+	if not requests:
+		frappe.throw(_("Select at least one request."), frappe.ValidationError)
+	return {"items": [issue_sample(name, bay, batch_no) for name in requests]}
+
+
 _SAMPLE_STICKER_CSS = """
 	@page { size: 2in 1in; margin: 0.06in; }
 	* { box-sizing: border-box; }

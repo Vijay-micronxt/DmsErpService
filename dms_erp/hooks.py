@@ -50,5 +50,6 @@ scheduler_events = {
 		"dms_erp.pricing.dealer_classification.recompute_dealer_classifications",
 		"dms_erp.catalog.withdrawal_api.evaluate_product_withdrawals",
 		"dms_erp.catalog.sample_api.send_display_monitoring_reminders",
+		"dms_erp.purchase.po_api.flag_overdue_unpaid_pos",
 	],
 }

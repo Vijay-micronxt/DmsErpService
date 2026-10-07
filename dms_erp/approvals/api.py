@@ -54,6 +54,60 @@ def _assert_can_decide():
 		frappe.throw(_("Only Management can decide approval requests."), frappe.PermissionError)
 
 
+def _users_with_any_role(roles: set[str]) -> list[str]:
+	rows = frappe.get_all(
+		"Has Role",
+		filters={"role": ["in", list(roles)], "parenttype": "User"},
+		pluck="parent",
+		distinct=True,
+	)
+	if not rows:
+		return []
+	return frappe.get_all("User", filters={"name": ["in", rows], "enabled": 1}, pluck="name")
+
+
+def _notify_pending(doc):
+	"""BRD C.11 -- "owner notified even when a delegate acts": every Management/System
+	Manager user is notified a request is waiting, not just whichever one happens to
+	open the queue first, so a decision never lands with only one delegate ever having
+	known about it."""
+	subject = _("{0} needs your approval: {1}").format(doc.trigger_type, doc.reason)
+	for user in _users_with_any_role(DECIDE_ROLES):
+		if user == doc.requested_by:
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "Notification Log",
+				"for_user": user,
+				"type": "Alert",
+				"document_type": "Approval Request",
+				"document_name": doc.name,
+				"subject": subject,
+			}
+		).insert(ignore_permissions=True)
+
+
+def _notify_decision(doc):
+	"""The other half of "owner notified even when a delegate acts": the original
+	requester (the action's own owner) always hears the outcome, regardless of which
+	specific Management user -- a delegate, not necessarily the requester's own usual
+	approver -- actually made the call."""
+	if not doc.requested_by:
+		return
+	subject = _("Your {0} request was {1}").format(doc.trigger_type, doc.status.lower())
+	frappe.get_doc(
+		{
+			"doctype": "Notification Log",
+			"for_user": doc.requested_by,
+			"type": "Alert",
+			"document_type": "Approval Request",
+			"document_name": doc.name,
+			"subject": subject,
+			"from_user": doc.decided_by,
+		}
+	).insert(ignore_permissions=True)
+
+
 def _serialize(doc) -> dict:
 	return {
 		"id": doc.name,
@@ -104,6 +158,8 @@ def raise_approval_request(
 		}
 	)
 	doc.insert(ignore_permissions=True)
+	if doc.status == "Pending":
+		_notify_pending(doc)
 	return _serialize(doc)
 
 
@@ -156,6 +212,7 @@ def decide_approval(name: str, decision: str, note: str | None = None):
 	doc.decided_at = now_datetime()
 	doc.decision_note = note
 	doc.save(ignore_permissions=True)
+	_notify_decision(doc)
 
 	if decision == "Approved":
 		applier = APPLIERS.get(doc.trigger_type)

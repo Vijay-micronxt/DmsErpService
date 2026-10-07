@@ -12,7 +12,7 @@ and only throws if neither the item nor its Series has one set.
 
 import frappe
 from frappe import _
-from frappe.utils import getdate, today
+from frappe.utils import add_days, getdate, today
 
 from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier
 from dms_erp.pagination import clamp
@@ -61,6 +61,10 @@ def _serialize(doc) -> dict:
 		"sourceInquiry": doc.custom_source_inquiry,
 		"vendorEnquiry": doc.custom_vendor_enquiry,
 		"reorderPlan": doc.custom_reorder_plan,
+		# Client requirement 8.4 -- see custom_payment_status's own field description
+		# in purchase/setup.py for why this is manually set rather than derived.
+		"paymentStatus": doc.custom_payment_status or "Unpaid",
+		"paidOn": doc.custom_paid_on,
 		"lines": [_serialize_line(row) for row in doc.items],
 	}
 
@@ -318,3 +322,65 @@ def list_materials_ready_for_pickup() -> list[dict]:
 				}
 			)
 	return out
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def mark_po_paid(po: str, paid: bool = True, paid_on=None):
+	"""Client requirement 8.4 -- manual half of payment tracking (see
+	custom_payment_status's field description for why this can't be derived: the
+	app posts no Purchase Invoice/Payment Entry). Toggling back to Unpaid clears
+	custom_return_flagged so a PO that falls overdue again after being reopened
+	gets flagged again instead of being silently skipped forever."""
+	_assert_can_manage_purchase()
+	doc = frappe.get_doc("Purchase Order", po)
+	doc.custom_payment_status = "Paid" if paid else "Unpaid"
+	doc.custom_paid_on = (paid_on or today()) if paid else None
+	if not paid:
+		doc.custom_return_flagged = 0
+	doc.save(ignore_permissions=True)
+	return _serialize(doc)
+
+
+PO_UNPAID_RETURN_WINDOW_DAYS = 180
+
+
+def flag_overdue_unpaid_pos():
+	"""Scheduled daily (hooks.py) -- client requirement 8.4: "if a Purchase Order
+	is not paid within 180 days, do [a] sales return." This app has no Purchase
+	Invoice/Payment Entry/AR subsystem at all (see approvals/api.py's own note on
+	why BRD C.11 trigger #2 isn't wired either), so there is no automatic
+	"paid" signal and therefore no safe way to auto-post a stock return unsupervised
+	-- instead this notifies Management the same way an Approval Request would,
+	so a human decides whether to actually return the unpaid stock to the supplier.
+	Each PO is only notified once (custom_return_flagged) until it's paid or
+	reopened via mark_po_paid."""
+	from dms_erp.approvals.api import DECIDE_ROLES, _users_with_any_role
+
+	cutoff = add_days(today(), -PO_UNPAID_RETURN_WINDOW_DAYS)
+	overdue = frappe.get_all(
+		"Purchase Order",
+		filters={
+			"docstatus": 1,
+			"custom_payment_status": ["in", ["Unpaid", ""]],
+			"custom_return_flagged": 0,
+			"transaction_date": ["<=", cutoff],
+		},
+		fields=["name", "supplier", "transaction_date"],
+	)
+	users = _users_with_any_role(DECIDE_ROLES)
+	for po in overdue:
+		subject = _("Purchase Order {0} ({1}) is unpaid {2}+ days — review for a return to supplier").format(
+			po.name, po.supplier, PO_UNPAID_RETURN_WINDOW_DAYS
+		)
+		for user in users:
+			frappe.get_doc(
+				{
+					"doctype": "Notification Log",
+					"for_user": user,
+					"type": "Alert",
+					"document_type": "Purchase Order",
+					"document_name": po.name,
+					"subject": subject,
+				}
+			).insert(ignore_permissions=True)
+		frappe.db.set_value("Purchase Order", po.name, "custom_return_flagged", 1)
