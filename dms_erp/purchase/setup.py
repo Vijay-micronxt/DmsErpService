@@ -52,6 +52,33 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.4.1 -- real link back to the Reorder Plan whose reviewed line produced this PO, same pattern as custom_vendor_enquiry.",
 			"insert_after": "custom_vendor_enquiry",
 		},
+		{
+			"fieldname": "custom_payment_status",
+			"fieldtype": "Select",
+			"label": "Payment Status",
+			"options": "Unpaid\nPaid",
+			"default": "Unpaid",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": "Client requirement 8.4 -- this app posts no Purchase Invoice/Payment Entry, so there is no native signal for \"paid.\" Manually set by Purchase/Management; po_api.flag_overdue_unpaid_pos reads it to find POs unpaid 180+ days after transaction_date.",
+			"insert_after": "custom_reorder_plan",
+		},
+		{
+			"fieldname": "custom_paid_on",
+			"fieldtype": "Date",
+			"label": "Paid On",
+			"depends_on": "eval:doc.custom_payment_status==\"Paid\"",
+			"insert_after": "custom_payment_status",
+		},
+		{
+			"fieldname": "custom_return_flagged",
+			"fieldtype": "Check",
+			"label": "Overdue Return Flagged",
+			"default": "0",
+			"hidden": 1,
+			"description": "Set by po_api.flag_overdue_unpaid_pos once Management has been notified this PO is unpaid 180+ days on -- stops the daily job notifying the same PO again every day. Cleared when payment status is set back to Unpaid via mark_po_paid.",
+			"insert_after": "custom_paid_on",
+		},
 	],
 	"Purchase Order Item": [
 		{

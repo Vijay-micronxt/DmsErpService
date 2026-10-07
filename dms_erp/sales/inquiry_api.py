@@ -41,6 +41,7 @@ from dms_erp.catalog.utils import (
 	item_weight_per_box_kg,
 )
 from dms_erp.pagination import clamp
+from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.utils import find_open_duplicate_inquiries
 from dms_erp.warehouse.utils import default_company, total_stock_for_item
 
@@ -66,6 +67,13 @@ def _serialize(doc) -> dict:
 		"dealerId": doc.dealer,
 		"productId": doc.item,
 		"qty": doc.qty,
+		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
+		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
+		# (pricing.api.get_price_for_dealer), shown here at Inquiry stage too rather
+		# than only once it becomes a Quotation. Purchase-history-based adjustment
+		# within a tier doesn't exist anywhere in this app yet -- this is the tier
+		# rate, not a per-dealer-adjusted one; that's a bigger, separate gap.
+		"price": get_price_for_dealer(doc.item, doc.dealer),
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -80,6 +88,11 @@ def _serialize(doc) -> dict:
 		"followUpDate": doc.follow_up_date,
 		"assignedTo": doc.assigned_to,
 		"remarks": doc.remarks,
+		# BRD client req 8.9 -- which of the dealer's own sales staff phoned this in,
+		# so several of a dealer's people inquiring about different items at once stay
+		# distinguishable. Free text (no dealer-contacts master exists).
+		"contactName": doc.contact_name,
+		"contactPhone": doc.contact_phone,
 		"whatsappReplied": bool(doc.whatsapp_replied),
 		"customerPo": doc.customer_po,
 		"linkedSalesOrder": doc.linked_sales_order,
@@ -180,6 +193,8 @@ def _create_inquiry(
 	follow_up_date=None,
 	assigned_to: str | None = None,
 	remarks: str | None = None,
+	contact_name: str | None = None,
+	contact_phone: str | None = None,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
@@ -225,6 +240,8 @@ def _create_inquiry(
 			"follow_up_date": follow_up_date,
 			"assigned_to": assigned_to,
 			"remarks": remarks,
+			"contact_name": contact_name,
+			"contact_phone": contact_phone,
 		}
 	)
 	doc.insert(ignore_permissions=True)
@@ -248,9 +265,13 @@ def create_inquiry(
 	follow_up_date=None,
 	assigned_to: str | None = None,
 	remarks: str | None = None,
+	contact_name: str | None = None,
+	contact_phone: str | None = None,
 ):
 	_assert_can_manage_inquiries()
-	return _create_inquiry(dealer, item, qty, source, expected_delivery, follow_up_date, assigned_to, remarks)
+	return _create_inquiry(
+		dealer, item, qty, source, expected_delivery, follow_up_date, assigned_to, remarks, contact_name, contact_phone
+	)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
@@ -266,6 +287,8 @@ def update_inquiry(inquiry: str, patch: dict):
 		"assignedTo": "assigned_to",
 		"remarks": "remarks",
 		"whatsappReplied": "whatsapp_replied",
+		"contactName": "contact_name",
+		"contactPhone": "contact_phone",
 	}
 
 	doc = frappe.get_doc("Inquiry", inquiry)

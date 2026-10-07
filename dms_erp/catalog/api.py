@@ -247,6 +247,20 @@ def get_product(item: str):
 	return _serialize(frappe.get_doc("Item", item))
 
 
+COLOR_DEFAULTS = ["White", "Beige", "Grey", "Black", "Brown"]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_colors():
+	"""Distinct `custom_color` values already in use across Items, for the item-form
+	colour picker (client requirement 8.6 -- dropdown over existing values with an
+	inline "create new", same free-text-picker pattern as Series' finish/sub_finish;
+	colour has no master doctype of its own either), falling back to a short default
+	list so the picker isn't empty on a fresh site."""
+	values = frappe.get_all("Item", filters={"custom_color": ["is", "set"]}, pluck="custom_color", distinct=True)
+	return sorted(set(values)) or COLOR_DEFAULTS
+
+
 @frappe.whitelist(methods=["POST"])
 def create_product(
 	code: str,
