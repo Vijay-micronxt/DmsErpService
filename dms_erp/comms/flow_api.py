@@ -416,8 +416,7 @@ def get_outstanding_due(lead=None, **kwargs):
 	straight off the main menu button with no preceding "wait for input" step (see
 	the Flow's own edges), so there's no dealer-typed text to log as an inbound
 	turn here, only the reply. Reuses dealer_portal_api._outstanding_for rather
-	than duplicating its SQL -- that function's own docstring covers why it's real,
-	correct SQL that simply returns 0 today."""
+	than duplicating its ledger query."""
 	from dms_erp.sales.dealer_portal_api import _outstanding_for
 
 	phone, _text = _lead_fields(lead)

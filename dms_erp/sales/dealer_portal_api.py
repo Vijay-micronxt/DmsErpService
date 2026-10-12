@@ -243,16 +243,12 @@ def _outstanding_for(dealer: str) -> float:
 	"""Unguarded core of my_dues -- also called directly by comms.flow_api's
 	get_outstanding_due, whose caller is resolved from a WhatsApp phone number
 	rather than a dealer-portal session, so it has no frappe.session.user to run
-	_current_dealer() against. Sales Invoice.outstanding_amount is real, correct SQL
-	against the native ERPNext billing doctype; it simply returns 0 today because
-	nothing in this app raises a Sales Invoice yet anywhere. Not a stub -- a true,
-	forward-compatible answer that starts returning real numbers the moment
-	invoicing exists."""
-	total = frappe.db.sql(
-		"select sum(outstanding_amount) from `tabSales Invoice` where customer=%s and docstatus=1",
-		(dealer,),
-	)[0][0]
-	return float(total or 0)
+	_current_dealer() against. Read from the ledger, not Sales Invoice.outstanding_amount
+	-- see finance.ledger for why the per-invoice figure overstates dues."""
+	from dms_erp.finance.ledger import party_balances
+	from dms_erp.warehouse.utils import default_company
+
+	return party_balances("Customer", [dealer], default_company()).get(dealer, 0.0)
 
 
 @frappe.whitelist(methods=["GET"])

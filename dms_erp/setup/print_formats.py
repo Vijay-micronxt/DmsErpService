@@ -91,6 +91,42 @@ PRINT_FORMATS = {
 			"</div>"
 		),
 	},
+	"Pacific Insurance Claim": {
+		"doc_type": "Insurance Claim",
+		"module": "Finance",
+		"html": (
+			"<div class='pacific-print'>"
+			"<div class='header'>"
+			"<div><div class='title'>Claim Voucher</div>"
+			"<table class='meta'>"
+			"<tr><td>Claim No.</td><td>{{ doc.name }}</td></tr>"
+			"<tr><td>Filed On</td><td>{{ frappe.utils.formatdate(doc.filed_at) }}</td></tr>"
+			"<tr><td>Filed By</td><td>{{ doc.filed_by }}</td></tr>"
+			"<tr><td>Claim Type</td><td>{{ doc.claim_type }}</td></tr>"
+			"</table></div>"
+			"<div><table class='meta'>"
+			"<tr><td>Supplier</td><td>{{ doc.supplier or '-' }}</td></tr>"
+			"<tr><td>Insurer</td><td>{{ doc.insurer or '-' }}</td></tr>"
+			"<tr><td>Status</td><td>{{ doc.status }}</td></tr>"
+			"</table></div>"
+			"</div>"
+			"<table>"
+			"<thead><tr><th>Particular</th><th class='text-right'>Amount</th></tr></thead>"
+			"<tbody>"
+			"<tr><td>Claim Amount</td><td class='text-right'>{{ frappe.utils.fmt_money(doc.claim_amount) }}</td></tr>"
+			"<tr><td>Approved Amount</td><td class='text-right'>{{ frappe.utils.fmt_money(doc.approved_amount) if doc.approved_amount else '-' }}</td></tr>"
+			"<tr><td>Settled Amount</td><td class='text-right'>{{ frappe.utils.fmt_money(doc.settled_amount) if doc.settled_amount else '-' }}</td></tr>"
+			"</tbody>"
+			"</table>"
+			"<p><b>Settlement Mode:</b> {{ doc.settlement_mode or 'Not yet settled' }}"
+			"{% if doc.settled_at %} &middot; <b>Settled On:</b> {{ frappe.utils.formatdate(doc.settled_at) }}{% endif %}</p>"
+			"{% if doc.responsibility %}<p><b>Responsibility:</b> {{ doc.responsibility }}</p>{% endif %}"
+			"{% if doc.stock_entry %}<p><b>Linked Stock Entry:</b> {{ doc.stock_entry }}</p>{% endif %}"
+			"{% if doc.purchase_receipt %}<p><b>Linked Purchase Receipt:</b> {{ doc.purchase_receipt }}</p>{% endif %}"
+			"{% if doc.remarks %}<p><b>Remarks:</b> {{ doc.remarks }}</p>{% endif %}"
+			"</div>"
+		),
+	},
 }
 
 
