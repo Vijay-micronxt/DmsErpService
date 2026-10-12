@@ -33,6 +33,7 @@ isn't a linked Address doctype record.
 import frappe
 from frappe import _
 
+from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
 from dms_erp.sales.order_channel import DEALER_TYPES
 from dms_erp.warehouse.utils import default_company
@@ -102,6 +103,7 @@ def _serialize(
 	out_of_station: int = 0,
 	gstin: str | None = None,
 	address: str | None = None,
+	outstanding: float = 0,
 ) -> dict:
 	return {
 		"id": name,
@@ -125,6 +127,7 @@ def _serialize(
 		"outOfStation": bool(out_of_station),
 		"gstin": gstin,
 		"address": address,
+		"outstanding": outstanding,
 	}
 
 
@@ -165,7 +168,9 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 		],
 		order_by="customer_name asc",
 	)
-	credit_limits = _credit_limits_for([r.name for r in rows], default_company())
+	company = default_company()
+	credit_limits = _credit_limits_for([r.name for r in rows], company)
+	outstanding = party_balances("Customer", [r.name for r in rows], company)
 	return [
 		_serialize(
 			r.name,
@@ -183,6 +188,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_out_of_station,
 			r.custom_gstin,
 			r.custom_address,
+			outstanding.get(r.name, 0),
 		)
 		for r in rows
 	]
@@ -191,7 +197,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 @frappe.whitelist(methods=["GET"])
 def get_dealer(dealer: str):
 	doc = frappe.get_doc("Customer", dealer)
-	credit_limit = frappe.db.get_value("Customer Credit Limit", {"parent": dealer, "company": default_company()}, "credit_limit")
+	company = default_company()
+	credit_limit = frappe.db.get_value("Customer Credit Limit", {"parent": dealer, "company": company}, "credit_limit")
 	return _serialize(
 		doc.name,
 		doc.customer_name,
@@ -208,6 +215,7 @@ def get_dealer(dealer: str):
 		doc.custom_out_of_station,
 		doc.custom_gstin,
 		doc.custom_address,
+		party_balances("Customer", [doc.name], company).get(doc.name, 0),
 	)
 
 
