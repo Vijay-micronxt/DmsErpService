@@ -192,6 +192,71 @@ def get_price_record(item: str):
 	return _serialize(frappe.get_doc("Item Price Proposal", item))
 
 
+# ISS-2026-00623's own blocker: there's no real master purchase price list or
+# per-tier margin % yet (Pacific hasn't supplied one — MOM action items #14/#15).
+# This doesn't wait on that: Purchase Invoice and Sales Invoice are both
+# migration-only data in this app (it posts neither itself, live — see
+# purchase/setup.py's own note and dashboard.api's "no real Sales Invoice/AR
+# ledger" docstring), so every line in them is real, historical Tally pricing --
+# exactly the "previous data" a landing-cost/margin proposal should be able to
+# start from instead of a blank form.
+_PRICE_HISTORY_MIN_SAMPLE = 2
+
+
+def _median(values: list[float]) -> float:
+	ordered = sorted(values)
+	n = len(ordered)
+	mid = n // 2
+	return ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+@frappe.whitelist(methods=["GET"])
+def suggest_price_from_history(item: str) -> dict | None:
+	"""A purchase-cost + margin % SUGGESTION for Item Price Proposal, derived from
+	this item's own historical Purchase Invoice (cost) and Sales Invoice (selling
+	price) lines -- never auto-applied, same "take it or leave it" convention as
+	sales.quotation_api.suggest_transport_rate. Median, not mean: a live check
+	against the real migrated data (2026-10-13) showed real outliers in both
+	directions (a stray non-tile ledger line, a couple of discontinued items sold
+	below cost during clearance) that would otherwise skew an average into
+	nonsense; a handful of outliers barely move a median.
+
+	Deliberately NOT tier-specific (Standard/Dealer/Master) despite ISS-2026-00623
+	asking for a per-tier margin: that same live check found every single migrated
+	Customer classified "Standard Dealer" -- the nightly reclassification job has
+	never actually differentiated a dealer into "Dealer"/"Master Dealer" yet, so
+	there is no tier-tagged sales history to derive three different margins from.
+	This returns one blended margin from all historical sales of the item,
+	regardless of which dealer bought it; building the real per-tier version is a
+	follow-up once dealer classification actually diverges.
+
+	Returns None (not a zero/guessed number) when either side has fewer than
+	_PRICE_HISTORY_MIN_SAMPLE real data points -- a brand-new item with no Tally
+	history, or only one data point, gets no suggestion rather than a number
+	nobody should trust."""
+	purchase_rates = frappe.get_all(
+		"Purchase Invoice Item", filters={"item_code": item, "rate": [">", 0], "docstatus": 1}, pluck="rate"
+	)
+	sale_rates = frappe.get_all(
+		"Sales Invoice Item", filters={"item_code": item, "rate": [">", 0], "docstatus": 1}, pluck="rate"
+	)
+
+	if len(purchase_rates) < _PRICE_HISTORY_MIN_SAMPLE or len(sale_rates) < _PRICE_HISTORY_MIN_SAMPLE:
+		return None
+
+	suggested_purchase_cost = _median(purchase_rates)
+	suggested_sale_rate = _median(sale_rates)
+	if suggested_purchase_cost <= 0:
+		return None
+
+	return {
+		"suggestedPurchaseCost": round(suggested_purchase_cost, 2),
+		"suggestedMarginPct": round((suggested_sale_rate - suggested_purchase_cost) / suggested_purchase_cost * 100, 1),
+		"purchaseSampleSize": len(purchase_rates),
+		"saleSampleSize": len(sale_rates),
+	}
+
+
 @frappe.whitelist(methods=["POST", "PUT"])
 def save_cost_inputs(
 	item: str,

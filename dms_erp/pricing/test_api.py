@@ -98,3 +98,30 @@ class TestPricingApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			pricing_api.set_dealer_tier_price(item=item, price_list=DEALER_CLASSIFICATION_MASTER, rate=650)
+
+
+class TestSuggestPriceFromHistory(FrappeTestCase):
+	"""ISS-2026-00623 -- Purchase Invoice/Sales Invoice history is real, migration-only
+	data this app never creates itself (see pricing/README.md's own note), so there's
+	no existing test fixture anywhere in this suite for building one -- the "real
+	history produces a sane suggestion" path was instead verified directly against the
+	actual migrated site's data this session (median purchase cost/margin computed
+	correctly for several real items; a deliberately sparse item, with only one
+	real data point on each side, correctly returned None). What IS covered here,
+	with no Purchase/Sales Invoice fixture needed: the pure median helper, and the
+	"no history at all" honest-absence case."""
+
+	def test_median_handles_even_and_odd_counts_and_a_single_value(self):
+		self.assertEqual(pricing_api._median([10]), 10)
+		self.assertEqual(pricing_api._median([10, 20, 30]), 20)
+		self.assertEqual(pricing_api._median([10, 20, 30, 40]), 25)
+		# Order-independent.
+		self.assertEqual(pricing_api._median([30, 10, 20]), 20)
+
+	def test_suggest_price_from_history_returns_none_for_an_item_with_no_history(self):
+		ensure_company()
+		item = make_item("PRICE-HISTORY-NONE", "Vitrified")
+		self.assertIsNone(pricing_api.suggest_price_from_history(item))
+
+	def test_suggest_price_from_history_returns_none_for_a_nonexistent_item(self):
+		self.assertIsNone(pricing_api.suggest_price_from_history("NO-SUCH-ITEM-AT-ALL"))
