@@ -73,6 +73,7 @@ def _serialize(doc) -> dict:
 		"validTill": doc.valid_till,
 		"markupPct": doc.custom_markup_pct,
 		"freight": doc.custom_freight,
+		"deliveryPincode": doc.custom_delivery_pincode,
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
 		"lines": [_serialize_line(row) for row in doc.items],
@@ -220,6 +221,25 @@ def list_quotations(dealer: str | None = None, search: str | None = None, limit:
 
 
 @frappe.whitelist(methods=["GET"])
+def suggest_transport_rate(pincode: str) -> dict | None:
+	"""ISS-2026-00633 — "Transport pricing by pincode/distance." Pacific has no real
+	pincode/zone rate table yet (only they have the actual rates), so this is
+	deliberately a suggestion, never an enforced or auto-applied one: an exact-match
+	lookup against Transport Rate Zone (empty by default, filled in by Management/
+	Sales as real rates become known), returned for the Quotation Builder to show
+	as a take-it-or-leave-it number next to the Freight field it never writes to
+	directly. Returns None (not a placeholder/zero) when this exact pincode has no
+	row yet -- "honest stub", same convention as dashboard.api's outstandingReceivables."""
+	pincode = (pincode or "").strip()
+	if not pincode:
+		return None
+	row = frappe.db.get_value("Transport Rate Zone", pincode, ["suggested_freight", "notes"], as_dict=True)
+	if not row:
+		return None
+	return {"pincode": pincode, "suggestedFreight": row.suggested_freight, "notes": row.notes}
+
+
+@frappe.whitelist(methods=["GET"])
 def get_quotation(quotation: str):
 	return _serialize(frappe.get_doc("Quotation", quotation))
 
@@ -230,6 +250,7 @@ def create_quotation(
 	lines: list[dict],
 	markup_pct: float,
 	freight: float = 0,
+	delivery_pincode: str | None = None,
 	validity_days: int = 7,
 	inquiries: list[str] | None = None,
 	channel: str | None = None,
@@ -240,6 +261,12 @@ def create_quotation(
 	Sales Taxes and Charges Template; see sales.utils.apply_tax_template. Both
 	carry forward automatically into the resulting Sales Order on
 	convert_to_order, via ERPNext's own make_sales_order field mapper.
+
+	`delivery_pincode` (ISS-2026-00633) is free text, stored as-is -- it's what
+	suggest_transport_rate looks a freight SUGGESTION up against (see that
+	function and Transport Rate Zone's own docstring); nothing here validates it
+	against the rate table or auto-fills `freight` from it, since the whole point
+	is that Sales decides whether to take the suggestion.
 
 	`inquiries` closes out every Inquiry passed (status -> "Quoted",
 	linked_quotation -> this quotation's name, mirroring order_api's
@@ -280,6 +307,7 @@ def create_quotation(
 		lines=lines,
 		markup_pct=markup_pct,
 		freight=freight,
+		delivery_pincode=delivery_pincode,
 		validity_days=validity_days,
 		inquiries=inquiries,
 		channel=channel,
@@ -316,6 +344,7 @@ def _create_quotation(
 	lines: list[dict],
 	markup_pct: float,
 	freight: float = 0,
+	delivery_pincode: str | None = None,
 	validity_days: int = 7,
 	inquiries: list[str] | None = None,
 	channel: str = "Retail",
@@ -338,6 +367,7 @@ def _create_quotation(
 			"valid_till": add_days(today(), int(validity_days)),
 			"custom_markup_pct": markup_pct,
 			"custom_freight": freight,
+			"custom_delivery_pincode": delivery_pincode,
 			"custom_inquiry": inquiries[0] if inquiries else None,
 			"custom_order_channel": channel,
 			"items": items,

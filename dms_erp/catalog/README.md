@@ -25,13 +25,20 @@ catalog visibility. Implemented.
   `get_all` intersected with any `dealer` restriction already in play).
 - **Dealer Catalog** (`dealer_catalog_api.py` + `doctype/dealer_catalog`) — a custom
   doctype (no ERPNext equivalent) mapping a dealer (`Customer`) to the set of items
-  they're allowed to see. No assignment yet = full catalog visible, matching the
-  frontend's fallback behavior. `is_visible` is a pure assignment check; `catalog_for`
-  — "what a dealer can actually inquire/quote for" — additionally filters to
-  currently-sellable items (Phase 11), since a Pulled Back item can't be quoted for
+  they're allowed to order. No assignment yet = full catalog visible/orderable,
+  matching the frontend's fallback behavior. `is_visible` is a pure assignment check;
+  `catalog_for` — "what a dealer can actually order/quote for" — additionally filters
+  to currently-sellable items (Phase 11), since a Pulled Back item can't be quoted for
   any dealer regardless of assignment. `sales/quotation_api.create_quotation` also
   enforces sellability directly at the line level, because assignment isn't
   retroactively cleaned up when an item's lifecycle status changes later.
+  `browsable_catalog_for` (ISS-2026-00644) is the wider, assignment-blind sibling —
+  every currently-sellable item, period — that `sales/inquiry_api._create_inquiry`,
+  the dealer portal's `get_catalog`/`get_item`/`resolve_code`, and WhatsApp's
+  `resolve_item_by_name` (catalog/api.py) now use so a dealer can see and inquire on
+  an unassigned item; `catalog_for`'s narrower assigned set is still what gates
+  actually *ordering* it (`dealer_portal_api.convert_to_order`, comms.flow_api's
+  WhatsApp order-placement path, and quotation_api unchanged).
 
 `stockQty`, `bay` and `lastSoldDays` are stubbed in API responses — they come from
 Phase 3 (Warehouse/Stock) and Phase 5 (Sales) respectively.

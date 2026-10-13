@@ -41,11 +41,33 @@ class TestDealerPortalApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
-	def test_get_catalog_only_returns_this_dealers_visible_items(self):
+	def test_get_catalog_shows_every_sellable_item_but_flags_unassigned_ones(self):
+		# ISS-2026-00644: hidden_item is sellable but never assigned to self.dealer --
+		# it still shows up in Browse, just not orderable.
 		page = dealer_portal_api.get_catalog()
+		by_code = {row["code"]: row for row in page["items"]}
+		self.assertIn(self.item, by_code)
+		self.assertTrue(by_code[self.item]["orderable"])
+		self.assertIn(self.hidden_item, by_code)
+		self.assertFalse(by_code[self.hidden_item]["orderable"])
+
+	def test_get_catalog_search_also_matches_colour_and_design_attributes(self):
+		# Replaces the dealer portal's four standalone attribute dropdown filters --
+		# typing the attribute value into the one search box should find it too, not
+		# just an item-name match.
+		frappe.db.set_value("Item", self.item, "custom_colour_attribute_1", "Rustic Grey")
+		try:
+			page = dealer_portal_api.get_catalog(search="Rustic Grey")
+			codes = [row["code"] for row in page["items"]]
+			self.assertIn(self.item, codes)
+			self.assertNotIn(self.hidden_item, codes)
+		finally:
+			frappe.db.set_value("Item", self.item, "custom_colour_attribute_1", None)
+
+	def test_get_catalog_search_still_matches_item_name(self):
+		page = dealer_portal_api.get_catalog(search=self.item)
 		codes = [row["code"] for row in page["items"]]
 		self.assertIn(self.item, codes)
-		self.assertNotIn(self.hidden_item, codes)
 
 	def test_catalog_entry_exposes_only_this_dealers_own_code_not_the_full_list(self):
 		from dms_erp.catalog.api import update_product
@@ -67,9 +89,15 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertNotIn("dealerCodes", entry)
 		self.assertNotIn("THEIR-CODE", str(entry))
 
-	def test_get_item_rejects_an_item_outside_this_dealers_catalog(self):
+	def test_get_item_shows_an_unassigned_item_as_not_orderable(self):
+		# ISS-2026-00644: viewing is sellability-gated, not assignment-gated --
+		# `orderable: false` is what actually stops a dealer booking it.
+		entry = dealer_portal_api.get_item(self.hidden_item)
+		self.assertFalse(entry["orderable"])
+
+	def test_get_item_rejects_a_nonexistent_item(self):
 		with self.assertRaises(frappe.PermissionError):
-			dealer_portal_api.get_item(self.hidden_item)
+			dealer_portal_api.get_item("NO-SUCH-ITEM")
 
 	def test_resolve_code_by_the_dealers_own_mapped_code(self):
 		from dms_erp.catalog.api import update_product
@@ -85,8 +113,15 @@ class TestDealerPortalApi(FrappeTestCase):
 		found = dealer_portal_api.resolve_code(self.item)
 		self.assertEqual(found["code"], self.item)
 
-	def test_resolve_code_returns_none_for_an_item_outside_the_catalog(self):
-		self.assertIsNone(dealer_portal_api.resolve_code(self.hidden_item))
+	def test_resolve_code_finds_an_unassigned_item_but_marks_it_not_orderable(self):
+		# ISS-2026-00644: resolve_code (company-code fallback) is sellability-gated,
+		# not assignment-gated, same as get_catalog/get_item.
+		found = dealer_portal_api.resolve_code(self.hidden_item)
+		self.assertEqual(found["code"], self.hidden_item)
+		self.assertFalse(found["orderable"])
+
+	def test_resolve_code_returns_none_for_a_nonexistent_item(self):
+		self.assertIsNone(dealer_portal_api.resolve_code("NO-SUCH-ITEM"))
 
 	def test_raise_inquiry_is_web_sourced_and_unassigned(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=20, remarks="Need urgently")
@@ -94,9 +129,16 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertEqual(inquiry["dealerId"], self.dealer)
 		self.assertIsNone(inquiry["assignedTo"])
 
-	def test_raise_inquiry_rejects_an_item_outside_the_catalog(self):
+	def test_raise_inquiry_allows_an_item_outside_the_catalog(self):
+		# ISS-2026-00644: inquiry is the allowed action on an unassigned item --
+		# convert_to_order below is what's actually blocked.
+		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
+		self.assertEqual(inquiry["productId"], self.hidden_item)
+
+	def test_convert_to_order_rejects_an_unassigned_item(self):
+		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		with self.assertRaises(frappe.PermissionError):
-			dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-UNASSIGNED")
 
 	def test_convert_to_order_requires_a_customer_po(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
