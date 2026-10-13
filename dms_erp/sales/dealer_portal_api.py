@@ -27,6 +27,7 @@ from dms_erp.catalog.dealer_catalog_api import catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
+from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.inquiry_api import _create_inquiry, _inquiry_filters, _serialize as _serialize_inquiry
 from dms_erp.sales.order_api import _create_order, _serialize as _serialize_order
 from dms_erp.warehouse.utils import top_batches, total_stock_for_item
@@ -211,7 +212,19 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	"""BRD C.13.1 — "enter their own PO number to tag/close it." Only converts an
 	inquiry this dealer actually owns, at the same in-stock/priced items it was
 	raised for -- lines come from the inquiry itself, not caller-supplied, so a
-	dealer session can't order arbitrary items through this endpoint."""
+	dealer session can't order arbitrary items through this endpoint.
+
+	Deliberately NOT gated for credit-limit exceedance (BRD C.11 trigger #1) the
+	way order_api.create_order/quotation_api.convert_to_order and
+	comms.flow_api's WhatsApp order-placement path now are: this endpoint's
+	response is consumed by the separate dealer-portal frontend, and returning
+	`{"approvalRequired": True, ...}` here instead of an Order would be a
+	response-shape change that frontend was never updated to handle. What IS
+	fixed here: _create_order can still raise ERPNext's own native
+	credit-limit-exceeded validation (an HTML-formatted message naming internal
+	Credit Controller users and their emails, never meant for a dealer to see;
+	see sales.utils.safe_customer_message's own docstring for the real report
+	that surfaced this) -- that text must never reach the dealer verbatim."""
 	dealer = _current_dealer()
 	if not customer_po:
 		frappe.throw(_("customer_po is required."), frappe.ValidationError)
@@ -223,7 +236,12 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(_("Inquiry {0} is {1} and can no longer be converted.").format(inquiry, doc.status), frappe.ValidationError)
 
 	lines = [{"item": doc.item, "qty": doc.qty}]
-	return _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po)
+	try:
+		return _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		from dms_erp.sales.utils import safe_customer_message
+
+		frappe.throw(safe_customer_message(e), type(e))
 
 
 @frappe.whitelist(methods=["GET"])
@@ -365,5 +383,28 @@ def my_profile() -> dict:
 		"id": doc.name,
 		"name": doc.customer_name,
 		"phone": doc.custom_phone,
+		"email": doc.custom_email,
 		"classification": doc.custom_dealer_classification,
 	}
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_my_email(email: str):
+	"""BRD C.13 — a dealer sets their own email here (not phone, which stays
+	OTP-delivery-only and whatever staff set it to at onboarding). This is the one
+	prerequisite auth.dealer_api.set_my_password checks for before letting a dealer
+	set a portal password: email + password is a second way in, so the email that
+	login resolves by has to come from somewhere, and self-service here (rather
+	than only ever staff-set, like phone) is what makes that actually reachable
+	without staff having to do it for every dealer first."""
+	dealer = _current_dealer()
+	email = (email or "").strip()
+	if not email:
+		frappe.throw(_("An email is required."), frappe.ValidationError)
+
+	_assert_email_available(email, exclude=dealer)
+
+	doc = frappe.get_doc("Customer", dealer)
+	doc.custom_email = email
+	doc.save(ignore_permissions=True)
+	return my_profile()

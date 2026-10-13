@@ -7,6 +7,20 @@ present we simply do nothing and leave the request as Guest; frappe.whitelist's 
 allow_guest=False check then rejects any protected staff-app endpoint with a clean
 PermissionError, so there's no need to raise here.
 
+Because this hook is registered globally (`before_request`, not scoped to this app's
+own routes), it runs on *every* request to the site -- including another installed
+app's own Bearer-token traffic, e.g. an MCP server app's OAuth-authenticated calls.
+A real deploy hit exactly this: `dms_erp_jwt_keys`/`dms_erp_jwt_active_kid` hadn't
+been set in site_config.json yet (see README's "Required site_config.json keys" --
+deliberately not auto-generated), so jwt_utils.decode_access_token raised
+SigningKeyNotConfigured -- a plain Exception, not a jwt.PyJWTError -- for *any* request
+bearing an `Authorization: Bearer ...` header, dms_erp's own or not. That propagated
+out of this before_request hook uncaught, turning into a 500 on every Bearer-token
+request to the whole site (Desk/cookie-based browsing was unaffected, which is why
+only the Bearer-token-authenticated MCP connector broke). Caught alongside
+PyJWTError below for the same reason as everything else in this function: dms_erp not
+being fully configured yet must never take down another app's auth on the same site.
+
 BRD C.13 / Part B.2: "[the middleware] restricts access... enforces dealer-wise
 catalog/pricing/eligibility... exposes only required APIs". A dealer-portal account
 (role DMS Dealer, no staff role) resolving here is confined to the dealer-portal API
@@ -56,7 +70,7 @@ def authenticate_request():
 
 	try:
 		payload = jwt_utils.decode_access_token(token)
-	except pyjwt.PyJWTError:
+	except (pyjwt.PyJWTError, jwt_utils.SigningKeyNotConfigured):
 		return
 
 	user = payload.get("sub")

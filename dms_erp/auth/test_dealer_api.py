@@ -134,3 +134,75 @@ class TestDealerAuthApi(FrappeTestCase):
 
 		with self.assertRaises(frappe.AuthenticationError):
 			dealer_api.verify_otp(phone=TEST_PHONE, otp=code, device_id="dev-2")
+
+
+class TestDealerPasswordAuthApi(FrappeTestCase):
+	"""login_with_password / set_my_password -- the second way in, once a dealer
+	has both an email on file and a password set. See auth.dealer_api's own module
+	docstring for why this exists alongside OTP rather than instead of it."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Password Auth Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_email", "pwtest@pacific.example")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		user = frappe.db.get_value("User", {"custom_dealer": self.dealer}, "name")
+		if user:
+			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
+
+	def _sign_in_as_dealer(self) -> str:
+		user = dealer_api._dealer_portal_user(self.dealer)
+		frappe.set_user(user)
+		return user
+
+	def test_set_my_password_then_login_with_password_succeeds(self):
+		self._sign_in_as_dealer()
+		dealer_api.set_my_password(password="SuperSecret123")
+		frappe.set_user("Guest")
+
+		tokens = dealer_api.login_with_password(email="pwtest@pacific.example", password="SuperSecret123", device_id="dev-1")
+		self.assertTrue(tokens["access_token"])
+		self.assertEqual(tokens["user"]["dealer"], self.dealer)
+
+	def test_login_with_password_wrong_password_raises_generic_error(self):
+		self._sign_in_as_dealer()
+		dealer_api.set_my_password(password="SuperSecret123")
+		frappe.set_user("Guest")
+
+		with self.assertRaises(frappe.AuthenticationError):
+			dealer_api.login_with_password(email="pwtest@pacific.example", password="WrongPassword1", device_id="dev-1")
+
+	def test_login_with_password_for_unregistered_email_raises_the_same_generic_error(self):
+		with self.assertRaises(frappe.AuthenticationError):
+			dealer_api.login_with_password(email="nobody@pacific.example", password="whatever123", device_id="dev-1")
+
+	def test_login_with_password_before_any_password_is_ever_set_raises_the_same_generic_error(self):
+		# Email is on file, but no portal user exists yet (never logged in via OTP,
+		# never called set_my_password) -- must not leak that distinction either.
+		with self.assertRaises(frappe.AuthenticationError):
+			dealer_api.login_with_password(email="pwtest@pacific.example", password="whatever123", device_id="dev-1")
+
+	def test_set_my_password_requires_an_email_on_file_first(self):
+		no_email_dealer = make_dealer("Password Auth No Email Test Dealer")
+		user = dealer_api._dealer_portal_user(no_email_dealer)
+		frappe.set_user(user)
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				dealer_api.set_my_password(password="SuperSecret123")
+		finally:
+			frappe.set_user("Administrator")
+			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
+
+	def test_set_my_password_rejects_a_too_short_password(self):
+		self._sign_in_as_dealer()
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.set_my_password(password="short")
+
+	def test_set_my_password_rejects_a_non_dealer_account(self):
+		frappe.set_user("Administrator")
+		with self.assertRaises(frappe.PermissionError):
+			dealer_api.set_my_password(password="SuperSecret123")

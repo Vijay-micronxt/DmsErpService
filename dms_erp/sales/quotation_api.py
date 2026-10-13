@@ -24,10 +24,12 @@ list_quotations is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list.
 
 An explicit `channel` differing from auto-classification (BRD C.11 trigger #6)
-goes through sales.order_channel.gate_channel_override, and any line with a
-nonzero `discount_percentage` (BRD C.11 trigger #4 / C.7.3 -- no threshold,
-"even a one-rupee change") goes through approvals.api.
-gate_discount_over_price_list -- either way, an unauthorized caller gets
+goes through sales.order_channel.gate_channel_override, and any line whose
+`discount_percentage` is above `DMS Sales Settings.discount_approval_
+threshold_pct` (BRD C.11 trigger #4 / C.7.3 -- Pacific's own default is 0,
+"even a one-rupee change", but this is a per-site config, not hardcoded)
+goes through approvals.api.gate_discount_over_price_list -- either way, an
+unauthorized caller gets
 `{"approvalRequired": True, "approval": {...}}` back instead of a serialized
 quotation, and the Quotation itself isn't created until Management approves the
 queued Approval Request (approvals.api.decide_approval).
@@ -285,8 +287,8 @@ def create_quotation(
 	)
 
 	def _create_after_discount_gate(**kwargs):
-		# BRD C.7.3/C.11#4: any transaction-level discount at all -- even a
-		# one-rupee change -- is audit-locked, no threshold (see
+		# BRD C.7.3/C.11#4: a discount above DMS Sales Settings.
+		# discount_approval_threshold_pct is audit-locked -- 0 by default (see
 		# gate_discount_over_price_list). Nested inside gate_channel_override so
 		# an authorized caller who does BOTH in one call gets an audit record for
 		# each; an unauthorized caller's channel override is what blocks document

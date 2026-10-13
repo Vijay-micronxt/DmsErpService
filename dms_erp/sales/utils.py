@@ -15,6 +15,8 @@ never re-derives a GST amount by hand. If a site hasn't configured a template,
 any other ERPNext site with no GST setup; nothing here assumes one exists.
 """
 
+import re
+
 import frappe
 from frappe.utils import add_days, getdate
 
@@ -106,6 +108,48 @@ def apply_tax_template(doc, taxes_and_charges: str | None) -> None:
 				"cost_center": row.cost_center,
 			},
 		)
+
+
+# Anchors ERPNext's own native Sales Order credit-limit message specifically --
+# everything from here on is an internal Credit Controller contact list (names
+# and email addresses), never meant for a dealer to see. Everything *before*
+# this marker ("Credit limit has been crossed for customer X (a/b)") is the
+# useful, dealer-safe part and is kept.
+_INTERNAL_CONTACT_LIST_MARKER_RE = re.compile(r"please contact any of the following users.*", re.IGNORECASE | re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_EMAIL_RE = re.compile(r"\S+@\S+\.\S+")
+
+
+def safe_customer_message(error: Exception) -> str:
+	"""Some exceptions this app's own code raises when an order can't be placed are
+	already plain, dealer-safe text (e.g. "{item} has no approved dealer price
+	yet."). ERPNext's own native validation -- most notably its built-in Sales
+	Order credit-limit check -- is not: it's an HTML-formatted internal-admin
+	message that names the site's Credit Controller users and their email
+	addresses, meant for a Desk user to read, never a dealer. A real report:
+	a WhatsApp dealer whose order exceeded their credit limit got that exact
+	message, HTML tags and all, forwarded verbatim as their order-rejection
+	reply -- Flow/dealer-portal call sites that pass raw exception text through
+	to a dealer must run it through this first.
+
+	Rather than discard the whole message on sight of a tag, this strips the
+	unsafe part and keeps the useful part: the credit-limit message itself
+	("Credit limit has been crossed for customer Medha - 1 (37290/1000)") is
+	informative and fine for a dealer to read -- it's the internal contact
+	list appended after it (names + emails of Credit Controller users) that
+	must never reach a dealer. So: cut everything from that contact-list
+	marker onward, strip any remaining HTML tags and stray email addresses
+	(belt-and-suspenders, in case some other ERPNext message includes emails
+	without this exact marker), and collapse whitespace. Only fall back to a
+	fully generic message if nothing useful survives that cleanup."""
+	text = str(error)
+	text = _INTERNAL_CONTACT_LIST_MARKER_RE.sub("", text)
+	text = _HTML_TAG_RE.sub(" ", text)
+	text = _EMAIL_RE.sub("", text)
+	text = re.sub(r"\s+", " ", text).strip().strip(".,:;- ").strip()
+	if not text:
+		return "We couldn't place this order right now. Please contact your Pacific representative."
+	return f"We couldn't place this order: {text}. Please contact your Pacific representative."
 
 
 def clear_unrequested_default_tax(doc) -> None:

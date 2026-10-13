@@ -12,16 +12,24 @@ order's value would push the dealer over their configured limit or it
 wouldn't. A dealer with no credit limit configured (0/unset) is never gated
 at all -- an untagged dealer behaves exactly as it always has.
 
-Wired into two order-creating call sites, both of which produce a real
-Sales Order: order_api.create_order (direct/Inquiry-sourced -- the new
-order's value is only an estimate, since real per-line pricing/rounding
-happens later in _priced_order_line) and quotation_api.convert_to_order
-(the Quotation is already fully priced and submitted, so its own
-`grand_total` is exact, not an estimate). Deliberately NOT wired into
-sales.dealer_portal_api.convert_to_order (a dealer's own self-service order)
--- that response shape is consumed by a separate dealer-portal frontend this
-session has no access to, so gating it here risks silently breaking a
-frontend nothing in this session can also fix.
+Wired into three order-creating call sites, all of which produce a real
+Sales Order: order_api.create_order (direct/Inquiry-sourced, staff), the same
+core's use from comms.flow_api.create_dealer_opportunity (WhatsApp
+order-placement, after a PO number) -- both an *estimate*, since real
+per-line pricing/rounding happens later in _priced_order_line -- and
+quotation_api.convert_to_order (the Quotation is already fully priced and
+submitted, so its own `grand_total` is exact, not an estimate).
+
+Deliberately NOT wired into sales.dealer_portal_api.convert_to_order (a
+dealer's own self-service order via the separate dealer-portal web app) --
+unlike the WhatsApp reply text (a plain string this app fully owns), that
+endpoint's *response shape* is a JSON contract with a separate dealer-portal
+frontend this session has no access to, so returning `{"approvalRequired":
+True, ...}` there instead of an Order risks silently breaking a frontend
+nothing in this session can also fix. That endpoint still gets
+sales.utils.safe_customer_message's safety net against ERPNext's own native
+credit-limit check leaking raw HTML/emails to a dealer -- it just doesn't get
+the queue-for-approval treatment.
 """
 
 import frappe

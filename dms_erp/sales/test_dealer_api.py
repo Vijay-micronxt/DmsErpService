@@ -59,3 +59,25 @@ class TestDealerApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			dealer_api.set_dealer_salesperson(self.dealer, "priya@pacific.example")
+
+	def test_create_dealer_rejects_an_email_already_used_by_another_dealer(self):
+		# Email now doubles as a login-password lookup key (auth.dealer_api.
+		# login_with_password) -- two dealers sharing one would make that
+		# resolve to whichever one frappe.db.get_value happens to pick.
+		dealer_api.create_dealer(name="Dealer Api Email Owner Co", email="shared@pacific.example")
+
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer(name="Dealer Api Email Squatter Co", email="shared@pacific.example")
+
+	def test_update_dealer_rejects_an_email_already_used_by_another_dealer(self):
+		dealer_api.create_dealer(name="Dealer Api Email Taken Co", email="taken@pacific.example")
+		other = dealer_api.create_dealer(name="Dealer Api Email Wants It Co")["id"]
+
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.update_dealer(other, {"email": "taken@pacific.example"})
+
+	def test_update_dealer_allows_keeping_its_own_unchanged_email(self):
+		dealer = dealer_api.create_dealer(name="Dealer Api Keep Own Email Co", email="keepme@pacific.example")["id"]
+
+		result = dealer_api.update_dealer(dealer, {"email": "keepme@pacific.example"})
+		self.assertEqual(result["email"], "keepme@pacific.example")

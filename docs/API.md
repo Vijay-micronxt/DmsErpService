@@ -193,7 +193,11 @@ _No parameters._
 
 ### Dealer-portal login (BRD C.13)
 
-Phone + OTP, never a password — a dealer account never gets one. `request_otp`/`verify_otp` always return/throw the same generic response whether or not the phone number is actually registered, so this login surface never leaks which numbers exist. The OTP is delivered over WhatsApp (the same `WhatsApp Message` log `dms_erp.comms.api` writes to). On first successful verify, a dealer-portal `User` account is created automatically (role `DMS Dealer`, linked back to the `Customer` via `User.custom_dealer`) — there is no separate dealer signup/registration endpoint. `auth.middleware` then confines that session to only the `dms_erp.auth.dealer_api.*` and `dms_erp.sales.dealer_portal_api.*` methods; every other endpoint in this app throws `PermissionError` for it.
+Two ways in. Phone + OTP is always available and needs no setup: `request_otp`/`verify_otp` always return/throw the same generic response whether or not the phone number is actually registered, so this login surface never leaks which numbers exist. The OTP is delivered over WhatsApp (the same `WhatsApp Message` log `dms_erp.comms.api` writes to). On first successful verify, a dealer-portal `User` account is created automatically (role `DMS Dealer`, linked back to the `Customer` via `User.custom_dealer`) — there is no separate dealer signup/registration endpoint.
+
+Email + password is a second, faster way in for a dealer who's set one up: once signed in (via OTP the first time), a dealer sets their own email (`dms_erp.sales.dealer_portal_api.update_my_email`) and password (`set_my_password`) from their profile, then `login_with_password` afterward. There is no "forgot password" email flow — this app sends no real email — so a dealer who forgets their password just falls back to OTP again. `login_with_password` returns/throws the same generic response regardless of which part (unregistered email, no password ever set, wrong password) failed, same non-enumeration guarantee as OTP.
+
+`auth.middleware` confines a dealer session to only the `dms_erp.auth.dealer_api.*` and `dms_erp.sales.dealer_portal_api.*` methods; every other endpoint in this app throws `PermissionError` for it.
 
 #### POST `dms_erp.auth.dealer_api.request_otp` · `guest` (no Bearer token required)
 
@@ -225,6 +229,43 @@ Phone + OTP, never a password — a dealer account never gets one. `request_otp`
 **Response** — same shape as staff `login()`, e.g. `"user": { "dealer": "CUST-0004", "roles": ["DMS Dealer"], ... }`.
 
 > raises AuthenticationError for a wrong/expired/already-used code, an unregistered phone, or a locked-out attempt count — always the same generic message, never revealing which case it was.
+
+#### POST `dms_erp.auth.dealer_api.login_with_password` · `guest` (no Bearer token required)
+
+**Sign in with email + password** — same access/refresh token pair shape as `verify_otp`. Resolves `Customer.custom_email` → dealer → that dealer's one portal `User` (never the raw input treated as a login id).
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `email` | string | required | matched against `Customer.custom_email` |
+| `password` | string | required |  |
+| `device_id` | string | required |  |
+| `device_name` | string | optional |  |
+
+**Response** — same shape as `verify_otp`.
+
+> raises AuthenticationError for an unregistered email, a dealer who's never set a password, a wrong password, or a disabled account — always the same generic message.
+
+#### POST `dms_erp.auth.dealer_api.set_my_password` · dealer session required
+
+**Set or change your own portal password** — scoped to the calling session's own account, never a caller-supplied dealer id. Requires `Customer.custom_email` to already be set (`dealer_portal_api.update_my_email`) — a password with no email on file would have no way back in via `login_with_password`.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `password` | string | required | at least 8 characters |
+
+```json
+{ "success": true }
+```
+
+#### POST `dms_erp.sales.dealer_portal_api.update_my_email` · dealer session required
+
+**Set or change your own email** — the identifier `login_with_password` looks up by. Must be unique across dealers (an email already on another dealer's account is rejected) — see `sales.dealer_api._assert_email_available`.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `email` | string | required |  |
+
+**Response** — the updated `my_profile()` shape, e.g. `{ "id": "CUST-0004", "name": "...", "phone": "...", "email": "dealer@example.com", "classification": "..." }`.
 
 
 ### User management

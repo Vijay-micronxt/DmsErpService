@@ -4,7 +4,8 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "dealer_classification_window_days"
+  "dealer_classification_window_days",
+  "discount_approval_threshold_pct"
  ],
  "fields": [
   {
@@ -13,6 +14,13 @@
    "fieldname": "dealer_classification_window_days",
    "fieldtype": "Int",
    "label": "Dealer Classification Window (Days)"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.11 trigger #4 (BRD C.7.3: \"any transaction-level price or discount change — even a one-rupee change — is an override requiring approval\") is Pacific's own rule: default 0 means ANY discount at all is audit-locked, no threshold. This app is white-labeled — a different client may want a looser rule (e.g. discounts up to 5% auto-apply, only above that needs Management approval). approvals.api.gate_discount_over_price_list reads this per-site, so that's a config change, not a code change, per deployment.",
+   "fieldname": "discount_approval_threshold_pct",
+   "fieldtype": "Percent",
+   "label": "Discount Approval Threshold %"
   }
  ],
  "index_web_pages_for_search": 0,

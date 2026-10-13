@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -125,6 +127,29 @@ class TestDealerPortalApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-2")
 
+	@patch("dms_erp.sales.dealer_portal_api._create_order")
+	def test_convert_to_order_never_leaks_erpnext_native_html_or_emails(self, mock_create_order):
+		# A real report: ERPNext's own native Sales Order credit-limit check (not
+		# anything this app raises itself) throws an HTML-formatted message naming
+		# internal Credit Controller users and their emails -- convert_to_order
+		# must never forward that verbatim to a dealer.
+		mock_create_order.side_effect = frappe.ValidationError(
+			"Credit limit has been crossed for customer Medha - 1(37290.0/1000.0)<br><br>"
+			"Please contact any of the following users to extend the credit limits for Medha - 1: "
+			"<br><br> <ul><li>Karthik Mxt (karthikeyan@micronxt.com)</li></ul>."
+		)
+		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
+
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-HTML-TEST")
+
+		message = str(ctx.exception)
+		self.assertNotIn("<", message)
+		self.assertNotIn("micronxt.com", message)
+		self.assertNotIn("Karthik", message)
+		self.assertIn("Credit limit has been crossed for customer Medha - 1", message)
+		self.assertIn("Pacific representative", message)
+
 	def test_list_my_inquiries_never_shows_another_dealers_inquiries(self):
 		dealer_portal_api.raise_inquiry(item=self.item, qty=1)
 		frappe.set_user(self.other_dealer_user)
@@ -175,3 +200,39 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.PermissionError):
 			dealer_portal_api.get_catalog()
+
+
+class TestUpdateMyEmail(FrappeTestCase):
+	"""A dedicated dealer+user, separate from TestDealerPortalApi's shared fixtures
+	above, since this mutates Customer.custom_email -- now a login-password lookup
+	key (auth.dealer_api.login_with_password), so it shouldn't bleed into any of
+	those other tests."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Update My Email Test Dealer")
+		cls.dealer_user = _dealer_portal_user(cls.dealer)
+		cls.other_dealer = make_dealer("Update My Email Other Test Dealer")
+		frappe.db.set_value("Customer", cls.other_dealer, "custom_email", "taken@pacific.example")
+
+	def setUp(self):
+		frappe.set_user(self.dealer_user)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("Customer", self.dealer, "custom_email", None)
+
+	def test_update_my_email_sets_it_and_returns_the_updated_profile(self):
+		profile = dealer_portal_api.update_my_email(email="dealer@pacific.example")
+		self.assertEqual(profile["email"], "dealer@pacific.example")
+		self.assertEqual(dealer_portal_api.my_profile()["email"], "dealer@pacific.example")
+
+	def test_update_my_email_rejects_an_email_already_used_by_another_dealer(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.update_my_email(email="taken@pacific.example")
+
+	def test_update_my_email_requires_a_value(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.update_my_email(email="")
