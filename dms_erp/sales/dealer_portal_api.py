@@ -62,10 +62,21 @@ def _price_visible(dealer: str) -> bool:
 
 
 @frappe.whitelist(methods=["GET"])
-def get_catalog(search: str | None = None, category: str | None = None, limit: int = 20, offset: int = 0):
+def get_catalog(
+	search: str | None = None,
+	category: str | None = None,
+	color: str | None = None,
+	colour_attribute_1: str | None = None,
+	colour_attribute_2: str | None = None,
+	design_attribute_1: str | None = None,
+	design_attribute_2: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+):
 	"""This dealer's own assigned-and-sellable catalog (BRD C.1.5/C.13.1) — search by
 	item name only; resolve_code is the separate lookup for a dealer's own code or the
-	company item code."""
+	company item code. Colour/design attribute filters are ISS-2026-00632's own
+	requirement #4 ("available for filtering in the dealer portal catalogue")."""
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 
@@ -75,6 +86,16 @@ def get_catalog(search: str | None = None, category: str | None = None, limit: i
 		filters["item_name"] = ["like", f"%{search}%"]
 	if category:
 		filters["item_group"] = category
+	if color:
+		filters["custom_color"] = color
+	if colour_attribute_1:
+		filters["custom_colour_attribute_1"] = colour_attribute_1
+	if colour_attribute_2:
+		filters["custom_colour_attribute_2"] = colour_attribute_2
+	if design_attribute_1:
+		filters["custom_design_attribute_1"] = design_attribute_1
+	if design_attribute_2:
+		filters["custom_design_attribute_2"] = design_attribute_2
 
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
@@ -86,6 +107,44 @@ def get_catalog(search: str | None = None, category: str | None = None, limit: i
 		"limit": limit,
 		"offset": offset,
 	}
+
+
+def _distinct_catalog_values(dealer: str, fieldname: str) -> list[str]:
+	"""Scoped to this dealer's own catalog, not every Item on the site -- a colour/design
+	filter option this dealer has no catalog item for would just produce an empty result
+	every time it's picked, which is worse than not offering it at all."""
+	item_codes = list(catalog_for(dealer))
+	if not item_codes:
+		return []
+	values = frappe.get_all(
+		"Item", filters={"name": ["in", item_codes], fieldname: ["is", "set"]}, pluck=fieldname, distinct=True
+	)
+	return sorted(set(values))
+
+
+@frappe.whitelist(methods=["GET"])
+def list_catalog_colors() -> list[str]:
+	return _distinct_catalog_values(_current_dealer(), "custom_color")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_catalog_colour_attribute_1() -> list[str]:
+	return _distinct_catalog_values(_current_dealer(), "custom_colour_attribute_1")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_catalog_colour_attribute_2() -> list[str]:
+	return _distinct_catalog_values(_current_dealer(), "custom_colour_attribute_2")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_catalog_design_attribute_1() -> list[str]:
+	return _distinct_catalog_values(_current_dealer(), "custom_design_attribute_1")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_catalog_design_attribute_2() -> list[str]:
+	return _distinct_catalog_values(_current_dealer(), "custom_design_attribute_2")
 
 
 @frappe.whitelist(methods=["GET"])
@@ -219,6 +278,65 @@ def get_my_order(order: str) -> dict:
 	if doc.customer != dealer:
 		frappe.throw(_("Order {0} does not belong to you.").format(order), frappe.PermissionError)
 	return _serialize_order(doc)
+
+
+# MOM 07-Oct-2026 §3.4/#11, refined by ISS-2026-00634: "Dealers can cancel an order
+# only within the first 24 hours of Sales Order creation. After 24 hours,
+# cancellation request must go through internal approval." -- within the window a
+# dealer cancels immediately, no approval gate; past it, the request is queued
+# through the same approvals.gate_authorized_action/"Amend Or Cancel Submitted
+# Document" trigger order_api.advance_order_stage's staff-initiated cancel already
+# uses, rather than being refused outright -- the dealer's own role set never
+# clears DECIDE_ROLES, so this always queues a genuine Pending request for
+# Management, never auto-approves.
+DEALER_CANCEL_WINDOW_HOURS = 24
+
+
+@frappe.whitelist(methods=["POST"])
+def cancel_my_order(order: str, note: str | None = None) -> dict:
+	from frappe.utils import now_datetime, time_diff_in_hours
+
+	from dms_erp.approvals.api import gate_authorized_action
+	from dms_erp.sales.order_api import _cancel_order_action
+
+	dealer = _current_dealer()
+	doc = frappe.get_doc("Sales Order", order)
+	if doc.customer != dealer:
+		frappe.throw(_("Order {0} does not belong to you.").format(order), frappe.PermissionError)
+
+	stage = doc.custom_fulfillment_stage
+	if stage in ("Delivered", "Cancelled"):
+		frappe.throw(_("Order {0} can no longer be cancelled (currently {1}).").format(order, stage), frappe.ValidationError)
+
+	age_hours = time_diff_in_hours(now_datetime(), doc.creation)
+	if age_hours <= DEALER_CANCEL_WINDOW_HOURS:
+		doc.custom_fulfillment_stage = "Cancelled"
+		doc.append(
+			"custom_stage_history",
+			{"stage": "Cancelled", "at": now_datetime(), "by": frappe.session.user, "note": note or "Cancelled by dealer"},
+		)
+		doc.save(ignore_permissions=True)
+		return {"cancelled": True, "approvalRequired": False, "order": _serialize_order(doc)}
+
+	result = gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Sales Order",
+		reference_name=order,
+		reason=(
+			f"Dealer {dealer} is requesting to cancel {order}, placed more than "
+			f"{DEALER_CANCEL_WINDOW_HOURS} hours ago (outside the dealer self-cancel window)."
+		),
+		action_fn=_cancel_order_action,
+		action_kwargs=dict(order=order, note=note or "Cancellation requested by dealer, past the 24-hour window"),
+		applier_action="cancel",
+	)
+	# A dealer-portal session never clears DECIDE_ROLES, so gate_authorized_action
+	# always takes the "queue a Pending request" branch here, never the
+	# auto-approve-and-run-now branch -- this assertion documents that invariant
+	# rather than silently trusting it.
+	if "approvalRequired" not in result:
+		frappe.throw(_("Unexpected: a dealer session auto-approved its own cancellation request."))
+	return {"cancelled": False, "approvalRequired": True, "approval": result["approval"]}
 
 
 def _outstanding_for(dealer: str) -> float:
