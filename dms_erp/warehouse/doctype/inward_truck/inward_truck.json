@@ -8,6 +8,7 @@
  "field_order": [
   "lr_number",
   "supplier",
+  "vehicle_type",
   "vehicle_number",
   "eta",
   "column_break_1",
@@ -25,11 +26,13 @@
  ],
  "fields": [
   {
+   "description": "ISS-2026-00630 -- primary search key for inward shipments (BRD §C.12: LR Number, tagged to the PO).",
    "fieldname": "lr_number",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "LR Number",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "fieldname": "supplier",
@@ -40,9 +43,18 @@
    "reqd": 1
   },
   {
+   "description": "Client requirement, row 94 \"8.1\" -- which Vehicle Type master this truck is. Optional: an Inward Truck booked directly (not via a Pickup Run) may not have one picked yet at gate entry.",
+   "fieldname": "vehicle_type",
+   "fieldtype": "Link",
+   "label": "Vehicle Type",
+   "options": "Vehicle Type"
+  },
+  {
+   "description": "ISS-2026-00630 -- secondary search key for inward shipments.",
    "fieldname": "vehicle_number",
    "fieldtype": "Data",
-   "label": "Vehicle Number"
+   "label": "Vehicle Number",
+   "search_index": 1
   },
   {
    "fieldname": "eta",

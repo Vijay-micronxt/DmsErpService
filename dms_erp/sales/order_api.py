@@ -77,6 +77,7 @@ def _serialize(doc) -> dict:
 		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
+		"driverMobile": doc.custom_driver_mobile,
 		# BRD C.3.4 — interim manual gate ahead of VALS API. See advance_order_stage.
 		"advanceConfirmed": bool(doc.custom_advance_confirmed),
 		"owner": doc.owner,
@@ -170,7 +171,17 @@ def list_orders(
 	if stage:
 		filters["custom_fulfillment_stage"] = stage
 	if search:
-		filters["name"] = ["like", f"%{search}%"]
+		# ISS-2026-00630 / BRD §C.12: outward search is primarily by lorry number or
+		# driver mobile, secondarily by order number -- a Sales Invoice number search
+		# is covered separately by sales.invoice_api.list_sales_invoices (and global
+		# search), since this app's own Sales Orders don't carry that link directly.
+		pattern = ["like", f"%{search}%"]
+		matches = (
+			set(frappe.get_all("Sales Order", filters={"name": pattern}, pluck="name"))
+			| set(frappe.get_all("Sales Order", filters={"custom_vehicle": pattern}, pluck="name"))
+			| set(frappe.get_all("Sales Order", filters={"custom_driver_mobile": pattern}, pluck="name"))
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Sales Order", filters=filters)
 	names = frappe.get_all(
 		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
@@ -391,14 +402,21 @@ def confirm_advance_payment(order: str, confirmed: bool = True):
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
-def advance_order_stage(order: str, next_stage: str, note: str | None = None):
+def advance_order_stage(
+	order: str, next_stage: str, note: str | None = None, vehicle: str | None = None, driver_mobile: str | None = None
+):
 	"""Moving to "Cancelled" is BRD C.11 trigger #5 (amend/cancel of a submitted
 	document is audit-locked) -- an unauthorized caller gets
 	`{"approvalRequired": True, "approval": {...}}` back instead of the updated
 	order, and the order isn't actually cancelled until Management approves it
 	(see approvals.api.gate_authorized_action / APPLIERS). Every other forward
 	step is unaffected -- that's routine fulfillment progress, not a
-	cancellation."""
+	cancellation.
+
+	`vehicle`/`driver_mobile` (ISS-2026-00630) are optional on every forward step,
+	not just "Dispatched" -- the actual vehicle/driver is sometimes known earlier
+	(e.g. at Ready to Dispatch) and whoever's progressing the order can record it
+	as soon as it's known rather than being forced to wait for a specific stage."""
 	_assert_can_manage_orders()
 
 	if next_stage not in ORDER_STAGES:
@@ -432,6 +450,10 @@ def advance_order_stage(order: str, next_stage: str, note: str | None = None):
 		)
 
 	doc.custom_fulfillment_stage = next_stage
+	if vehicle:
+		doc.custom_vehicle = vehicle
+	if driver_mobile:
+		doc.custom_driver_mobile = driver_mobile
 	doc.append("custom_stage_history", {"stage": next_stage, "at": now_datetime(), "by": frappe.session.user, "note": note})
 	doc.save(ignore_permissions=True)
 

@@ -77,8 +77,29 @@ CUSTOM_FIELDS = {
 			"insert_after": "dms_fulfillment_section",
 			"allow_on_submit": 1,
 		},
-		{"fieldname": "custom_vehicle", "fieldtype": "Data", "label": "Vehicle", "insert_after": "custom_fulfillment_stage"},
-		{"fieldname": "dms_fulfillment_column_break", "fieldtype": "Column Break", "insert_after": "custom_vehicle"},
+		{
+			"fieldname": "custom_vehicle",
+			"fieldtype": "Data",
+			"label": "Vehicle",
+			"description": "ISS-2026-00630 -- primary search key for outward shipments (BRD §C.12: lorry number).",
+			"search_index": 1,
+			# A Sales Order is submitted (docstatus=1) by the time its vehicle is actually
+			# known -- without this, Frappe's UpdateAfterSubmitError blocks setting it at
+			# dispatch time at all (confirmed directly: advance_order_stage's new vehicle=
+			# param threw exactly this before the flag was added).
+			"allow_on_submit": 1,
+			"insert_after": "custom_fulfillment_stage",
+		},
+		{
+			"fieldname": "custom_driver_mobile",
+			"fieldtype": "Data",
+			"label": "Driver Mobile",
+			"description": "ISS-2026-00630 -- alternate primary search key for outward shipments, alongside Vehicle.",
+			"search_index": 1,
+			"allow_on_submit": 1,
+			"insert_after": "custom_vehicle",
+		},
+		{"fieldname": "dms_fulfillment_column_break", "fieldtype": "Column Break", "insert_after": "custom_driver_mobile"},
 		{"fieldname": "custom_source_type", "fieldtype": "Select", "label": "Source Type", "options": "\n".join(ORDER_SOURCE_TYPES), "insert_after": "dms_fulfillment_column_break"},
 		{"fieldname": "custom_source_ref", "fieldtype": "Data", "label": "Source Reference", "insert_after": "custom_source_type"},
 		{

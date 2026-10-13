@@ -416,8 +416,7 @@ def get_outstanding_due(lead=None, **kwargs):
 	straight off the main menu button with no preceding "wait for input" step (see
 	the Flow's own edges), so there's no dealer-typed text to log as an inbound
 	turn here, only the reply. Reuses dealer_portal_api._outstanding_for rather
-	than duplicating its SQL -- that function's own docstring covers why it's real,
-	correct SQL that simply returns 0 today."""
+	than duplicating its ledger query."""
 	from dms_erp.sales.dealer_portal_api import _outstanding_for
 
 	phone, _text = _lead_fields(lead)
@@ -458,10 +457,12 @@ def get_recent_orders(lead=None, **kwargs):
 
 
 # Approximate order qty for a Place Order request -- the Flow only collects a range
-# ("10 - 50 units"), not an exact figure; BRD C.2.2's own sample conversation shows a
-# real Sales Order being created straight from this WhatsApp exchange with no further
-# quantity negotiation step, so a documented midpoint is the pragmatic reading of "how
-# many" until/unless the Flow is changed to ask for an exact number instead.
+# ("10 - 50 units"), not an exact figure -- the Flow's quantity step offers these as
+# quick-tap buttons, but also accepts the dealer typing an exact number instead
+# (ISS-2026-00645/sheet item #8: "if i want to give custom quantity instead of
+# choosing range? its not allowing it"). _resolve_order_qty tries an exact number
+# first and only falls back to a band's midpoint when the dealer actually tapped a
+# band button -- the approximation is for the fallback case, not the default.
 _QTY_BAND_MIDPOINT = {
 	"10 - 50 units": 30,
 	"50 - 100 units": 75,
@@ -469,6 +470,27 @@ _QTY_BAND_MIDPOINT = {
 	"200 - 500 units": 350,
 	"500+ units": 500,
 }
+
+# A typed reply like "40", "40 boxes", "40 units", or "40.0" -- same shape as
+# _QTY_UNIT_RE's trailing-quantity match, but qty can be the whole reply here
+# (nothing else to parse out of it), so the unit word is optional.
+_QTY_NUMBER_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:box(?:es)?|pcs?|pieces?|units?)?\s*$", re.IGNORECASE)
+
+
+def _resolve_order_qty(order_qty_band: str | None) -> float:
+	"""The Place-Order Flow step offers 5 quick-tap qty-range buttons, but also
+	accepts the dealer typing an exact number into the same step instead -- both
+	land in lead.variables.order_qty_band, since the Flow stores whichever one the
+	dealer actually did into that one variable. A number is used exactly; a
+	recognized band label falls back to its documented midpoint; anything else
+	(or nothing at all) defaults to 1, same as before this existed."""
+	text = (order_qty_band or "").strip()
+	m = _QTY_NUMBER_RE.match(text)
+	if m:
+		qty = float(m.group(1))
+		if qty > 0:
+			return qty
+	return _QTY_BAND_MIDPOINT.get(text, 1)
 
 
 @frappe.whitelist()

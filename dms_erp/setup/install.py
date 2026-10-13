@@ -5,6 +5,7 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.sales.setup import setup_sales
+from dms_erp.setup.permissions import setup_permissions
 from dms_erp.setup.print_formats import setup_print_formats
 from dms_erp.warehouse.setup import setup_warehouse
 
@@ -33,6 +34,7 @@ def after_install():
 	setup_purchase()
 	setup_sales()
 	setup_print_formats()
+	setup_permissions()
 
 
 def after_migrate():
@@ -44,6 +46,7 @@ def after_migrate():
 	setup_purchase()
 	setup_sales()
 	setup_print_formats()
+	setup_permissions()
 
 
 def create_app_roles():
