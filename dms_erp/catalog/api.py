@@ -617,14 +617,15 @@ _AMBIGUOUS_MATCH_GAP = 0.05
 def resolve_item_by_name(dealer: str, text: str) -> dict:
 	"""Fallback for comms.flow_api.get_item_info, tried only once resolve_item_mention's
 	exact private-dealer-code match has already failed. Scoped to
-	dealer_catalog_api.catalog_for(dealer) -- the dealer's actual visible-and-sellable
-	catalog -- not just items they have an Item Dealer Code for: those are two
-	genuinely separate mechanisms (a Dealer Catalog assignment is "can this dealer see
-	and order this item at all"; an Item Dealer Code is an optional private shorthand
-	code layered on top), and a dealer routinely asks about a catalog-visible item
-	they were never assigned a private code for at all. An item outside catalog_for is
-	never matched into a reply, same visibility boundary resolve_dealer_code enforces
-	for its own, narrower case.
+	dealer_catalog_api.browsable_catalog_for(dealer) -- every currently-sellable item,
+	not just this dealer's own assigned subset -- not just items they have an Item
+	Dealer Code for either: those are two genuinely separate mechanisms (an Item Dealer
+	Code is an optional private shorthand code layered on top of browsability), and a
+	dealer routinely asks about an item they were never assigned a private code for at
+	all. ISS-2026-00644: a dealer can see/ask about ANY sellable item this way, assigned
+	or not -- dealer_catalog_api.catalog_for's narrower assigned set is what still gates
+	actually *ordering* it (comms.flow_api's WhatsApp order-placement path), not whether
+	a dealer can ask about it at all.
 
 	Two matching strategies, tried in order:
 	1. Exact, case-insensitive substring containment against the item's own code
@@ -664,9 +665,9 @@ def resolve_item_by_name(dealer: str, text: str) -> dict:
 	if not text:
 		return {"status": "none"}
 
-	from dms_erp.catalog.dealer_catalog_api import catalog_for
+	from dms_erp.catalog.dealer_catalog_api import browsable_catalog_for
 
-	item_codes = catalog_for(dealer)
+	item_codes = browsable_catalog_for(dealer)
 	if not item_codes:
 		return {"status": "none"}
 	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "item_name"])

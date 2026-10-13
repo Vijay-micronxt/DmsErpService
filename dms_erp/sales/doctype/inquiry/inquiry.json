@@ -8,6 +8,7 @@
  "field_order": [
   "dealer",
   "item",
+  "custom_requested_style",
   "qty",
   "contact_name",
   "contact_phone",
@@ -39,12 +40,19 @@
    "reqd": 1
   },
   {
+   "description": "ISS-2026-00636 / MOM 3.6 -- not reqd as of this ticket: a Custom Style request (custom_requested_style set instead) has no real catalog item behind it at all. Exactly one of item/custom_requested_style must be set -- enforced in sales.inquiry_api._create_inquiry, not here.",
    "fieldname": "item",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Item",
-   "options": "Item",
-   "reqd": 1
+   "options": "Item"
+  },
+  {
+   "description": "ISS-2026-00636 / MOM 3.6 -- WhatsApp's \"Custom Style\" option: a dealer describes a design that isn't in the item master at all, free text, rather than this app inventing a placeholder Item or an ERPNext Opportunity for it. Set instead of `item`, never alongside it.",
+   "fieldname": "custom_requested_style",
+   "fieldtype": "Data",
+   "label": "Requested Style (Custom)",
+   "depends_on": "eval:!doc.item"
   },
   {
    "fieldname": "qty",

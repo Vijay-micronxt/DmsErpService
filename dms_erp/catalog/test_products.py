@@ -462,11 +462,13 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"), {"status": "none"})
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, ""), {"status": "none"})
 
-	def test_resolve_item_by_name_never_matches_an_item_outside_the_dealers_catalog(self):
-		# A dealer with no Dealer Catalog record at all falls back to the full
-		# sellable catalog (dealer_catalog_api.catalog_for's own documented
-		# behavior) -- so the real boundary to test is a dealer with an explicit,
-		# narrow catalog assignment, not merely "no Item Dealer Code".
+	def test_resolve_item_by_name_matches_an_item_outside_the_dealers_catalog_too(self):
+		# ISS-2026-00644: resolve_item_by_name is scoped to browsable_catalog_for --
+		# every sellable item, not just this dealer's own Dealer Catalog assignment --
+		# so a dealer can be told about (and inquire on) an item they're not
+		# assigned, same as the dealer portal's get_catalog/get_item. Only actually
+		# *ordering* it stays assignment-gated (comms.flow_api's WhatsApp
+		# order-placement path, dealer_portal_api.convert_to_order).
 		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
 
 		catalog_api.create_product(
@@ -495,7 +497,10 @@ class TestProducts(FrappeTestCase):
 		inside = catalog_api.resolve_item_by_name(scoped_dealer, "Inside Catalog Item")
 		self.assertEqual(inside["status"], "matched")
 		self.assertEqual(inside["item"]["id"], "PROD-TEST-INSIDE")
-		self.assertEqual(catalog_api.resolve_item_by_name(scoped_dealer, "Outside Catalog Item"), {"status": "none"})
+
+		outside = catalog_api.resolve_item_by_name(scoped_dealer, "Outside Catalog Item")
+		self.assertEqual(outside["status"], "matched")
+		self.assertEqual(outside["item"]["id"], "PROD-TEST-OUTSIDE")
 
 	def test_resolve_item_by_name_asks_to_confirm_when_two_items_are_a_close_tie(self):
 		# BRD C.2.1's own example: "one finish or sub-type mistaken for another" --

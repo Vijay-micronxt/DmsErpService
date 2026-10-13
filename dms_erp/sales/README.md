@@ -12,10 +12,22 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   `pacific-tileflow`'s inquiries are still static read-only seed data with no
   create/update wired up client-side — this module builds the real, mutable backend
   the BRD describes; the frontend needs its own follow-up work to call it.
-  `create_inquiry` (Phase 14) enforces the same catalog gate `create_quotation`
-  always has — dealer-assigned visibility and current sellability — so a hidden or
-  Pulled Back item is rejected here too, not just further down the funnel at the
-  Quotation step.
+  `create_inquiry` (Phase 14) used to enforce the same catalog gate `create_quotation`
+  always has — dealer-assigned visibility and current sellability. ISS-2026-00644
+  dropped the assigned-visibility half for inquiries specifically: a dealer can now
+  inquire on an item Purchase hasn't assigned to them yet (that's the point of
+  "inquire-only" on an unassigned item — see catalog/README.md's
+  `browsable_catalog_for`); only ordering it still requires assignment, further down
+  the funnel at the Quotation/Order step. A Pulled Back item is still rejected here
+  either way. `item` itself is no longer always required (ISS-2026-00636 / MOM 3.6,
+  "Custom Style") — a free-text `requested_style` can be given instead, for a design
+  that isn't in the item master at all (comms.flow_api's new
+  `create_custom_style_inquiry`, the WhatsApp menu's "Custom Style" option, is the
+  only caller today). Deliberately not an ERPNext Opportunity and not a placeholder
+  Item record — every item-shaped step of `_create_inquiry` (sellability, duplicate
+  check, stock-derived status, the Opportunity mirror) is skipped for one of these;
+  `dealer_portal_api.convert_to_order` rejects converting one to an order outright,
+  since there's no real item to build a Sales Order line from.
 - **Quotation** (`quotation_api.py`) — ERPNext's native `Quotation` doctype,
   submitted immediately on creation (no draft step, same pattern as Phase 4's
   Purchase Order). Custom fields only for the retail markup % and freight (BRD
@@ -33,7 +45,13 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   `update_quotation_status` (Phase 14) only supports setting `Lost` — every other
   status is a side effect of create/amend/`convert_to_order`, not something a
   caller sets directly — via ERPNext's own `declare_enquiry_lost`, the native way
-  this doctype supports a manual post-submit status change.
+  this doctype supports a manual post-submit status change. `custom_delivery_pincode`
+  (ISS-2026-00633, free text) plus `suggest_transport_rate` and the new **Transport
+  Rate Zone** doctype give the Quotation Builder a freight *suggestion* keyed by
+  exact pincode — never an enforced rate, since no real pincode/zone rate table
+  exists yet (that's Pacific's own data to supply); the master is empty by default
+  and `suggest_transport_rate` returns `None`, not a guess, for any pincode without
+  a row.
 - **Order** (`order_api.py`) — ERPNext's native `Sales Order`. Pacific's warehouse-
   fulfillment stages (Confirmed → Picking → Ready to Dispatch → Dispatched →
   Delivered/Cancelled) are a distinct operational flow layered on top via a custom
@@ -77,3 +95,13 @@ Pick Tasks; everyone reads.
   Quotation to an Order carries its channel across; `purchase.reorder_api` now
   actually filters `recentRetailSalesQty` to `channel = 'Retail'`, making that
   docstring's claim true for the first time.
+- **Dealer inactivity** (`dealer_activity.py`, MOM §3.7 / action item #6) — daily
+  job flags a dealer `custom_inactive` after `DMS Sales Settings.dealer_inactivity_days`
+  (90) with no Sales Order, Sales Invoice (incl. Tally history), Inquiry or inbound
+  WhatsApp message, and sends one in-app notification when dealers *newly* cross the
+  line (to `inactive_dealer_notify_user`, else all DMS Management). Informational
+  only — nothing is blocked. `Customer.creation` is only the fallback for a dealer
+  with no activity at all, not a floor under real activity: the migration created
+  every Customer on one day, and a live check found 265 of 394 dealers dormant.
+  Monthly, `notify_active_dealer_numbers` announces the `active_dealer_numbers` list
+  (WhatsApp Business compliance); what's done with that list stays outside dms_erp.

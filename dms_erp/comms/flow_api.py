@@ -71,6 +71,7 @@ import frappe
 
 from dms_erp.comms.api import _log_inbound_message, _send_message
 from dms_erp.phone_utils import dealer_for_phone
+from dms_erp.sales.utils import dealer_contact_line
 
 _ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b|\baur\b|और)\s*", re.IGNORECASE)
 
@@ -78,7 +79,15 @@ _ITEM_LIST_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\n|\band\b|\baur\b|और)\s*", r
 # item ("White tiles 40 boxes available?") -- requires an explicit unit word, never
 # bare trailing digits, since this app's own item codes routinely end in digits
 # (GVT-6013, AAS-001) and would otherwise be misread as a quantity.
-_QTY_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:box(?:es)?|pcs?|pieces?|units?)\s*$", re.IGNORECASE)
+#
+# WhatsApp Inquiry gap #6: dealers also bracket the quantity -- "BCH(220 box)",
+# "BCH [220 boxes]" -- and end with a question mark/full stop. Both are accepted:
+# an optional opening "("/"[" before the number, an optional matching close and
+# trailing ".?!" after the unit word. The unit word itself stays mandatory, for
+# the same item-codes-end-in-digits reason as above.
+_QTY_UNIT_RE = re.compile(
+	r"[(\[]?\s*(\d+(?:\.\d+)?)\s*(?:box(?:es)?|pcs?|pieces?|units?)\s*[)\]]?\s*[.?!]*\s*$", re.IGNORECASE
+)
 
 
 def _parse_lead_dict(lead) -> dict:
@@ -278,7 +287,7 @@ def get_item_info(lead=None, **kwargs):
 	lots. No quantity given -- the dealer just typed a code/name -- falls back to
 	that same flat total exactly as before this was added."""
 	from dms_erp.pricing.api import get_price_for_dealer
-	from dms_erp.warehouse.utils import suggest_batch_combination, total_stock_for_item
+	from dms_erp.warehouse.utils import all_batches, suggest_batch_combination, total_stock_for_item
 
 	phone, text = _lead_fields(lead)
 	dealer = dealer_for_phone(phone)
@@ -315,10 +324,19 @@ def get_item_info(lead=None, **kwargs):
 			else:
 				line = f"{label} only has {int(combo['totalBoxes'])} boxes across its available batches — short of your {int(qty)}."
 		else:
-			# No quantity given, or on_hand is real Bin stock with no matching Batch
-			# lots to break it down by (a data inconsistency, not the common case) --
-			# either way the flat total is the only thing there's data for.
-			line = f"{label} is in stock — {int(on_hand)} boxes available."
+			# No quantity given (WhatsApp gap #2: "if multiple batches are
+			# available, all the batches should list down with the individual
+			# quantities") -- every batch, not just the flat Bin total, whenever
+			# there's more than one to actually break down. A single batch, or
+			# on_hand being real Bin stock with no matching Batch lots at all (a
+			# data inconsistency, not the common case), falls back to the flat
+			# total -- there's nothing more specific to say in either case.
+			batches = all_batches(item["id"])
+			if len(batches) > 1:
+				parts = " + ".join(f"Batch {b['batchNumber']} ({int(b['boxes'])})" for b in batches)
+				line = f"{label} is in stock — {parts} ({int(on_hand)} boxes total)."
+			else:
+				line = f"{label} is in stock — {int(on_hand)} boxes available."
 
 		if price_visible:
 			rate = get_price_for_dealer(item["id"], dealer)
@@ -539,11 +557,30 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	if po_number:
 		from frappe.utils import add_days, today
 
+		from dms_erp.catalog.dealer_catalog_api import is_visible
 		from dms_erp.sales.credit_limit import gate_credit_limit
 		from dms_erp.sales.order_api import _estimate_order_value
 		from dms_erp.sales.utils import safe_customer_message
 
-		qty = _QTY_BAND_MIDPOINT.get(variables.get("order_qty_band"), 1)
+		# ISS-2026-00644: an item outside this dealer's assigned Dealer Catalog can be
+		# looked up and inquired on over WhatsApp (see catalog.api.resolve_item_by_name),
+		# but never ordered through this Place-Order step -- same assigned/orderable
+		# boundary dealer_portal_api.convert_to_order enforces for the portal. Falls
+		# through to the ordinary Inquiry branch below rather than a hard dead end, so
+		# the dealer still gets a useful outcome (staff follow-up) instead of silence.
+		if not is_visible(dealer, item_code):
+			reply = (
+				"This item isn't yet set up for ordering on your account. We've noted your "
+				"enquiry and our team will follow up to get it added."
+			)
+			try:
+				inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=1, source="WhatsApp", remarks=note)
+				_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
+			except (frappe.PermissionError, frappe.ValidationError):
+				_send_message(dealer, reply, related_type="General")
+			return {"message": reply}
+
+		qty = _resolve_order_qty(variables.get("order_qty_band"))
 		lines = [{"item": item_code, "qty": qty}]
 		create_kwargs = dict(dealer=dealer, lines=lines, expected_dispatch=add_days(today(), 7), customer_po=po_number)
 
@@ -568,7 +605,7 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			# every real ERPNext validation (taxes, a concurrent order, etc.), so
 			# _create_order can still raise here -- never forward that raw text
 			# to a dealer.
-			reply = safe_customer_message(e)
+			reply = safe_customer_message(e, dealer)
 			_send_message(dealer, reply, related_type="General")
 			return {"message": reply}
 
@@ -588,10 +625,56 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	try:
 		inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=1, source="WhatsApp", remarks=note)
 	except (frappe.PermissionError, frappe.ValidationError):
-		reply = "We couldn't raise this enquiry against your account. Please contact your Pacific representative."
+		reply = f"We couldn't raise this enquiry against your account. {dealer_contact_line(dealer)}"
 		_send_message(dealer, reply, related_type="General")
 		return {"message": reply}
 
 	reply = "Thanks — we've noted your enquiry and someone from our team will follow up shortly."
+	_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
+	return {"message": reply}
+
+
+@frappe.whitelist()
+def create_custom_style_inquiry(lead=None, **kwargs):
+	"""Flow event `custom_style.create` -- the new "🎨 Custom Style" menu option
+	(MOM 3.6 / ISS-2026-00636): "for designs not in the item master, dealers can
+	select a Custom Style option and type the item name, creating an inquiry
+	record without requiring immediate item creation in the inventory master."
+	Explicitly NOT an ERPNext Opportunity, in the bot or the backend -- a Custom
+	Style request has no real item behind it at all, so it's logged the same way
+	every other WhatsApp inquiry is: a genuine Inquiry (sales.inquiry_api.
+	_create_inquiry's new `requested_style` param, Opportunity-mirror skipped for
+	exactly this reason -- see that function's own docstring), not a second,
+	parallel "thing a dealer asked for" concept.
+
+	lead.message is the style/design name the dealer typed after tapping Custom
+	Style -- this Flow node is reached by its own menu branch (not get_item_info's
+	lookup step), so there's no earlier resolved item to confuse this with.
+
+	This dealer never gets an order_item_code set as a side effect of this branch
+	(unlike a real catalog lookup via get_item_info), so a dealer who tapped
+	"🛒 Place Order" straight after a Custom Style request falls through to
+	create_dealer_opportunity's own existing "we couldn't tell which item this
+	enquiry is for" reply, unchanged -- there is nothing to order yet, by
+	construction, and nothing new needed here to guarantee that."""
+	phone, text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+	if not text:
+		return {"message": "Please describe the style or design you're looking for."}
+
+	_log_inbound_message(dealer, text, related_type="General")
+
+	from dms_erp.sales.inquiry_api import _create_inquiry
+
+	try:
+		inquiry = _create_inquiry(dealer=dealer, item=None, qty=1, source="WhatsApp", requested_style=text)
+	except (frappe.PermissionError, frappe.ValidationError):
+		reply = f"We couldn't log this request against your account. {dealer_contact_line(dealer)}"
+		_send_message(dealer, reply, related_type="General")
+		return {"message": reply}
+
+	reply = "Thanks — we've noted your custom style request and our team will follow up shortly."
 	_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
 	return {"message": reply}

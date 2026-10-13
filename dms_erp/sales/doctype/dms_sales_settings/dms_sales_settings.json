@@ -5,7 +5,9 @@
  "engine": "InnoDB",
  "field_order": [
   "dealer_classification_window_days",
-  "discount_approval_threshold_pct"
+  "discount_approval_threshold_pct",
+  "dealer_inactivity_days",
+  "inactive_dealer_notify_user"
  ],
  "fields": [
   {
@@ -21,6 +23,20 @@
    "fieldname": "discount_approval_threshold_pct",
    "fieldtype": "Percent",
    "label": "Discount Approval Threshold %"
+  },
+  {
+   "default": "90",
+   "description": "MOM 07-Oct-2026 §3.7 / action item #6 -- \"a 3-month inactivity threshold will be applied to dealer accounts.\" A dealer with no Sales Order, Sales Invoice, Inquiry or inbound WhatsApp message in this many days is flagged Inactive by sales.dealer_activity.flag_inactive_dealers (daily).",
+   "fieldname": "dealer_inactivity_days",
+   "fieldtype": "Int",
+   "label": "Dealer Inactivity Threshold (Days)"
+  },
+  {
+   "description": "MOM §3.7 -- \"inactive dealers will be flagged and Prashant Sir will be notified.\" The one user notified when dealers go inactive, plus the monthly active-dealer-number digest. Left blank, every enabled DMS Management user is notified instead -- a named person is per-client config, never hardcoded.",
+   "fieldname": "inactive_dealer_notify_user",
+   "fieldtype": "Link",
+   "label": "Notify on Dealer Inactivity",
+   "options": "User"
   }
  ],
  "index_web_pages_for_search": 0,
