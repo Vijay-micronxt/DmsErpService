@@ -129,6 +129,10 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"size": item_doc.custom_size,
 		"finish": item_doc.custom_finish,
 		"color": item_doc.custom_color,
+		"colourAttribute1": item_doc.custom_colour_attribute_1,
+		"colourAttribute2": item_doc.custom_colour_attribute_2,
+		"designAttribute1": item_doc.custom_design_attribute_1,
+		"designAttribute2": item_doc.custom_design_attribute_2,
 		"series": item_doc.custom_series,
 		"seriesRef": item_doc.custom_series_ref,
 		"bulkQtyThreshold": item_doc.custom_bulk_qty_threshold,
@@ -175,6 +179,11 @@ def _product_filters(
 	category: str | None = None,
 	status: str | None = None,
 	supplier: str | None = None,
+	color: str | None = None,
+	colour_attribute_1: str | None = None,
+	colour_attribute_2: str | None = None,
+	design_attribute_1: str | None = None,
+	design_attribute_2: str | None = None,
 ) -> dict:
 	from dms_erp.catalog.dealer_catalog_api import catalog_for
 
@@ -185,6 +194,18 @@ def _product_filters(
 		filters["item_group"] = category
 	if status:
 		filters["custom_discontinuation_status"] = status
+	# ISS-2026-00632 -- colour/design attributes filterable alongside category/status,
+	# both here (staff Products list) and in dealer_portal_api.get_catalog.
+	if color:
+		filters["custom_color"] = color
+	if colour_attribute_1:
+		filters["custom_colour_attribute_1"] = colour_attribute_1
+	if colour_attribute_2:
+		filters["custom_colour_attribute_2"] = colour_attribute_2
+	if design_attribute_1:
+		filters["custom_design_attribute_1"] = design_attribute_1
+	if design_attribute_2:
+		filters["custom_design_attribute_2"] = design_attribute_2
 
 	# dealer and supplier can only be expressed as explicit item-code lists (dealer
 	# via catalog_for; supplier via Item Price Proposal -- name==item, autoname
@@ -210,10 +231,17 @@ def list_all_products(
 	category: str | None = None,
 	status: str | None = None,
 	supplier: str | None = None,
+	color: str | None = None,
+	colour_attribute_1: str | None = None,
+	colour_attribute_2: str | None = None,
+	design_attribute_1: str | None = None,
+	design_attribute_2: str | None = None,
 ) -> list[dict]:
 	"""Unpaginated -- for internal callers (reports) that need the full result set,
 	not a page of it. list_products (the whitelisted endpoint) is the paginated one."""
-	filters = _product_filters(dealer, search, category, status, supplier)
+	filters = _product_filters(
+		dealer, search, category, status, supplier, color, colour_attribute_1, colour_attribute_2, design_attribute_1, design_attribute_2
+	)
 	codes = frappe.get_all("Item", filters=filters, pluck="name", order_by="item_code asc")
 	return [_serialize(frappe.get_doc("Item", code)) for code in codes]
 
@@ -225,11 +253,18 @@ def list_products(
 	category: str | None = None,
 	status: str | None = None,
 	supplier: str | None = None,
+	color: str | None = None,
+	colour_attribute_1: str | None = None,
+	colour_attribute_2: str | None = None,
+	design_attribute_1: str | None = None,
+	design_attribute_2: str | None = None,
 	limit: int = 20,
 	offset: int = 0,
 ):
 	limit, offset = clamp(limit, offset)
-	filters = _product_filters(dealer, search, category, status, supplier)
+	filters = _product_filters(
+		dealer, search, category, status, supplier, color, colour_attribute_1, colour_attribute_2, design_attribute_1, design_attribute_2
+	)
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
 		"Item", filters=filters, pluck="name", order_by="item_code asc", limit_start=offset, limit_page_length=limit
@@ -261,6 +296,34 @@ def list_item_colors():
 	return sorted(set(values)) or COLOR_DEFAULTS
 
 
+def _distinct_item_values(fieldname: str) -> list[str]:
+	"""Same free-text-picker pattern as list_item_colors/list_series_finishes -- distinct
+	real values already in use, no fallback defaults (ISS-2026-00632's colour/design
+	attributes have no BRD-given example list the way finish/sub_finish or colour do)."""
+	values = frappe.get_all("Item", filters={fieldname: ["is", "set"]}, pluck=fieldname, distinct=True)
+	return sorted(set(values))
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_colour_attribute_1():
+	return _distinct_item_values("custom_colour_attribute_1")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_colour_attribute_2():
+	return _distinct_item_values("custom_colour_attribute_2")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_design_attribute_1():
+	return _distinct_item_values("custom_design_attribute_1")
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_design_attribute_2():
+	return _distinct_item_values("custom_design_attribute_2")
+
+
 @frappe.whitelist(methods=["POST"])
 def create_product(
 	code: str,
@@ -274,6 +337,10 @@ def create_product(
 	size: str | None = None,
 	finish: str | None = None,
 	color: str | None = None,
+	colour_attribute_1: str | None = None,
+	colour_attribute_2: str | None = None,
+	design_attribute_1: str | None = None,
+	design_attribute_2: str | None = None,
 	swatch: str | None = None,
 	status: str = "Active",
 	pieces_per_box: float = 0,
@@ -321,6 +388,10 @@ def create_product(
 			"custom_size": size,
 			"custom_finish": finish,
 			"custom_color": color,
+			"custom_colour_attribute_1": colour_attribute_1,
+			"custom_colour_attribute_2": colour_attribute_2,
+			"custom_design_attribute_1": design_attribute_1,
+			"custom_design_attribute_2": design_attribute_2,
 			"custom_series": series_label,
 			"custom_series_ref": series_ref,
 			"custom_bulk_qty_threshold": bulk_qty_threshold,
@@ -373,6 +444,10 @@ def update_product(item: str, patch: dict):
 		"size": "custom_size",
 		"finish": "custom_finish",
 		"color": "custom_color",
+		"colourAttribute1": "custom_colour_attribute_1",
+		"colourAttribute2": "custom_colour_attribute_2",
+		"designAttribute1": "custom_design_attribute_1",
+		"designAttribute2": "custom_design_attribute_2",
 		"swatch": "custom_swatch_color",
 		"status": "custom_discontinuation_status",
 		"piecesPerBox": "custom_pieces_per_box",
@@ -555,8 +630,11 @@ def resolve_item_by_name(dealer: str, text: str) -> dict:
 	1. Exact, case-insensitive substring containment against the item's own code
 	   ("RUSTIC-GREY" inside "PT-4040-RUSTIC-GREY") -- a dealer shortens the real
 	   item code at least as often as they type its name, and this needs no fuzzy
-	   tolerance since it's already an exact match once case is ignored. Always
-	   confident -- there's no ratio to be unsure about here.
+	   tolerance since it's already an exact match once case is ignored. Confident
+	   only when exactly one item's code contains it -- two or more codes sharing
+	   the typed fragment (e.g. "BCH" inside both "BCH-001" and "BCH-002") is
+	   BRD C.2.1's "multiple candidates" case, not a free pass to answer with
+	   whichever one happened to be first in an unordered query result.
 	2. A fuzzy match against the item's name, tolerant of a minor typo ("Royal Glass"
 	   for "Royal Glassy") and of the name being wrapped inside a full sentence --
 	   often in Hindi/Hinglish, with the item name itself still typed in Latin script
@@ -596,9 +674,14 @@ def resolve_item_by_name(dealer: str, text: str) -> dict:
 		return {"status": "none"}
 
 	upper_text = text.upper()
-	for item in items:
-		if upper_text in item.name.upper():
-			return {"status": "matched", "item": _serialize(frappe.get_doc("Item", item.name))}
+	code_matches = [item for item in items if upper_text in item.name.upper()]
+	if len(code_matches) == 1:
+		return {"status": "matched", "item": _serialize(frappe.get_doc("Item", code_matches[0].name))}
+	if len(code_matches) > 1:
+		return {
+			"status": "ambiguous",
+			"candidates": [_serialize(frappe.get_doc("Item", item.name)) for item in code_matches[:3]],
+		}
 
 	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
 	if not by_lower_name:

@@ -80,8 +80,19 @@ def list_all_trucks() -> list[dict]:
 def list_trucks(search: str | None = None, limit: int = 20, offset: int = 0):
 	limit, offset = clamp(limit, offset)
 	# Inward Truck's own name is a random hash (autoname: hash), not something a user
-	# would ever type — the LR number is the human-facing identifier for a truck.
-	filters = {"lr_number": ["like", f"%{search}%"]} if search else {}
+	# would ever type. ISS-2026-00630 / BRD §C.12: LR Number is the primary search key
+	# for an inward shipment, vehicle number the secondary -- one search box matching
+	# either. Resolved to an explicit id list (same pattern as catalog.api's dealer/
+	# supplier restrictions) rather than frappe.db.count's or_filters, which it doesn't
+	# accept, only filters does.
+	if search:
+		pattern = ["like", f"%{search}%"]
+		matches = set(frappe.get_all("Inward Truck", filters={"lr_number": pattern}, pluck="name")) | set(
+			frappe.get_all("Inward Truck", filters={"vehicle_number": pattern}, pluck="name")
+		)
+		filters = {"name": ["in", list(matches) or [""]]}
+	else:
+		filters = {}
 	total = frappe.db.count("Inward Truck", filters=filters)
 	names = frappe.get_all(
 		"Inward Truck", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
