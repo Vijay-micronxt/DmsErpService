@@ -37,9 +37,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, today
 
-from dms_erp.catalog.utils import is_reorderable, item_default_supplier
-from dms_erp.purchase.utils import resolve_moq
-from dms_erp.warehouse.utils import total_stock_for_item
+from dms_erp.catalog.utils import is_reorderable
 
 SALES_VELOCITY_WINDOW_DAYS = 180
 DEFAULT_TARGET_STOCK_MONTHS = 3
@@ -116,13 +114,71 @@ def _grouped_open_purchase_orders() -> dict[str, list[dict]]:
 	return grouped
 
 
+def _bulk_stock_for_items(item_codes: list[str]) -> dict[str, float]:
+	"""Same figure as total_stock_for_item, for every item in one query -- calling
+	that per item (one Bin query each) is the dominant cost of reorder_suggestions
+	across the full item master (used by the Purchase dashboard and reorder report)."""
+	if not item_codes:
+		return {}
+	rows = frappe.db.sql(
+		"select item_code, sum(actual_qty) as qty from `tabBin` where item_code in %(items)s group by item_code",
+		{"items": item_codes},
+		as_dict=True,
+	)
+	return {r.item_code: float(r.qty or 0) for r in rows}
+
+
+def _bulk_resolve_moq(item_codes: list[str], default_supplier_by_item: dict[str, str | None]) -> dict[str, int]:
+	"""Same Item -> Supplier -> Company resolution as purchase.utils.resolve_moq
+	(kind="stock"), batched -- resolve_moq's own frappe.db.get_single_value call on
+	DMS Purchase Settings isn't Redis-cached, so calling it once per item (most items
+	have neither an item- nor supplier-level MOQ, so every one of them falls through
+	to that query) was a real, uncached database round trip per item."""
+	items = {i.name: i.custom_moq for i in frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_moq"])}
+	suppliers = {s for s in default_supplier_by_item.values() if s}
+	supplier_moq = (
+		{s.name: s.custom_moq for s in frappe.get_all("Supplier", filters={"name": ["in", list(suppliers)]}, fields=["name", "custom_moq"])}
+		if suppliers
+		else {}
+	)
+	default_moq = frappe.db.get_single_value("DMS Purchase Settings", "default_moq") or 0
+	result = {}
+	for code in item_codes:
+		item_moq = items.get(code)
+		supplier = default_supplier_by_item.get(code)
+		result[code] = item_moq or (supplier_moq.get(supplier) if supplier else None) or default_moq
+	return result
+
+
+def _bulk_default_supplier(item_codes: list[str]) -> dict[str, str | None]:
+	"""Same resolution as catalog.utils.item_default_supplier (own supplier, else the
+	Series' supplier), batched -- called twice per item in reorder_suggestions, so a
+	per-item get_cached_value round trip there means two cache hits per item for
+	every item in the master, not one real query; this makes it one query each way."""
+	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_default_supplier", "custom_series_ref"])
+	series_refs = {i.custom_series_ref for i in items if not i.custom_default_supplier and i.custom_series_ref}
+	supplier_by_series = (
+		{s.name: s.supplier for s in frappe.get_all("Product Series", filters={"name": ["in", list(series_refs)]}, fields=["name", "supplier"])}
+		if series_refs
+		else {}
+	)
+	return {
+		i.name: i.custom_default_supplier or (supplier_by_series.get(i.custom_series_ref) if i.custom_series_ref else None)
+		for i in items
+	}
+
+
 @frappe.whitelist(methods=["GET"])
 def reorder_suggestions():
 	items = frappe.get_all("Item", fields=["name", "custom_discontinuation_status", "lead_time_days", "custom_moq"])
+	item_codes = [i.name for i in items]
 	missed_by_item = _grouped_inquiry_qty(MISSED_DEMAND_STATUSES)
 	pending_by_item = _grouped_inquiry_qty(PENDING_INQUIRY_STATUSES)
 	sales_by_item = _grouped_recent_sales_qty()
 	open_po_by_item = _grouped_open_purchase_orders()
+	stock_by_item = _bulk_stock_for_items(item_codes)
+	default_supplier_by_item = _bulk_default_supplier(item_codes)
+	moq_by_item = _bulk_resolve_moq(item_codes, default_supplier_by_item)
 	target_stock_months = (
 		frappe.db.get_single_value("DMS Purchase Settings", "target_stock_months") or DEFAULT_TARGET_STOCK_MONTHS
 	)
@@ -130,14 +186,14 @@ def reorder_suggestions():
 	suggestions = [
 		_suggestion_for(
 			item,
-			total_stock_for_item(item.name),
+			stock_by_item.get(item.name, 0),
 			missed_by_item.get(item.name, 0),
 			pending_by_item.get(item.name, 0),
 			sales_by_item.get(item.name, 0),
 			open_po_by_item.get(item.name, []),
-			# BRD C.4.2 -- Item -> (default) Supplier -> Company, not just Item -> Company.
-			resolve_moq(item.name, item_default_supplier(item.name), kind="stock"),
+			moq_by_item.get(item.name, 0),
 			target_stock_months,
+			default_supplier_by_item.get(item.name),
 		)
 		for item in items
 	]
@@ -155,6 +211,7 @@ def _suggestion_for(
 	open_purchase_orders: list[dict],
 	moq: float = 0,
 	target_stock_months: float = DEFAULT_TARGET_STOCK_MONTHS,
+	default_supplier: str | None = None,
 ) -> dict:
 	status = item.custom_discontinuation_status or "Active"
 	non_reorderable = not is_reorderable(status)
@@ -212,7 +269,7 @@ def _suggestion_for(
 		"productId": item.name,
 		# BRD D.2 -- who a raised PO would default to; see catalog.utils.item_default_supplier.
 		# None here means Purchase must pick one by hand when acting on this suggestion.
-		"defaultSupplier": item_default_supplier(item.name),
+		"defaultSupplier": default_supplier,
 		"currentStock": current_stock,
 		"missedDemandQty": missed_demand_qty,
 		"pendingInquiryQty": pending_inquiry_qty,

@@ -167,17 +167,42 @@ def list_stock_lots(bay: str | None = None, item: str | None = None) -> list[dic
 		as_dict=True,
 	)
 
+	# Bulk-fetch everything the loop below needs instead of one query (or one
+	# get_cached_doc/get_cached_value round trip) per row -- with a few thousand
+	# rows spanning a few hundred distinct items/bays/batches, that N+1 pattern is
+	# the actual cost of this endpoint (list_stock_lots backs the Stock View page).
+	item_codes = {r.item_code for r in rows}
+	bays = {r.bay for r in rows}
+	batch_nos = {r.batch_no for r in rows if r.batch_no}
+
+	items_by_code = {
+		d.name: d
+		for d in frappe.get_all(
+			"Item",
+			filters={"name": ["in", list(item_codes)]},
+			fields=["name", "item_name", "item_group", "custom_weight_per_box_kg", "custom_pieces_per_box", "custom_sqft_per_box"],
+		)
+	}
+	bay_type_by_name = (
+		{w.name: w.custom_bay_type for w in frappe.get_all("Warehouse", filters={"name": ["in", list(bays)]}, fields=["name", "custom_bay_type"])}
+		if bays
+		else {}
+	)
+	# A real batch's own weight (BRD C.1.3/C.6.1) can differ from the Item's standard
+	# weight -- prefer it, falling back to the Item's own weight for any batch created
+	# before this field existed (custom_batch_weight_kg unset).
+	batch_weight_by_no = (
+		{b.name: b.custom_batch_weight_kg for b in frappe.get_all("Batch", filters={"name": ["in", list(batch_nos)]}, fields=["name", "custom_batch_weight_kg"]) if b.custom_batch_weight_kg is not None}
+		if batch_nos
+		else {}
+	)
+
 	out = []
 	for row in rows:
-		item_doc = frappe.get_cached_doc("Item", row.item_code)
-		bay_type = frappe.get_cached_value("Warehouse", row.bay, "custom_bay_type")
+		item_doc = items_by_code[row.item_code]
+		bay_type = bay_type_by_name.get(row.bay)
 		is_damage_bay = bay_type in DAMAGE_BAY_TYPES
-		# A real batch's own weight (BRD C.1.3/C.6.1) can differ from the Item's
-		# standard weight -- prefer it, falling back to the Item's own weight for
-		# any batch created before this field existed (custom_batch_weight_kg unset).
-		weight_per_box_kg = frappe.db.get_value("Batch", row.batch_no, "custom_batch_weight_kg") if row.batch_no else None
-		if weight_per_box_kg is None:
-			weight_per_box_kg = item_doc.custom_weight_per_box_kg
+		weight_per_box_kg = batch_weight_by_no.get(row.batch_no, item_doc.custom_weight_per_box_kg)
 		pieces_per_box = item_doc.custom_pieces_per_box
 		sqft_per_box = item_doc.custom_sqft_per_box
 		sqm_per_box = round(sqft_per_box * SQFT_TO_SQM, 4) if sqft_per_box is not None else None
