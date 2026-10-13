@@ -62,6 +62,22 @@ class TestDealerCatalog(FrappeTestCase):
 		self.assertTrue(api.is_visible(self.dealer, self.item_a))
 		self.assertIn(self.item_a, api.catalog_for(self.dealer))
 
+	def test_browsable_catalog_for_includes_unassigned_items(self):
+		# ISS-2026-00644: browsable_catalog_for ignores assignment entirely -- a
+		# restricted dealer still sees every sellable item through this one.
+		api.set_product_visibility(self.dealer, self.item_a, True)
+		self.assertNotIn(self.item_b, api.catalog_for(self.dealer))
+		self.assertIn(self.item_a, api.browsable_catalog_for(self.dealer))
+		self.assertIn(self.item_b, api.browsable_catalog_for(self.dealer))
+
+	def test_browsable_catalog_for_still_excludes_pulled_back_items(self):
+		frappe.db.set_value("Item", self.item_a, "custom_discontinuation_status", "Pulled Back")
+		try:
+			self.assertNotIn(self.item_a, api.browsable_catalog_for(self.dealer))
+			self.assertIn(self.item_b, api.browsable_catalog_for(self.dealer))
+		finally:
+			frappe.db.set_value("Item", self.item_a, "custom_discontinuation_status", "Active")
+
 	def test_set_product_visibility_creates_restricted_catalog(self):
 		api.set_product_visibility(self.dealer, self.item_a, True)
 

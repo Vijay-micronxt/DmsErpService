@@ -70,12 +70,24 @@ def is_visible(dealer: str, item: str) -> bool:
 
 @frappe.whitelist(methods=["GET"])
 def catalog_for(dealer: str):
-	"""Item codes a dealer is allowed to inquire/quote for — assignment (or the
-	unassigned-dealer fallback to everything) narrowed to currently-sellable items."""
+	"""Item codes a dealer is allowed to order/quote for — assignment (or the
+	unassigned-dealer fallback to everything) narrowed to currently-sellable items.
+	This is the ORDERABLE set; see browsable_catalog_for for the wider, view-only one."""
 	if not frappe.db.exists("Dealer Catalog", dealer):
 		return _sellable_item_codes(frappe.get_all("Item", pluck="name"))
 	assigned = frappe.get_all("Dealer Catalog Item", filters={"parent": dealer}, pluck="item")
 	return _sellable_item_codes(assigned)
+
+
+@frappe.whitelist(methods=["GET"])
+def browsable_catalog_for(dealer: str):
+	"""ISS-2026-00644 — "dealers can see unassigned items too, but can only inquire,
+	not order, on them." Every currently-sellable item in the system, regardless of
+	this dealer's own Dealer Catalog assignment: a dealer may always see/inquire on
+	any sellable item, but catalog_for's narrower assigned set is still what's
+	actually orderable (dealer_portal_api.convert_to_order and comms.flow_api's
+	WhatsApp order-placement path both still gate on catalog_for/is_visible)."""
+	return _sellable_item_codes(frappe.get_all("Item", pluck="name"))
 
 
 def _set_product_visibility(dealer: str, item: str, visible: bool) -> dict:

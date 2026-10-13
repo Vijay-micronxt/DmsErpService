@@ -255,6 +255,15 @@ def top_batches(item: str, n: int = 3) -> list[dict]:
 	return _ranked_batches(item)[:n]
 
 
+def all_batches(item: str) -> list[dict]:
+	"""Every batch of an item, ranked largest first -- the uncapped sibling of
+	top_batches, for a caller that genuinely needs the full breakdown rather than
+	a capped preview (comms.flow_api's WhatsApp gap #2: "if multiple batches are
+	available, all the batches should list down with the individual quantities,"
+	not just a flat total or a top-3 preview)."""
+	return _ranked_batches(item)
+
+
 def suggest_batch_combination(item: str, required_qty: float) -> dict:
 	"""BRD C.2.2: reply suggests a batch meeting the required qty; if no single
 	batch suffices, suggest a 2-3 batch combination. Greedy, largest-first — not

@@ -52,6 +52,25 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(quotation["lines"][0]["rate"], 560)  # round(500 * 1.12)
 		self.assertEqual(quotation["channel"], "Retail")  # default
 
+	def test_create_quotation_stores_delivery_pincode(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12, delivery_pincode="560001"
+		)
+		self.assertEqual(quotation["deliveryPincode"], "560001")
+
+	def test_suggest_transport_rate_returns_none_for_unknown_pincode(self):
+		self.assertIsNone(quotation_api.suggest_transport_rate("999999"))
+
+	def test_suggest_transport_rate_matches_an_exact_pincode(self):
+		frappe.get_doc({"doctype": "Transport Rate Zone", "pincode": "560001", "suggested_freight": 4500}).insert(
+			ignore_permissions=True
+		)
+		try:
+			suggestion = quotation_api.suggest_transport_rate("560001")
+			self.assertEqual(suggestion["suggestedFreight"], 4500)
+		finally:
+			frappe.delete_doc("Transport Rate Zone", "560001", force=True, ignore_permissions=True)
+
 	def test_quotation_line_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_weight_per_box_kg", 28)
 		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)

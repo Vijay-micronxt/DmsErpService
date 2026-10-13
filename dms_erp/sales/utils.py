@@ -120,7 +120,37 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _EMAIL_RE = re.compile(r"\S+@\S+\.\S+")
 
 
-def safe_customer_message(error: Exception) -> str:
+_GENERIC_CONTACT_LINE = "Please contact your Pacific representative."
+
+
+def dealer_contact_line(dealer: str | None) -> str:
+	"""WhatsApp Inquiry gap #5: "when any error is faced while creating quotation or
+	orders, the point of contact email and person details should be in list form...
+	mostly it will be the sales person assigned to that particular dealer."
+
+	safe_customer_message deliberately strips every name/email out of ERPNext's own
+	error text, because that text named *internal* Credit Controller users -- the
+	wrong people, leaked by accident. This is the opposite: the dealer's *own*
+	assigned salesperson (Customer.custom_salesperson, BRD C.12.3), whose contact
+	details the dealer is meant to have. Appended after any stripping, never fed
+	through it. Falls back to the generic line when no salesperson is assigned, or
+	the linked User has no contact details worth listing."""
+	salesperson = frappe.db.get_value("Customer", dealer, "custom_salesperson") if dealer else None
+	if not salesperson:
+		return _GENERIC_CONTACT_LINE
+	user = frappe.db.get_value("User", salesperson, ["full_name", "mobile_no", "phone", "email"], as_dict=True)
+	if not user:
+		return _GENERIC_CONTACT_LINE
+	lines = [f"• Name: {user.full_name or salesperson}"]
+	phone = user.mobile_no or user.phone
+	if phone:
+		lines.append(f"• Phone: {phone}")
+	if user.email:
+		lines.append(f"• Email: {user.email}")
+	return "Please contact your sales representative:\n" + "\n".join(lines)
+
+
+def safe_customer_message(error: Exception, dealer: str | None = None) -> str:
 	"""Some exceptions this app's own code raises when an order can't be placed are
 	already plain, dealer-safe text (e.g. "{item} has no approved dealer price
 	yet."). ERPNext's own native validation -- most notably its built-in Sales
@@ -141,15 +171,20 @@ def safe_customer_message(error: Exception) -> str:
 	marker onward, strip any remaining HTML tags and stray email addresses
 	(belt-and-suspenders, in case some other ERPNext message includes emails
 	without this exact marker), and collapse whitespace. Only fall back to a
-	fully generic message if nothing useful survives that cleanup."""
+	fully generic message if nothing useful survives that cleanup.
+
+	`dealer`, when given, swaps the closing "contact your Pacific representative"
+	for that dealer's own assigned salesperson's details (dealer_contact_line) --
+	added *after* the email-stripping above, so it's never itself stripped."""
 	text = str(error)
 	text = _INTERNAL_CONTACT_LIST_MARKER_RE.sub("", text)
 	text = _HTML_TAG_RE.sub(" ", text)
 	text = _EMAIL_RE.sub("", text)
 	text = re.sub(r"\s+", " ", text).strip().strip(".,:;- ").strip()
+	contact = dealer_contact_line(dealer)
 	if not text:
-		return "We couldn't place this order right now. Please contact your Pacific representative."
-	return f"We couldn't place this order: {text}. Please contact your Pacific representative."
+		return f"We couldn't place this order right now. {contact}"
+	return f"We couldn't place this order: {text}. {contact}"
 
 
 def clear_unrequested_default_tax(doc) -> None:

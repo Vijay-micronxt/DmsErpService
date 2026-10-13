@@ -44,6 +44,16 @@ class TestExtractQty(FrappeTestCase):
 		# whether "40" is a quantity or just part of what the dealer typed.
 		self.assertEqual(flow_api._extract_qty("GVT-6013 40"), ("GVT-6013 40", None))
 
+	def test_extracts_a_bracketed_quantity(self):
+		# WhatsApp Inquiry gap #6 -- "Either accept all sort of formats like BCH(220 box)".
+		self.assertEqual(flow_api._extract_qty("BCH(220 box)"), ("BCH", 220.0))
+		self.assertEqual(flow_api._extract_qty("BCH (220 boxes)"), ("BCH", 220.0))
+		self.assertEqual(flow_api._extract_qty("BCH [220 boxes]"), ("BCH", 220.0))
+		self.assertEqual(flow_api._extract_qty("BCH(220box)."), ("BCH", 220.0))
+
+	def test_tolerates_trailing_punctuation(self):
+		self.assertEqual(flow_api._extract_qty("White tiles 40 boxes?"), ("White tiles", 40.0))
+
 
 class TestGetItemInfo(FrappeTestCase):
 	"""resolve_item_mention/total_stock_for_item have their own tests elsewhere
@@ -276,6 +286,50 @@ class TestGetItemInfo(FrappeTestCase):
 		)
 
 		self.assertIn("is in stock — 45 boxes available", result["message"])
+
+	@patch("dms_erp.pricing.api.get_price_for_dealer")
+	@patch("dms_erp.warehouse.utils.all_batches")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_lists_every_batch_when_no_quantity_is_given_and_several_batches_exist(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_all_batches, mock_price
+	):
+		# Gap #2 (WhatsApp Inquiry sheet): "if multiple batches are available, all
+		# the batches should list down with the individual quantities" -- a bare
+		# "is it in stock" with no quantity typed must no longer collapse several
+		# real batches into one flat total.
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0030"}
+		mock_stock.return_value = 70.0
+		mock_all_batches.return_value = [
+			{"batchNumber": "A030", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 45.0},
+			{"batchNumber": "A031", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 25.0},
+		]
+		mock_price.return_value = None
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		self.assertIn("Batch A030 (45)", result["message"])
+		self.assertIn("Batch A031 (25)", result["message"])
+		self.assertIn("70 boxes total", result["message"])
+
+	@patch("dms_erp.warehouse.utils.all_batches")
+	@patch("dms_erp.warehouse.utils.total_stock_for_item")
+	@patch("dms_erp.sales.inquiry_api._create_inquiry")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_single_batch_still_uses_the_flat_total_not_a_one_line_breakdown(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_all_batches
+	):
+		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
+		mock_create_inquiry.return_value = {"id": "INQ-0031"}
+		mock_stock.return_value = 45.0
+		mock_all_batches.return_value = [{"batchNumber": "A030", "itemCode": "GVT-6013", "itemName": "Nordic Oak", "boxes": 45.0}]
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
+
+		self.assertIn("is in stock — 45 boxes available", result["message"])
+		self.assertNotIn("Batch A030", result["message"])
 
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
@@ -871,3 +925,70 @@ class TestCreateDealerOpportunity(FrappeTestCase):
 		mock_create_order.assert_not_called()
 		self.assertIn("credit limit", result["message"].lower())
 		self.assertNotIn("<", result["message"])
+
+	@patch("dms_erp.sales.order_api._create_order")
+	def test_place_order_on_an_unassigned_item_raises_an_inquiry_instead(self, mock_create_order):
+		# ISS-2026-00644: a dealer can look up/inquire on an item outside their own
+		# Dealer Catalog assignment over WhatsApp (resolve_item_by_name is now scoped
+		# to browsable_catalog_for), but the Place-Order step must never actually
+		# book it -- same assigned/orderable boundary dealer_portal_api.convert_to_order
+		# enforces for the portal.
+		from dms_erp.catalog.dealer_catalog_api import set_product_visibility
+
+		item = make_item("FLOW-UNASSIGNED-ITEM", "Vitrified")
+		other_item = make_item("FLOW-ASSIGNED-ITEM", "Vitrified")
+		dealer = make_dealer("Flow API Unassigned Item Dealer")
+		frappe.db.set_value("Customer", dealer, "custom_phone", "919777777777")
+		# Assigning anything at all creates dealer's Dealer Catalog record, taking it
+		# off the no-record-at-all full-access fallback every other test here relies on.
+		set_product_visibility(dealer, other_item, True)
+
+		result = flow_api.create_dealer_opportunity(
+			lead={
+				"event": "opportunity.create",
+				"phone": "919777777777",
+				"variables": {"order_item_code": item, "po_number": "PO-UNASSIGNED-1"},
+			}
+		)
+
+		mock_create_order.assert_not_called()
+		self.assertIn("isn't yet set up for ordering", result["message"])
+
+
+class TestCreateCustomStyleInquiry(FrappeTestCase):
+	"""custom_style.create -- the new "🎨 Custom Style" WhatsApp menu option
+	(MOM 3.6 / ISS-2026-00636): a design not in the item master at all, logged as
+	a genuine Inquiry (sales.inquiry_api._create_inquiry's `requested_style`),
+	never an ERPNext Opportunity."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		cls.dealer = make_dealer("Flow API Custom Style Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "919666666666")
+
+	def test_unresolvable_phone_replies_safely(self):
+		result = flow_api.create_custom_style_inquiry(
+			lead={"phone": "919999999998", "message": "Carrara Marble Look"}
+		)
+		self.assertIn("dealer account", result["message"])
+
+	def test_replies_safely_when_no_description_is_given(self):
+		result = flow_api.create_custom_style_inquiry(lead={"phone": "919666666666", "message": ""})
+		self.assertIn("describe the style", result["message"].lower())
+
+	def test_logs_a_genuine_inquiry_with_no_item_and_no_opportunity(self):
+		result = flow_api.create_custom_style_inquiry(
+			lead={"phone": "919666666666", "message": "Carrara Marble Look, 600x1200"}
+		)
+		self.assertIn("noted your custom style request", result["message"])
+
+		from dms_erp.sales.inquiry_api import list_all_inquiries
+
+		inquiries = [i for i in list_all_inquiries(dealer=self.dealer) if i["requestedStyle"]]
+		self.assertEqual(len(inquiries), 1)
+		self.assertIsNone(inquiries[0]["productId"])
+		self.assertEqual(inquiries[0]["requestedStyle"], "Carrara Marble Look, 600x1200")
+		self.assertEqual(inquiries[0]["source"], "WhatsApp")
+		self.assertIsNone(inquiries[0]["linkedOpportunity"])

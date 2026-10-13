@@ -156,15 +156,20 @@ class TestInquiryApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
 
-	def test_create_inquiry_rejects_item_outside_dealer_catalog(self):
-		restricted_item = make_item("INQ-RESTRICTED-ITEM", "Vitrified")
+	def test_create_inquiry_allows_item_outside_dealer_catalog(self):
+		# ISS-2026-00644: a dealer may inquire on an item Purchase hasn't assigned to
+		# their Dealer Catalog yet -- only ordering it stays gated to the assigned set
+		# (see dealer_portal_api.convert_to_order / comms.flow_api's WhatsApp order
+		# path), not inquiry creation.
+		unassigned_item = make_item("INQ-UNASSIGNED-ITEM", "Vitrified")
 		other_dealer = make_dealer("Inquiry Test Dealer 2")
 		# Assigning anything at all to other_dealer creates its Dealer Catalog record,
 		# which switches it off the unassigned-dealer full-catalog fallback.
 		dealer_catalog_api.set_product_visibility(other_dealer, self.item, True)
+		self.assertFalse(dealer_catalog_api.is_visible(other_dealer, unassigned_item))
 
-		with self.assertRaises(frappe.PermissionError):
-			inquiry_api.create_inquiry(dealer=other_dealer, item=restricted_item, qty=5, source="Phone")
+		inquiry = inquiry_api.create_inquiry(dealer=other_dealer, item=unassigned_item, qty=5, source="Phone")
+		self.assertEqual(inquiry["productId"], unassigned_item)
 
 	def test_create_inquiry_rejects_pulled_back_item(self):
 		item = make_item("INQ-PULLED-ITEM", "Vitrified")
@@ -172,6 +177,52 @@ class TestInquiryApi(FrappeTestCase):
 
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=5, source="Phone")
+
+	def test_create_inquiry_accepts_a_custom_style_request_with_no_item(self):
+		# ISS-2026-00636 / MOM 3.6 -- a design not in the item master at all.
+		inquiry = inquiry_api.create_inquiry(
+			dealer=self.dealer, qty=1, source="WhatsApp", requested_style="Carrara Marble Look, 600x1200"
+		)
+		self.assertIsNone(inquiry["productId"])
+		self.assertEqual(inquiry["requestedStyle"], "Carrara Marble Look, 600x1200")
+		self.assertEqual(inquiry["status"], "Open")
+		self.assertIsNone(inquiry["price"])
+		self.assertIsNone(inquiry["weightPerBoxKg"])
+		# Explicitly never mirrored to an Opportunity -- there's no real item_code
+		# to put in Opportunity Item, and the ticket itself says not to create one.
+		self.assertIsNone(inquiry["linkedOpportunity"])
+
+	def test_create_inquiry_rejects_both_item_and_requested_style(self):
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.create_inquiry(
+				dealer=self.dealer, item=self.item, qty=1, source="WhatsApp", requested_style="Something custom"
+			)
+
+	def test_create_inquiry_rejects_neither_item_nor_requested_style(self):
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.create_inquiry(dealer=self.dealer, qty=1, source="WhatsApp")
+
+	def test_convert_to_order_rejects_a_custom_style_inquiry(self):
+		from dms_erp.auth.dealer_api import _dealer_portal_user
+		from dms_erp.sales import dealer_portal_api
+
+		# Created as staff (the only role allowed to call create_inquiry directly) --
+		# a dealer never creates one of these themselves; comms.flow_api's own
+		# WhatsApp endpoint is the real caller, and it goes through _create_inquiry
+		# directly, same as this.
+		inquiry = inquiry_api.create_inquiry(
+			dealer=self.dealer, qty=1, source="WhatsApp", requested_style="Wood-look plank, grey"
+		)
+
+		dealer_user = _dealer_portal_user(self.dealer)
+		frappe.set_user(dealer_user)
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				dealer_portal_api.convert_to_order(
+					inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-CUSTOM-STYLE"
+				)
+		finally:
+			frappe.set_user("Administrator")
 
 	def test_list_inquiries_is_paginated_and_searchable(self):
 		dealer = make_dealer("Inquiry Pagination Dealer")

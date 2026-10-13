@@ -30,6 +30,11 @@ override_whitelisted_methods = {
 	"get_outstanding_due": "dms_erp.comms.flow_api.get_outstanding_due",
 	"get_recent_orders": "dms_erp.comms.flow_api.get_recent_orders",
 	"create_dealer_opportunity": "dms_erp.comms.flow_api.create_dealer_opportunity",
+	# ISS-2026-00636 / MOM 3.6 -- the new "Custom Style" menu option. The Flow
+	# itself doesn't have this node built yet; whoever adds it in whats91's Flow
+	# Builder should point its action.api_call at this bare name (matching every
+	# other node above), not the fully-dotted path.
+	"create_custom_style_inquiry": "dms_erp.comms.flow_api.create_custom_style_inquiry",
 }
 
 after_install = "dms_erp.setup.install.after_install"
@@ -51,5 +56,11 @@ scheduler_events = {
 		"dms_erp.catalog.withdrawal_api.evaluate_product_withdrawals",
 		"dms_erp.catalog.sample_api.send_display_monitoring_reminders",
 		"dms_erp.purchase.po_api.flag_overdue_unpaid_pos",
+		# MOM §3.7 -- 3-month dealer inactivity flag + notification (sales/dealer_activity.py).
+		"dms_erp.sales.dealer_activity.flag_inactive_dealers",
+	],
+	# MOM §3.7 -- "every month, the system will generate a list of active dealer numbers."
+	"monthly": [
+		"dms_erp.sales.dealer_activity.notify_active_dealer_numbers",
 	],
 }

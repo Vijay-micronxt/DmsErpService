@@ -12,10 +12,16 @@ since a requirement here is just a PO with a `custom_source_inquiry` link back. 
 own `supplier` param is optional too (BRD D.2), just forwarded straight through to
 create_purchase_order's own item/Series default-supplier fallback.
 
-`create_inquiry` (Phase 14) now enforces the same catalog gate `quotation_api.
-create_quotation` always has — dealer-assigned visibility and current sellability —
-so a hidden or Pulled Back item is rejected here too, not just at the Quotation
-step further down the funnel.
+`create_inquiry` (Phase 14) used to enforce the same catalog gate `quotation_api.
+create_quotation` always has — dealer-assigned visibility AND current sellability.
+ISS-2026-00644 dropped the assigned-visibility half of that for inquiries
+specifically: a dealer can now ask about (and WhatsApp/the dealer portal will show)
+an item Purchase hasn't assigned to their Dealer Catalog yet — that's the whole
+point of "inquire-only" for an unassigned item; only *ordering* it still requires
+assignment (dealer_portal_api.convert_to_order, comms.flow_api's WhatsApp
+order-placement path, and quotation_api.create_quotation all still gate on
+dealer_catalog_api.is_visible/catalog_for, unchanged). A Pulled Back/discontinued
+item is still rejected here either way — that part of the gate stays.
 
 BRD C.2.4 same-moment duplicate check: create_inquiry (Phase 21) now looks for a
 still-open inquiry for the same dealer+item within the last
@@ -27,12 +33,24 @@ the user confirm-and-continue, matching the BRD's own phrasing.
 list_inquiries is paginated (`limit`/`offset`) and returns `{"items", "total",
 "limit", "offset"}`, not a bare list -- reports need the whole result set, so
 they call list_all_inquiries (unpaginated, internal-only) instead.
+
+ISS-2026-00636 / MOM 3.6 — "Custom Style": `item` is no longer always required.
+A dealer asking (today, only over WhatsApp — comms.flow_api's new
+create_custom_style_inquiry) for a design not in the item master at all passes
+`requested_style` (free text) instead of `item` — explicitly NOT an ERPNext
+Opportunity and NOT a placeholder Item record, just this one extra field on the
+same Inquiry doctype every other source already uses, so staff still work one
+list regardless of how the request came in. Every item-shaped piece of
+_create_inquiry (sellability, duplicate check, stock-derived status, the
+Opportunity mirror) is skipped for one of these; ordering one is a contradiction
+in terms (there's no real item yet), so dealer_portal_api.convert_to_order
+rejects it explicitly rather than failing through an item-shaped code path with
+a None item code.
 """
 
 import frappe
 from frappe import _
 
-from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import (
 	is_sellable,
 	item_pieces_per_box,
@@ -55,10 +73,15 @@ def _assert_can_manage_inquiries():
 
 
 def _serialize(doc) -> dict:
-	weight_per_box_kg = item_weight_per_box_kg(doc.item)
-	pieces_per_box = item_pieces_per_box(doc.item)
-	sqft_per_box = item_sqft_per_box(doc.item)
-	sqm_per_box = item_sqm_per_box(doc.item)
+	# ISS-2026-00636 -- a Custom Style request (see _create_inquiry) has no real
+	# Item behind it at all; every one of these per-item lookups would either
+	# error or return nothing meaningful against a None item code, so they're
+	# skipped entirely rather than guarded field-by-field below.
+	has_item = bool(doc.item)
+	weight_per_box_kg = item_weight_per_box_kg(doc.item) if has_item else None
+	pieces_per_box = item_pieces_per_box(doc.item) if has_item else None
+	sqft_per_box = item_sqft_per_box(doc.item) if has_item else None
+	sqm_per_box = item_sqm_per_box(doc.item) if has_item else None
 	return {
 		"id": doc.name,
 		"number": doc.name,
@@ -66,6 +89,10 @@ def _serialize(doc) -> dict:
 		"createdAt": doc.creation,
 		"dealerId": doc.dealer,
 		"productId": doc.item,
+		# ISS-2026-00636 -- the free-text design/style name a dealer typed through
+		# WhatsApp's "Custom Style" option, when this inquiry has no real item
+		# (productId is null); null for every ordinary, item-backed inquiry.
+		"requestedStyle": doc.custom_requested_style,
 		"qty": doc.qty,
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
@@ -73,7 +100,7 @@ def _serialize(doc) -> dict:
 		# than only once it becomes a Quotation. Purchase-history-based adjustment
 		# within a tier doesn't exist anywhere in this app yet -- this is the tier
 		# rate, not a per-dealer-adjusted one; that's a bigger, separate gap.
-		"price": get_price_for_dealer(doc.item, doc.dealer),
+		"price": get_price_for_dealer(doc.item, doc.dealer) if has_item else None,
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -186,7 +213,7 @@ def get_inquiry(inquiry: str):
 
 def _create_inquiry(
 	dealer: str,
-	item: str,
+	item: str | None,
 	qty: float,
 	source: str,
 	expected_delivery=None,
@@ -195,44 +222,66 @@ def _create_inquiry(
 	remarks: str | None = None,
 	contact_name: str | None = None,
 	contact_phone: str | None = None,
+	requested_style: str | None = None,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
 	its own dealer identity, never a caller-supplied one) is the authorization for
-	that path, not INQUIRY_WRITE_ROLES."""
+	that path, not INQUIRY_WRITE_ROLES.
+
+	ISS-2026-00636 / MOM 3.6 -- "Custom Style": exactly one of `item`/
+	`requested_style` is given, never both, never neither. `requested_style` is a
+	free-text design name with no Item behind it at all (comms.flow_api's new
+	"Custom Style" WhatsApp option is the only caller today) -- deliberately
+	NOT an ERPNext Opportunity and not a placeholder Item record, just this one
+	extra field on the same Inquiry every other source already creates, so staff
+	work the one list regardless of how the request came in. Every per-item
+	computation below (sellability, duplicate check, stock-derived status,
+	Opportunity mirror) only makes sense against a real Item, so the whole
+	item-shaped half of this function is skipped for a Custom Style request."""
+	if bool(item) == bool(requested_style):
+		frappe.throw(_("Exactly one of item or requested_style is required."), frappe.ValidationError)
+
 	if assigned_to is None and set(frappe.get_roles(frappe.session.user)) & INQUIRY_WRITE_ROLES:
 		# Only a staff caller defaults to self-assignment -- a dealer-portal session
 		# (raise_inquiry) has no INQUIRY_WRITE_ROLES membership, so its inquiries stay
 		# unassigned rather than "assigned to" the dealer's own portal account.
 		assigned_to = frappe.session.user
 
-	if not is_visible(dealer, item):
-		frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
-	status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
-	if not is_sellable(status):
-		frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
+	duplicates = []
+	if item:
+		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
+		if not is_sellable(status):
+			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
 
-	# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
-	duplicates = find_open_duplicate_inquiries(dealer, item)
+		# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
+		duplicates = find_open_duplicate_inquiries(dealer, item)
 
-	# Derived from real on-hand qty rather than always "Open" -- this is what
-	# feeds the reorder engine's missed-demand signal (purchase.reorder_api.
-	# MISSED_DEMAND_STATUSES): nothing else ever sets an Inquiry to Out of Stock.
-	# "Pre-order Required" has no stock-derivable signal of its own and stays a
-	# staff call via update_inquiry.
-	on_hand = total_stock_for_item(item)
-	if on_hand <= 0:
-		inquiry_status = "Out of Stock"
-	elif on_hand >= qty:
-		inquiry_status = "Available"
+		# Derived from real on-hand qty rather than always "Open" -- this is what
+		# feeds the reorder engine's missed-demand signal (purchase.reorder_api.
+		# MISSED_DEMAND_STATUSES): nothing else ever sets an Inquiry to Out of Stock.
+		# "Pre-order Required" has no stock-derivable signal of its own and stays a
+		# staff call via update_inquiry.
+		on_hand = total_stock_for_item(item)
+		if on_hand <= 0:
+			inquiry_status = "Out of Stock"
+		elif on_hand >= qty:
+			inquiry_status = "Available"
+		else:
+			inquiry_status = "Partially Available"
 	else:
-		inquiry_status = "Partially Available"
+		# A Custom Style request has no stock/sellability concept to derive a
+		# status from -- it starts "Open", exactly like a normal Inquiry would
+		# before anyone looked at it, and moves on from there the same manual way
+		# (update_inquiry) as "Pre-order Required" already does.
+		inquiry_status = "Open"
 
 	doc = frappe.get_doc(
 		{
 			"doctype": "Inquiry",
 			"dealer": dealer,
 			"item": item,
+			"custom_requested_style": requested_style,
 			"qty": qty,
 			"source": source,
 			"status": inquiry_status,
@@ -246,7 +295,10 @@ def _create_inquiry(
 	)
 	doc.insert(ignore_permissions=True)
 
-	opportunity = _mirror_to_opportunity(doc)
+	# A Custom Style request is explicitly never mirrored to an Opportunity (per
+	# the ticket's own "not linked to Item master" intent) -- _mirror_to_opportunity
+	# hardcodes a real item_code into Opportunity Item, which doesn't exist here.
+	opportunity = _mirror_to_opportunity(doc) if item else None
 	if opportunity:
 		doc.db_set("linked_opportunity", opportunity, update_modified=False)
 
@@ -258,19 +310,30 @@ def _create_inquiry(
 @frappe.whitelist(methods=["POST"])
 def create_inquiry(
 	dealer: str,
-	item: str,
 	qty: float,
 	source: str,
+	item: str | None = None,
 	expected_delivery=None,
 	follow_up_date=None,
 	assigned_to: str | None = None,
 	remarks: str | None = None,
 	contact_name: str | None = None,
 	contact_phone: str | None = None,
+	requested_style: str | None = None,
 ):
 	_assert_can_manage_inquiries()
 	return _create_inquiry(
-		dealer, item, qty, source, expected_delivery, follow_up_date, assigned_to, remarks, contact_name, contact_phone
+		dealer,
+		item,
+		qty,
+		source,
+		expected_delivery,
+		follow_up_date,
+		assigned_to,
+		remarks,
+		contact_name,
+		contact_phone,
+		requested_style,
 	)
 
 

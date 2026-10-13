@@ -23,7 +23,7 @@ import frappe
 from frappe import _
 
 from dms_erp.catalog.api import get_product, resolve_dealer_code
-from dms_erp.catalog.dealer_catalog_api import catalog_for, is_visible
+from dms_erp.catalog.dealer_catalog_api import browsable_catalog_for, catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
@@ -48,18 +48,56 @@ def _catalog_entry(item_code: str, dealer: str) -> dict:
 
 	`price` is null when this dealer's custom_price_visible is off (BRD C.13.1 --
 	"price (if enabled for that dealer)") -- staff-facing screens are unaffected,
-	since they never call through here."""
+	since they never call through here.
+
+	`orderable` (ISS-2026-00644) is whether this item is actually in this dealer's
+	Dealer Catalog assignment (dealer_catalog_api.is_visible) -- get_catalog now shows
+	every sellable item, assigned or not, so the frontend needs this flag to tell an
+	orderable item apart from one it should only let the dealer inquire on."""
 	product = get_product(item_code)
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
 	product["dealerCode"] = own_code
 	product["price"] = get_price_for_dealer(item_code, dealer) if _price_visible(dealer) else None
 	product["topBatches"] = top_batches(item_code)
+	product["orderable"] = is_visible(dealer, item_code)
 	return product
 
 
 def _price_visible(dealer: str) -> bool:
 	return bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
+
+
+_CATALOG_SEARCH_FIELDS = (
+	"item_name",
+	"custom_colour_attribute_1",
+	"custom_colour_attribute_2",
+	"custom_design_attribute_1",
+	"custom_design_attribute_2",
+)
+
+
+def _catalog_search_matches(candidate_codes: set[str], search: str) -> set[str]:
+	"""get_catalog's one search box now matches item name OR any of the four
+	colour/design attributes -- the dealer portal used to expose those as four
+	separate dropdown filters (ISS-2026-00632 #4), but typing "Rustic" into the
+	one search box dealers already use is a more natural fit than hunting through
+	four dropdowns for it, so the dropdowns were dropped in favour of this.
+	frappe.db.count doesn't accept or_filters (only get_all does), so the OR is
+	resolved into an explicit name-list first, same union-of-get_all pattern as
+	warehouse.inward_api.list_trucks/sales.order_api.list_orders."""
+	if not candidate_codes:
+		return set()
+	matches: set[str] = set()
+	for field in _CATALOG_SEARCH_FIELDS:
+		matches |= set(
+			frappe.get_all(
+				"Item",
+				filters={"name": ["in", list(candidate_codes)], field: ["like", f"%{search}%"]},
+				pluck="name",
+			)
+		)
+	return matches
 
 
 @frappe.whitelist(methods=["GET"])
@@ -74,17 +112,23 @@ def get_catalog(
 	limit: int = 20,
 	offset: int = 0,
 ):
-	"""This dealer's own assigned-and-sellable catalog (BRD C.1.5/C.13.1) — search by
-	item name only; resolve_code is the separate lookup for a dealer's own code or the
-	company item code. Colour/design attribute filters are ISS-2026-00632's own
-	requirement #4 ("available for filtering in the dealer portal catalogue")."""
+	"""BRD C.1.5/C.13.1's dealer catalog, browse-widened by ISS-2026-00644: every
+	currently-sellable item in the system, not just this dealer's own Dealer Catalog
+	assignment -- an unassigned item still shows up (with `orderable: false` on its
+	entry, see _catalog_entry), it just can't be ordered through convert_to_order.
+	`search` matches item name OR any of the four colour/design attributes (see
+	_catalog_search_matches) -- the dealer portal's own standalone attribute
+	dropdowns were dropped in favour of this one box covering both; resolve_code is
+	the separate lookup for a dealer's own code or the company item code.
+	colour_attribute_1/2/design_attribute_1/2 stay as exact-match filter params
+	(and their list_catalog_* option endpoints) for any future caller that wants a
+	precise filter rather than free-text search, even though the dealer portal's
+	own UI no longer sends them."""
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 
-	item_codes = set(catalog_for(dealer))
+	item_codes = set(browsable_catalog_for(dealer))
 	filters = {"name": ["in", list(item_codes) or [""]]}
-	if search:
-		filters["item_name"] = ["like", f"%{search}%"]
 	if category:
 		filters["item_group"] = category
 	if color:
@@ -97,6 +141,10 @@ def get_catalog(
 		filters["custom_design_attribute_1"] = design_attribute_1
 	if design_attribute_2:
 		filters["custom_design_attribute_2"] = design_attribute_2
+
+	if search:
+		pre_filtered = set(frappe.get_all("Item", filters=filters, pluck="name"))
+		filters["name"] = ["in", list(_catalog_search_matches(pre_filtered, search)) or [""]]
 
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
@@ -111,10 +159,11 @@ def get_catalog(
 
 
 def _distinct_catalog_values(dealer: str, fieldname: str) -> list[str]:
-	"""Scoped to this dealer's own catalog, not every Item on the site -- a colour/design
-	filter option this dealer has no catalog item for would just produce an empty result
-	every time it's picked, which is worse than not offering it at all."""
-	item_codes = list(catalog_for(dealer))
+	"""Scoped to this dealer's own browsable catalog (ISS-2026-00644: every sellable
+	item, assigned or not -- see get_catalog), not every Item on the site -- a
+	colour/design filter option with no matching item anywhere wouldn't just be an
+	empty result, it'd be a filter that can never match anything at all."""
+	item_codes = list(browsable_catalog_for(dealer))
 	if not item_codes:
 		return []
 	values = frappe.get_all(
@@ -152,13 +201,14 @@ def list_catalog_design_attribute_2() -> list[str]:
 def resolve_code(code: str) -> dict | None:
 	"""BRD C.13.1 — search by the dealer's own code OR the company item code, either
 	one. resolve_dealer_code only ever resolved the dealer's own mapped code; this
-	adds the company-code fallback (must still be visible/sellable for this dealer)
+	adds the company-code fallback (must still be sellable, ISS-2026-00644: browsable
+	regardless of this dealer's own Dealer Catalog assignment, same as get_catalog)
 	so both entry points actually work from the portal, not just one."""
 	dealer = _current_dealer()
 
 	product = resolve_dealer_code(dealer, code)
 	if not product:
-		if frappe.db.exists("Item", code) and is_visible(dealer, code):
+		if frappe.db.exists("Item", code):
 			status = frappe.get_cached_value("Item", code, "custom_discontinuation_status") or "Active"
 			if is_sellable(status):
 				product = get_product(code)
@@ -170,9 +220,13 @@ def resolve_code(code: str) -> dict | None:
 
 @frappe.whitelist(methods=["GET"])
 def get_item(item: str) -> dict:
+	"""ISS-2026-00644 — gated on existence+sellability, not this dealer's own Dealer
+	Catalog assignment: a dealer can view the detail of an item Purchase hasn't
+	assigned to them yet (orderable: false on the response is what actually stops
+	them booking it — see _catalog_entry/convert_to_order)."""
 	dealer = _current_dealer()
-	if not is_visible(dealer, item):
-		frappe.throw(_("{0} is not in your catalog.").format(item), frappe.PermissionError)
+	if item not in set(browsable_catalog_for(dealer)):
+		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
 	return _catalog_entry(item, dealer)
 
 
@@ -224,7 +278,13 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	credit-limit-exceeded validation (an HTML-formatted message naming internal
 	Credit Controller users and their emails, never meant for a dealer to see;
 	see sales.utils.safe_customer_message's own docstring for the real report
-	that surfaced this) -- that text must never reach the dealer verbatim."""
+	that surfaced this) -- that text must never reach the dealer verbatim.
+
+	ISS-2026-00644: raise_inquiry (and get_catalog/get_item) now let a dealer
+	inquire on/view any sellable item, assigned or not, but ordering stays gated to
+	this dealer's actual Dealer Catalog assignment (is_visible) -- the inquiry that
+	got them here can exist for an unassigned item, but converting it to a real
+	order can't."""
 	dealer = _current_dealer()
 	if not customer_po:
 		frappe.throw(_("customer_po is required."), frappe.ValidationError)
@@ -234,6 +294,26 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(_("Inquiry {0} does not belong to you.").format(inquiry), frappe.PermissionError)
 	if doc.status in {"Converted to Order", "Rejected", "Closed"}:
 		frappe.throw(_("Inquiry {0} is {1} and can no longer be converted.").format(inquiry, doc.status), frappe.ValidationError)
+	if not doc.item:
+		# ISS-2026-00636 -- a Custom Style request (doc.custom_requested_style set,
+		# no real Item): there's nothing to build a Sales Order line from, so this
+		# is rejected with its own clear message rather than falling into
+		# is_visible(dealer, None), which would also reject it, just less clearly.
+		from dms_erp.sales.utils import dealer_contact_line
+
+		frappe.throw(
+			_("This is a custom-style enquiry with no catalog item yet -- it can't be converted to an order. {0}").format(
+				dealer_contact_line(dealer)
+			),
+			frappe.ValidationError,
+		)
+	if not is_visible(dealer, doc.item):
+		from dms_erp.sales.utils import dealer_contact_line
+
+		frappe.throw(
+			_("{0} isn't yet set up for ordering on your account. {1}").format(doc.item, dealer_contact_line(dealer)),
+			frappe.PermissionError,
+		)
 
 	lines = [{"item": doc.item, "qty": doc.qty}]
 	try:
@@ -241,7 +321,7 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		from dms_erp.sales.utils import safe_customer_message
 
-		frappe.throw(safe_customer_message(e), type(e))
+		frappe.throw(safe_customer_message(e, dealer), type(e))
 
 
 @frappe.whitelist(methods=["GET"])
