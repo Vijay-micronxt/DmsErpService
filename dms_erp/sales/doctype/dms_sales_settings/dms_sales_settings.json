@@ -7,7 +7,9 @@
   "dealer_classification_window_days",
   "discount_approval_threshold_pct",
   "dealer_inactivity_days",
-  "inactive_dealer_notify_user"
+  "inactive_dealer_notify_user",
+  "reservation_max_days",
+  "reservation_reminder_day"
  ],
  "fields": [
   {
@@ -37,12 +39,26 @@
    "fieldtype": "Link",
    "label": "Notify on Dealer Inactivity",
    "options": "User"
+  },
+  {
+   "default": "21",
+   "description": "ISS-2026-00635 -- \"Max buffer: 21 days (7+7+7).\" An open Sales Order (not yet Dispatched/Delivered/Cancelled) older than this many days is flagged for review by sales.reservation.review_reservations (daily). Never auto-cancelled.",
+   "fieldname": "reservation_max_days",
+   "fieldtype": "Int",
+   "label": "Reservation Window (Days)"
+  },
+  {
+   "default": "20",
+   "description": "ISS-2026-00635 -- \"Auto-send reminder notification at day 14+6 (day 20).\" Once an open Sales Order is this many days old, its dealer's salesperson (or Management, if none) gets one reminder. Must be less than the Reservation Window.",
+   "fieldname": "reservation_reminder_day",
+   "fieldtype": "Int",
+   "label": "Reservation Reminder Day"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-18 00:00:00.000000",
+ "modified": "2026-10-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",
  "name": "DMS Sales Settings",

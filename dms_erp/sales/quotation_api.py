@@ -35,9 +35,11 @@ quotation, and the Quotation itself isn't created until Management approves the
 queued Approval Request (approvals.api.decide_approval).
 """
 
+import re
+
 import frappe
 from frappe import _
-from frappe.utils import add_days, today
+from frappe.utils import add_days, flt, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import (
@@ -73,7 +75,7 @@ def _serialize(doc) -> dict:
 		"validTill": doc.valid_till,
 		"markupPct": doc.custom_markup_pct,
 		"freight": doc.custom_freight,
-		"deliveryPincode": doc.custom_delivery_pincode,
+		"deliveryPincode": doc.get("custom_delivery_pincode"),
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
 		"lines": [_serialize_line(row) for row in doc.items],
@@ -96,6 +98,7 @@ def _serialize_line(row) -> dict:
 	pieces_per_box = item_pieces_per_box(row.item_code)
 	sqft_per_box = item_sqft_per_box(row.item_code)
 	sqm_per_box = item_sqm_per_box(row.item_code)
+	purchase_cost = _purchase_cost(row.item_code)
 	return {
 		"itemCode": row.item_code,
 		"qty": row.qty,
@@ -114,6 +117,10 @@ def _serialize_line(row) -> dict:
 		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
 		"sqmPerBox": sqm_per_box,
 		"totalSqm": round((sqm_per_box or 0) * row.qty, 4) if sqm_per_box is not None else None,
+		# ISS-2026-00633 -- flag (never block) a line quoted under the item's standard
+		# purchase price; see _purchase_cost for where that number comes from.
+		"purchaseCost": purchase_cost,
+		"belowPurchaseCost": purchase_cost is not None and flt(row.rate) < purchase_cost,
 	}
 
 
@@ -221,22 +228,74 @@ def list_quotations(dealer: str | None = None, search: str | None = None, limit:
 
 
 @frappe.whitelist(methods=["GET"])
-def suggest_transport_rate(pincode: str) -> dict | None:
-	"""ISS-2026-00633 — "Transport pricing by pincode/distance." Pacific has no real
-	pincode/zone rate table yet (only they have the actual rates), so this is
-	deliberately a suggestion, never an enforced or auto-applied one: an exact-match
-	lookup against Transport Rate Zone (empty by default, filled in by Management/
-	Sales as real rates become known), returned for the Quotation Builder to show
-	as a take-it-or-leave-it number next to the Freight field it never writes to
-	directly. Returns None (not a placeholder/zero) when this exact pincode has no
-	row yet -- "honest stub", same convention as dashboard.api's outstandingReceivables."""
+def suggest_transport_rate(pincode: str, weight_kg: float | None = None) -> dict | None:
+	"""ISS-2026-00633 -- "At quotation time, auto-fetch transport rate based on
+	delivery address pincode." Every Transport Rate Zone whose pincode range covers
+	`pincode` comes back as an option -- one per vehicle type, since the ticket
+	prices by vehicle type and only staff know which vehicle this load needs.
+	Still only a suggestion: the Quotation Builder shows it next to Freight and
+	never writes Freight itself, because Pacific's real rate sheet isn't loaded yet
+	and an empty or half-filled master must not silently price a quote.
+
+	`weight_kg` is the quote's total weight, needed only for a Per Kg rate; when
+	it's missing such an option's suggestedFreight is None rather than a guess.
+	Returns None (not a placeholder/zero) when no zone covers this pincode --
+	"honest stub", same convention as dashboard.api's outstandingReceivables."""
 	pincode = (pincode or "").strip()
-	if not pincode:
+	if not re.match(r"^\d{6}$", pincode):
 		return None
-	row = frappe.db.get_value("Transport Rate Zone", pincode, ["suggested_freight", "notes"], as_dict=True)
-	if not row:
+	rows = frappe.get_all(
+		"Transport Rate Zone",
+		filters={"from_pincode": ["<=", pincode], "to_pincode": [">=", pincode]},
+		fields=["zone_name", "vehicle_type", "rate_basis", "rate", "distance_km", "notes"],
+		order_by="vehicle_type asc, zone_name asc",
+	)
+	if not rows:
 		return None
-	return {"pincode": pincode, "suggestedFreight": row.suggested_freight, "notes": row.notes}
+	weight = flt(weight_kg) if weight_kg not in (None, "") else None
+	return {"pincode": pincode, "options": [_freight_option(row, weight) for row in rows]}
+
+
+def _freight_option(row, weight_kg: float | None) -> dict:
+	if row.rate_basis == "Per Kg":
+		freight = row.rate * weight_kg if weight_kg else None
+	elif row.rate_basis == "Per Km":
+		freight = row.rate * (row.distance_km or 0)
+	else:
+		freight = row.rate
+	return {
+		"zone": row.zone_name,
+		"vehicleType": row.vehicle_type,
+		"rateBasis": row.rate_basis,
+		"rate": row.rate,
+		"distanceKm": row.distance_km,
+		"suggestedFreight": round(freight, 2) if freight is not None else None,
+		"notes": row.notes,
+	}
+
+
+def _purchase_cost(item: str) -> float | None:
+	"""ISS-2026-00633 -- "If quoted price < standard purchase price, flag it." The
+	standard purchase price is the Purchase Cost on the item's Item Price Proposal
+	(pricing.api), the one place this app records it. No proposal, or a zero cost,
+	means no flag at all -- never a comparison against a made-up number."""
+	cost = frappe.db.get_value("Item Price Proposal", item, "purchase_cost")
+	return flt(cost) or None
+
+
+@frappe.whitelist(methods=["GET"])
+def get_purchase_costs(items) -> dict:
+	"""Purchase cost per item code for the Quotation Builder's below-cost warning,
+	shown while the quote is still being built (the saved quotation's own lines
+	carry the same check as belowPurchaseCost). Items with no recorded cost are
+	left out."""
+	codes = frappe.parse_json(items) if isinstance(items, str) else items
+	costs = {}
+	for code in codes or []:
+		cost = _purchase_cost(code)
+		if cost is not None:
+			costs[code] = cost
+	return costs
 
 
 @frappe.whitelist(methods=["GET"])

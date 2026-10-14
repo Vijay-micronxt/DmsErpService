@@ -46,12 +46,18 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   status is a side effect of create/amend/`convert_to_order`, not something a
   caller sets directly — via ERPNext's own `declare_enquiry_lost`, the native way
   this doctype supports a manual post-submit status change. `custom_delivery_pincode`
-  (ISS-2026-00633, free text) plus `suggest_transport_rate` and the new **Transport
-  Rate Zone** doctype give the Quotation Builder a freight *suggestion* keyed by
-  exact pincode — never an enforced rate, since no real pincode/zone rate table
-  exists yet (that's Pacific's own data to supply); the master is empty by default
-  and `suggest_transport_rate` returns `None`, not a guess, for any pincode without
-  a row.
+  (ISS-2026-00633, free text) plus `suggest_transport_rate` and the **Transport
+  Rate Zone** doctype give the Quotation Builder a freight *suggestion* — never an
+  enforced rate. Each zone is a pincode range (from/to), an optional vehicle type
+  and a rate Per Trip, Per Kg (× the quote's weight) or Per Km (× a distance stored
+  on the zone — no maps/distance API is integrated); ranges may not overlap for the
+  same vehicle type. Every zone covering the pincode comes back as an option; none
+  covering it returns `None`, not a guess. The master is empty until Pacific's real
+  rates are entered, from the staff app's Settings → Transport Rates
+  (`transport_rate_api.py`, Management-only writes). Quotation lines also carry
+  `belowPurchaseCost` — the ticket's "flag if quoted below standard purchase price",
+  compared against the item's Item Price Proposal purchase cost; a warning, never a
+  block, and no flag at all when no cost is recorded.
 - **Order** (`order_api.py`) — ERPNext's native `Sales Order`. Pacific's warehouse-
   fulfillment stages (Confirmed → Picking → Ready to Dispatch → Dispatched →
   Delivered/Cancelled) are a distinct operational flow layered on top via a custom
@@ -105,3 +111,11 @@ Pick Tasks; everyone reads.
   every Customer on one day, and a live check found 265 of 394 dealers dormant.
   Monthly, `notify_active_dealer_numbers` announces the `active_dealer_numbers` list
   (WhatsApp Business compliance); what's done with that list stays outside dms_erp.
+- **Reservation timeline** (`reservation.py`, ISS-2026-00635) — daily job over open
+  Sales Orders (not Dispatched/Delivered/Cancelled), counted from the order date:
+  one reminder at `DMS Sales Settings.reservation_reminder_day` (20) to the dealer's
+  salesperson (Management if none), and a review flag once older than
+  `reservation_max_days` (21) to Management. Flag only — the ticket rules out
+  auto-cancel; releasing the stock stays a person's call. Both dates are stored on
+  the order and never cleared, so each happens once; `order_api` returns the state
+  as `reservation`.

@@ -1,30 +1,84 @@
 {
  "actions": [],
  "allow_rename": 0,
- "autoname": "field:pincode",
+ "autoname": "field:zone_name",
  "creation": "2026-10-13 00:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "pincode",
-  "suggested_freight",
+  "zone_name",
+  "from_pincode",
+  "to_pincode",
+  "column_break_range",
+  "vehicle_type",
+  "rate_basis",
+  "rate",
+  "distance_km",
   "notes"
  ],
  "fields": [
   {
-   "fieldname": "pincode",
+   "fieldname": "zone_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Zone Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "e.g. \"Chennai South\". One name per rate row."
+  },
+  {
+   "fieldname": "from_pincode",
    "fieldtype": "Data",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Pincode",
+   "label": "From Pincode",
    "reqd": 1,
-   "unique": 1
+   "length": 6
   },
   {
-   "fieldname": "suggested_freight",
+   "fieldname": "to_pincode",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "To Pincode",
+   "reqd": 1,
+   "length": 6,
+   "description": "Same as From Pincode for a single pincode."
+  },
+  {
+   "fieldname": "column_break_range",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "vehicle_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Vehicle Type",
+   "description": "Optional, e.g. \"Tata 407\" or \"10-wheeler\". Leave blank for a rate that applies to any vehicle."
+  },
+  {
+   "fieldname": "rate_basis",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Rate Basis",
+   "options": "Per Trip\nPer Kg\nPer Km",
+   "default": "Per Trip",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rate",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Suggested Freight"
+   "label": "Rate",
+   "reqd": 1
+  },
+  {
+   "fieldname": "distance_km",
+   "fieldtype": "Float",
+   "label": "Road Distance (km)",
+   "depends_on": "eval:doc.rate_basis=='Per Km'",
+   "mandatory_depends_on": "eval:doc.rate_basis=='Per Km'",
+   "description": "Road distance from the warehouse to this zone. Freight = Rate x this distance."
   },
   {
    "fieldname": "notes",
@@ -34,7 +88,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-13 00:00:00.000000",
+ "modified": "2026-10-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",
  "name": "Transport Rate Zone",

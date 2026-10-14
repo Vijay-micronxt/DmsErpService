@@ -520,13 +520,11 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	Per BRD C.2.2's own WhatsApp inquiry flow ("Please share your PO number to
 	confirm... Sales Order created; confirmation sent"), placing an order is meant to
 	create a real Sales Order once the dealer supplies their own PO number as
-	confirmation -- not just another enquiry. The Flow doesn't collect a PO number
-	anywhere yet (no node sets one into lead.variables) -- until it's updated with an
-	"Ask PO Number" step in the Place-Order branch that stores it as
-	lead.variables.po_number, this always takes the Inquiry branch below, which is
-	the correct, safe behavior in the meantime (an Inquiry is exactly BRD C.2.2's own
-	"item out of stock"/general-enquiry outcome, and nothing here should invent a PO
-	number that doesn't exist).
+	confirmation -- not just another enquiry. The Place-Order branch's "Ask PO Number"
+	step stores it as lead.variables.po_number (docs/whatsapp-flows/
+	dealer-portal-pacific.json); "Request More Info" never sets one, so that branch
+	always takes the Inquiry path below -- nothing here invents a PO number that
+	doesn't exist.
 
 	item is resolved from lead.variables.order_item_code (set earlier in the Flow
 	session by the availability/price check the dealer came from -- get_item_info),
