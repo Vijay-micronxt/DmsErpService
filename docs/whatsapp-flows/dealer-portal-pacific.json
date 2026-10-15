@@ -63,8 +63,8 @@
               "rows": [
                 {
                   "id": "btn_stock",
-                  "title": "1. Availability & Price",
-                  "description": "Check stock and price by item code"
+                  "title": "1. Item Availability",
+                  "description": "Check stock by item code"
                 },
                 {
                   "id": "btn_delivery",
@@ -112,7 +112,7 @@
           },
           {
             "key": "btn_stock",
-            "label": "Main Menu: 1. Availability & Price"
+            "label": "Main Menu: 1. Item Availability"
           },
           {
             "key": "btn_delivery",
@@ -160,12 +160,12 @@
         "label": "Ask Item Code",
         "config": {
           "buttons": [],
-          "body_text": "Please enter the *Item Code* (and quantity, if you know it) to check availability and price.",
+          "body_text": "Please enter the *Item Code* (and quantity, if you know it) to check availability.",
           "list_data": null,
           "media_url": "",
           "media_type": "",
           "footer_text": "Example: 105107 40 boxes",
-          "header_text": "📦 Item Availability & Price",
+          "header_text": "📦 Item Availability",
           "media_filename": "",
           "interactive_type": "none"
         },
@@ -1842,7 +1842,7 @@
         "label": "Ask PO Number",
         "config": {
           "buttons": [],
-          "body_text": "Please share your *PO Number* to confirm this order.",
+          "body_text": "Please share your *PO Number* to confirm this quotation and place your order.",
           "list_data": null,
           "media_url": "",
           "media_type": "",
@@ -2210,6 +2210,173 @@
       "positionAbsolute": {
         "x": 1900,
         "y": 1088
+      }
+    },
+    {
+      "id": "n_api_quote",
+      "data": {
+        "label": "Create Quotation",
+        "config": {
+          "method": "POST",
+          "event_name": "quotation.create",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_whatsapp_quotation",
+          "success_rules": [
+            {
+              "path": "message.quotation_id",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "quote_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3480
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3480
+      }
+    },
+    {
+      "id": "n_set_quote_id",
+      "data": {
+        "label": "Set Quotation Ref",
+        "config": {
+          "key": "quotation_id",
+          "value": "{{quote_response.message.quotation_id}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3700
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3700
+      }
+    },
+    {
+      "id": "n_show_quote",
+      "data": {
+        "label": "Show Quotation",
+        "config": {
+          "buttons": [
+            {
+              "id": "btn_quote_yes",
+              "title": "✅ Confirm order"
+            },
+            {
+              "id": "btn_quote_no",
+              "title": "❌ Not now"
+            }
+          ],
+          "body_text": "{{quote_response.message.message}}\n\nTap *Confirm order* to place this order — we'll ask for your PO number next.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "📄 Your Quotation",
+          "media_filename": "",
+          "interactive_type": "button"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Default"
+          },
+          {
+            "key": "btn_quote_yes",
+            "label": "✅ Confirm order"
+          },
+          {
+            "key": "btn_quote_no",
+            "label": "❌ Not now"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 188,
+      "dragging": false,
+      "position": {
+        "x": -1100,
+        "y": 3920
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1100,
+        "y": 3920
+      }
+    },
+    {
+      "id": "n_show_quote_unavailable",
+      "data": {
+        "label": "Quotation Not Possible",
+        "config": {
+          "buttons": [],
+          "body_text": "{{quote_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "Enquiry noted",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 3700
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -800,
+        "y": 3700
       }
     }
   ],
@@ -2891,7 +3058,7 @@
       "id": "e_note_none_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_none",
-      "target": "n_ask_po_number",
+      "target": "n_api_quote",
       "condition": {
         "type": "always"
       },
@@ -2913,7 +3080,7 @@
       "id": "e_note_urgent_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_urgent",
-      "target": "n_ask_po_number",
+      "target": "n_api_quote",
       "condition": {
         "type": "always"
       },
@@ -2935,7 +3102,7 @@
       "id": "e_note_call_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_call",
-      "target": "n_ask_po_number",
+      "target": "n_api_quote",
       "condition": {
         "type": "always"
       },
@@ -2957,7 +3124,7 @@
       "id": "e_note_other_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_other",
-      "target": "n_ask_po_number",
+      "target": "n_api_quote",
       "condition": {
         "type": "always"
       },
@@ -3221,6 +3388,72 @@
       "id": "e_n_show_custom_style_out_n_end",
       "type": "smoothstep",
       "source": "n_show_custom_style",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_quote_set",
+      "type": "smoothstep",
+      "source": "n_api_quote",
+      "target": "n_set_quote_id",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_quote_err",
+      "type": "smoothstep",
+      "source": "n_api_quote",
+      "target": "n_show_quote_unavailable",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_quote_show",
+      "type": "smoothstep",
+      "source": "n_set_quote_id",
+      "target": "n_show_quote",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_quote_yes_po",
+      "type": "smoothstep",
+      "source": "n_show_quote",
+      "target": "n_ask_po_number",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_quote_yes",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_quote_no_declined",
+      "type": "smoothstep",
+      "source": "n_show_quote",
+      "target": "n_order_declined",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_quote_no",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_quote_unavailable_end",
+      "type": "smoothstep",
+      "source": "n_show_quote_unavailable",
       "target": "n_end",
       "condition": {
         "type": "always"

@@ -93,6 +93,8 @@ def _serialize(doc) -> dict:
 		# WhatsApp's "Custom Style" option, when this inquiry has no real item
 		# (productId is null); null for every ordinary, item-backed inquiry.
 		"requestedStyle": doc.get("custom_requested_style"),
+		# Several items raised together from the dealer portal share this id.
+		"requestGroup": doc.get("request_group"),
 		"qty": doc.qty,
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
@@ -232,6 +234,7 @@ def _create_inquiry(
 	contact_name: str | None = None,
 	contact_phone: str | None = None,
 	requested_style: str | None = None,
+	request_group: str | None = None,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
@@ -291,6 +294,7 @@ def _create_inquiry(
 			"dealer": dealer,
 			"item": item,
 			"custom_requested_style": requested_style,
+			"request_group": request_group,
 			"qty": qty,
 			"source": source,
 			"status": inquiry_status,

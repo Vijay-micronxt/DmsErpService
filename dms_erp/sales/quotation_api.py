@@ -604,17 +604,26 @@ def convert_to_order(quotation: str, expected_dispatch=None):
 	)
 
 
-def _convert_to_order(quotation: str, expected_dispatch=None) -> dict:
+def _convert_to_order(
+	quotation: str, expected_dispatch=None, customer_po: str | None = None, ignore_permissions: bool = False
+) -> dict:
 	"""Unguarded core of convert_to_order -- see gate_credit_limit. Re-fetches
 	the Quotation fresh (the wrapper above already loaded one, just for its
 	party_name/grand_total) since this also has to run standalone when replayed
 	from an approved request."""
-	from erpnext.selling.doctype.quotation.quotation import make_sales_order
+	from erpnext.selling.doctype.quotation.quotation import _make_sales_order, make_sales_order
 
 	from dms_erp.sales.order_api import finalize_new_order
 
 	qtn = frappe.get_doc("Quotation", quotation)
-	so = make_sales_order(quotation)
+	if ignore_permissions:
+		# The dealer-portal caller (dealer_portal_api.accept_quotation) is a DMS Dealer
+		# session with no read permission on Quotation at all -- ownership and expiry
+		# are that endpoint's own checks. Skips make_sales_order's wrapper, which only
+		# adds ERPNext's own "quotation validity ended" check on top of this exact call.
+		so = _make_sales_order(quotation, ignore_permissions=True)
+	else:
+		so = make_sales_order(quotation)
 	# make_sales_order carries taxes_and_charges/taxes across from the quotation
 	# verbatim -- if the quotation was itself untaxed, this new Sales Order's taxes
 	# table starts empty too, and is just as exposed to ERPNext's own validate()-time
@@ -622,6 +631,11 @@ def _convert_to_order(quotation: str, expected_dispatch=None) -> dict:
 	# sales.utils.apply_tax_template's docstring.
 	if not so.get("taxes_and_charges"):
 		so.flags.dont_auto_add_taxes = True
+	if customer_po:
+		# The dealer's own PO number, given when they accept the quotation on the
+		# portal (dealer_portal_api.accept_quotation) -- staff-side conversion never
+		# passes one, exactly as before.
+		so.po_no = customer_po
 	if expected_dispatch:
 		so.delivery_date = expected_dispatch
 		# Only fills the gap for a line that never had its own delivery_date on
@@ -634,9 +648,14 @@ def _convert_to_order(quotation: str, expected_dispatch=None) -> dict:
 
 	order = finalize_new_order(so, source_type="Quotation", source_ref=quotation, channel=qtn.custom_order_channel)
 
-	if qtn.custom_inquiry:
-		frappe.db.set_value(
-			"Inquiry", qtn.custom_inquiry, {"status": "Converted to Order", "linked_sales_order": order["id"]}
-		)
+	# Every inquiry this quotation closed out, not only custom_inquiry (the first
+	# one) -- a quotation merged from several inquiries (staff, or a multi-item
+	# enquiry from the dealer portal) otherwise left all but the first stuck at
+	# "Quoted" forever after the order was placed.
+	inquiries = frappe.get_all("Inquiry", filters={"linked_quotation": quotation}, pluck="name")
+	if qtn.custom_inquiry and qtn.custom_inquiry not in inquiries:
+		inquiries.append(qtn.custom_inquiry)
+	for inquiry in inquiries:
+		frappe.db.set_value("Inquiry", inquiry, {"status": "Converted to Order", "linked_sales_order": order["id"]})
 
 	return order

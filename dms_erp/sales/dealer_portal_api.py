@@ -21,16 +21,24 @@ in place of the staff role checks those modules' whitelisted wrappers use.
 
 import frappe
 from frappe import _
+from frappe.utils import flt, getdate, today
 
 from dms_erp.catalog.api import get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import browsable_catalog_for, catalog_for, is_visible
-from dms_erp.catalog.utils import is_sellable
+from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
-from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.dealer_api import _assert_email_available
+from dms_erp.sales.invoice_api import _has as _invoice_has
+from dms_erp.sales.invoice_api import _invoice_detail
+from dms_erp.sales.invoice_api import _serialize_row as _serialize_invoice_row
 from dms_erp.sales.inquiry_api import _create_inquiry, _inquiry_filters, _serialize as _serialize_inquiry
-from dms_erp.sales.order_api import _create_order, _serialize as _serialize_order
-from dms_erp.warehouse.utils import top_batches, total_stock_for_item
+from dms_erp.sales.order_api import _create_order
+from dms_erp.sales.order_api import _serialize as _serialize_order
+from dms_erp.sales.quotation_api import _convert_to_order
+from dms_erp.warehouse.utils import all_batches, top_batches, total_stock_for_item
+
+
+MAX_ENQUIRY_ITEMS = 50
 
 
 def _current_dealer() -> str:
@@ -40,15 +48,21 @@ def _current_dealer() -> str:
 	return dealer
 
 
-def _catalog_entry(item_code: str, dealer: str) -> dict:
+def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> dict:
 	"""A trimmed, dealer-safe view of catalog.api.get_product's full serialization --
 	drops dealerCodes (every dealer's own item code for this item, including other
 	dealers') down to just this dealer's own code, and adds the top-3 on-hand
 	batches BRD C.13.1 wants shown at item-detail time.
 
-	`price` is null when this dealer's custom_price_visible is off (BRD C.13.1 --
-	"price (if enabled for that dealer)") -- staff-facing screens are unaffected,
-	since they never call through here.
+	No price is ever included -- not `price`, and not the `dealerPrice` that
+	get_product carries for staff either. Pacific's price to a dealer depends on
+	delivery and other details that only exist once a quotation is prepared, so a
+	catalog price shown earlier would just be a number staff then have to walk back
+	(client request, Oct 2026: "don't show price before quotation"). The dealer's
+	price is the quotation's (see get_my_quotation). This replaces BRD C.13.1's
+	per-dealer "price (if enabled)" switch for the portal; Customer.
+	custom_price_visible is no longer read anywhere. Staff-facing screens are
+	unaffected, since they never call through here.
 
 	`orderable` (ISS-2026-00644) is whether this item is actually in this dealer's
 	Dealer Catalog assignment (dealer_catalog_api.is_visible) -- get_catalog now shows
@@ -57,15 +71,13 @@ def _catalog_entry(item_code: str, dealer: str) -> dict:
 	product = get_product(item_code)
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
+	product.pop("dealerPrice", None)
 	product["dealerCode"] = own_code
-	product["price"] = get_price_for_dealer(item_code, dealer) if _price_visible(dealer) else None
-	product["topBatches"] = top_batches(item_code)
+	# The catalog list keeps the cheap top-3 preview; an item's own detail page lists
+	# every batch (client request, Oct 2026: which batch the stock belongs to).
+	product["topBatches"] = all_batches(item_code) if every_batch else top_batches(item_code)
 	product["orderable"] = is_visible(dealer, item_code)
 	return product
-
-
-def _price_visible(dealer: str) -> bool:
-	return bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
 
 
 _CATALOG_SEARCH_FIELDS = (
@@ -109,10 +121,16 @@ def get_catalog(
 	colour_attribute_2: str | None = None,
 	design_attribute_1: str | None = None,
 	design_attribute_2: str | None = None,
+	scope: str | None = None,
 	limit: int = 20,
 	offset: int = 0,
 ):
-	"""BRD C.1.5/C.13.1's dealer catalog, browse-widened by ISS-2026-00644: every
+	"""`scope` splits the one browse list in two for the portal's separate sections:
+	"assigned" is only this dealer's own Dealer Catalog (what they can order),
+	"other" is every sellable item outside it (enquire only); left out, both
+	together, as before.
+
+	BRD C.1.5/C.13.1's dealer catalog, browse-widened by ISS-2026-00644: every
 	currently-sellable item in the system, not just this dealer's own Dealer Catalog
 	assignment -- an unassigned item still shows up (with `orderable: false` on its
 	entry, see _catalog_entry), it just can't be ordered through convert_to_order.
@@ -128,6 +146,9 @@ def get_catalog(
 	limit, offset = clamp(limit, offset)
 
 	item_codes = set(browsable_catalog_for(dealer))
+	if scope in ("assigned", "other"):
+		assigned = set(catalog_for(dealer))
+		item_codes = item_codes & assigned if scope == "assigned" else item_codes - assigned
 	filters = {"name": ["in", list(item_codes) or [""]]}
 	if category:
 		filters["item_group"] = category
@@ -215,7 +236,7 @@ def resolve_code(code: str) -> dict | None:
 
 	if not product:
 		return None
-	return _catalog_entry(product["id"], dealer)
+	return _catalog_entry(product["id"], dealer, every_batch=True)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -227,7 +248,7 @@ def get_item(item: str) -> dict:
 	dealer = _current_dealer()
 	if item not in set(browsable_catalog_for(dealer)):
 		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
-	return _catalog_entry(item, dealer)
+	return _catalog_entry(item, dealer, every_batch=True)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -238,7 +259,55 @@ def raise_inquiry(item: str, qty: float, remarks: str | None = None):
 	dealer = _current_dealer()
 	data = _create_inquiry(dealer, item, qty, source="Web", remarks=remarks)
 	data["orderable"] = is_visible(dealer, item)
+	data.pop("price", None)
 	return data
+
+
+@frappe.whitelist(methods=["POST"])
+def raise_inquiries(items, remarks: str | None = None) -> dict:
+	"""Several items enquired on in one go (the enquiry list on the portal). Each
+	item becomes its own Inquiry, exactly as raise_inquiry makes one -- the Inquiry
+	doctype is one item per record, and everything downstream (stock status,
+	missed-demand reporting, quoting) is built on that -- but they all carry the
+	same `requestGroup` (the first one's number), so staff see they came together
+	and quote them as a single quotation (create_quotation already merges several
+	inquiries of one dealer). `items` is a list of {item, qty}, JSON when sent as a
+	form field. Every line is validated before anything is created, and a failure
+	partway rolls the whole request back (Frappe's per-request transaction), so a
+	dealer never ends up with half a list raised."""
+	dealer = _current_dealer()
+	entries = frappe.parse_json(items) if isinstance(items, str) else items
+	if not entries:
+		frappe.throw(_("Add at least one item."), frappe.ValidationError)
+	if len(entries) > MAX_ENQUIRY_ITEMS:
+		frappe.throw(_("An enquiry can list at most {0} items.").format(MAX_ENQUIRY_ITEMS), frappe.ValidationError)
+
+	allowed = set(browsable_catalog_for(dealer))
+	seen: set[str] = set()
+	for entry in entries:
+		item = entry.get("item")
+		if item not in allowed:
+			frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
+		if item in seen:
+			frappe.throw(_("{0} is listed twice -- combine the quantities.").format(item), frappe.ValidationError)
+		seen.add(item)
+		if flt(entry.get("qty")) <= 0:
+			frappe.throw(_("Enter a quantity above zero for {0}.").format(item), frappe.ValidationError)
+
+	created: list[dict] = []
+	group = None
+	for entry in entries:
+		inquiry = _create_inquiry(
+			dealer, entry["item"], flt(entry["qty"]), source="Web", remarks=remarks, request_group=group
+		)
+		if group is None:
+			group = inquiry["id"]
+			frappe.db.set_value("Inquiry", group, "request_group", group, update_modified=False)
+			inquiry["requestGroup"] = group
+		inquiry["orderable"] = is_visible(dealer, entry["item"])
+		inquiry.pop("price", None)
+		created.append(inquiry)
+	return {"requestGroup": group, "items": created}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -265,7 +334,13 @@ def suggest_alternatives(item: str, limit: int = 5) -> list[dict]:
 
 @frappe.whitelist(methods=["POST"])
 def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
-	"""BRD C.13.1 — "enter their own PO number to tag/close it." Only converts an
+	"""No longer offered by the portal: an enquiry now becomes an order only through
+	a quotation the dealer accepts (accept_quotation below), per the client's "no
+	quotation is being sent to dealers before order confirmation" issue. Kept
+	callable (and tested) rather than deleted -- it's still the one path that
+	builds an order straight from an inquiry's own lines.
+
+	BRD C.13.1 — "enter their own PO number to tag/close it." Only converts an
 	inquiry this dealer actually owns, at the same in-stock/priced items it was
 	raised for -- lines come from the inquiry itself, not caller-supplied, so a
 	dealer session can't order arbitrary items through this endpoint.
@@ -319,7 +394,7 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 
 	lines = [{"item": doc.item, "qty": doc.qty}]
 	try:
-		return _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po)
+		return _run_as_system(lambda: _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po))
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		from dms_erp.sales.utils import safe_customer_message
 
@@ -361,6 +436,9 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	a display hint, re-checked there."""
 	data = _serialize_inquiry(doc)
 	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
+	# The tier price inquiry_api's serializer adds for staff -- a price before a
+	# quotation, which the dealer portal never shows (see _catalog_entry).
+	data.pop("price", None)
 	return data
 
 
@@ -402,6 +480,219 @@ def get_my_order(order: str) -> dict:
 # clears DECIDE_ROLES, so this always queues a genuine Pending request for
 # Management, never auto-approves.
 DEALER_CANCEL_WINDOW_HOURS = 24
+
+
+QUOTATION_ACCEPTABLE_STATUSES = {"Open", "Replied"}
+
+
+def _serialize_dealer_quotation(doc) -> dict:
+	"""The dealer's view of a Quotation. Deliberately not quotation_api._serialize:
+	that one is the staff shape and carries Pacific's own markup %, the sales
+	channel and, per line, the item's purchase cost and below-cost flag -- all
+	internal, none of it a dealer's business. What's here is what the offer
+	actually says: items, rates, discounts, tax, freight, validity.
+
+	Freight is a separate line, not folded into grand_total: it's stored on the
+	Quotation as its own field (custom_freight), ERPNext's tax engine never sees
+	it, so `totalPayable` adds it explicitly -- the same "goods + freight" total
+	the staff Quotation Builder shows."""
+	expired = bool(doc.valid_till) and getdate(doc.valid_till) < getdate(today())
+	can_accept = doc.docstatus == 1 and doc.status in QUOTATION_ACCEPTABLE_STATUSES and not expired
+	freight = flt(doc.custom_freight)
+	lines = []
+	for row in doc.items:
+		weight = item_weight_per_box_kg(row.item_code)
+		lines.append(
+			{
+				"itemCode": row.item_code,
+				"itemName": row.item_name,
+				"qty": row.qty,
+				"priceListRate": row.price_list_rate,
+				"discountPercentage": row.discount_percentage,
+				"rate": row.rate,
+				"amount": row.amount,
+				"deliveryDate": row.get("custom_delivery_date"),
+				"weightPerBoxKg": weight,
+				"totalWeightKg": weight * row.qty if weight is not None else None,
+			}
+		)
+	return {
+		"id": doc.name,
+		"number": doc.name,
+		"date": doc.transaction_date,
+		"validTill": doc.valid_till,
+		"status": "Expired" if expired and doc.status in QUOTATION_ACCEPTABLE_STATUSES else doc.status,
+		"canAccept": can_accept,
+		"lines": lines,
+		"netTotal": doc.net_total,
+		"taxes": [{"description": row.description, "rate": row.rate, "amount": row.tax_amount} for row in doc.taxes],
+		"totalTaxesAndCharges": doc.total_taxes_and_charges,
+		"freight": freight,
+		"deliveryPincode": doc.get("custom_delivery_pincode"),
+		"totalPayable": flt(doc.grand_total) + freight,
+		"inquiryIds": frappe.get_all("Inquiry", filters={"linked_quotation": doc.name}, pluck="name"),
+	}
+
+
+def _run_as_system(fn):
+	"""Runs `fn` as Administrator, then restores the dealer session. Building a Sales
+	Order calls into ERPNext internals (get_item_details and others) that check the
+	*session user's* read permission on Item, Customer and so on, and the DMS Dealer
+	role has no DocPerm on any ERPNext doctype -- on purpose: a dealer session is
+	confined to this module's endpoints by auth.middleware, never to ERPNext's own
+	desk/API. Granting that role broad read access just to make an order creatable
+	would be the wrong way round, so the one trusted call runs as the system instead,
+	after this module's own ownership/expiry/sellability checks. (The only visible
+	side effect: the order's owner reads Administrator, not the dealer's portal
+	account; the order is the dealer's by customer, which is what every dealer-facing
+	query filters on.)"""
+	dealer_user = frappe.session.user
+	frappe.set_user("Administrator")
+	try:
+		return fn()
+	finally:
+		frappe.set_user(dealer_user)
+
+
+def _own_quotation(quotation: str, dealer: str):
+	doc = frappe.get_doc("Quotation", quotation)
+	if doc.party_name != dealer or doc.docstatus != 1:
+		frappe.throw(_("Quotation {0} does not belong to you.").format(quotation), frappe.PermissionError)
+	return doc
+
+
+@frappe.whitelist(methods=["GET"])
+def list_my_quotations(status: str | None = None, limit: int = 20, offset: int = 0):
+	"""Quotations Pacific has prepared for this dealer. A quotation exists for the
+	dealer the moment staff create it (the Quotation Builder submits it
+	immediately), so there is no separate "send" step to wait for. Cancelled
+	versions left behind by an amendment are history, not offers -- excluded."""
+	dealer = _current_dealer()
+	limit, offset = clamp(limit, offset)
+	filters = {"quotation_to": "Customer", "party_name": dealer, "docstatus": 1}
+	if status:
+		filters["status"] = status
+	total = frappe.db.count("Quotation", filters=filters)
+	names = frappe.get_all(
+		"Quotation", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	)
+	return {
+		"items": [_serialize_dealer_quotation(frappe.get_doc("Quotation", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_quotation(quotation: str) -> dict:
+	return _serialize_dealer_quotation(_own_quotation(quotation, _current_dealer()))
+
+
+@frappe.whitelist(methods=["POST"])
+def accept_quotation(quotation: str, expected_dispatch, customer_po: str):
+	"""The dealer's order confirmation. An enquiry becomes an order only here, on a
+	quotation Pacific has priced -- this replaces the portal's old straight
+	"convert enquiry to order" (see convert_to_order). The order is built from the
+	quotation itself (every line, rate, discount and tax exactly as quoted), never
+	from caller-supplied lines, with the dealer's own PO number on it, and every
+	inquiry the quotation covered is closed out as Converted to Order.
+
+	Same stance on credit limit as convert_to_order and for the same reason: not
+	queued for Management approval here (see sales.credit_limit's docstring), but
+	ERPNext's own native credit-limit error is run through safe_customer_message so
+	its internal HTML/emails never reach a dealer."""
+	from dms_erp.sales.utils import dealer_contact_line, safe_customer_message
+
+	dealer = _current_dealer()
+	if not (customer_po or "").strip():
+		frappe.throw(_("customer_po is required."), frappe.ValidationError)
+
+	doc = _own_quotation(quotation, dealer)
+	if doc.status not in QUOTATION_ACCEPTABLE_STATUSES:
+		frappe.throw(
+			_("Quotation {0} is {1} and can't be accepted. {2}").format(quotation, doc.status, dealer_contact_line(dealer)),
+			frappe.ValidationError,
+		)
+	if doc.valid_till and getdate(doc.valid_till) < getdate(today()):
+		frappe.throw(
+			_("Quotation {0} expired on {1}. Please ask for a fresh quotation. {2}").format(
+				quotation, doc.valid_till, dealer_contact_line(dealer)
+			),
+			frappe.ValidationError,
+		)
+	for row in doc.items:
+		status = frappe.get_cached_value("Item", row.item_code, "custom_discontinuation_status") or "Active"
+		if not is_sellable(status):
+			frappe.throw(
+				_("{0} is no longer available, so this quotation can't be accepted. {1}").format(
+					row.item_code, dealer_contact_line(dealer)
+				),
+				frappe.ValidationError,
+			)
+
+	try:
+		return _run_as_system(
+			lambda: _convert_to_order(
+				quotation, expected_dispatch=expected_dispatch, customer_po=customer_po.strip(), ignore_permissions=True
+			)
+		)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		frappe.throw(safe_customer_message(e, dealer), type(e))
+
+
+def _own_invoice_filters(dealer: str) -> dict:
+	"""Submitted invoices and credit notes only -- not the Tally migration's
+	opening-balance entries (an accounting carry-forward, not something this
+	dealer was ever invoiced) or proformas (not a tax invoice)."""
+	filters = {"customer": dealer, "docstatus": 1}
+	if _invoice_has("is_opening"):
+		filters["is_opening"] = ["!=", "Yes"]
+	if _invoice_has("tally_voucher_type"):
+		filters["tally_voucher_type"] = ["not like", "%proforma%"]
+	return filters
+
+
+@frappe.whitelist(methods=["GET"])
+def list_my_invoices(search: str | None = None, limit: int = 20, offset: int = 0):
+	"""This dealer's own Sales Invoices -- everything submitted against them,
+	including the Tally-migrated history, not only invoices raised from an app
+	order. `search` matches the invoice number, Tally voucher number, vehicle or LR
+	number."""
+	dealer = _current_dealer()
+	limit, offset = clamp(limit, offset)
+	filters = _own_invoice_filters(dealer)
+	if search:
+		pattern = ["like", f"%{search}%"]
+		matches: set[str] = set()
+		for field in ("name", "tally_voucher_no", "tally_vehicle_no", "tally_lr_no"):
+			if _invoice_has(field):
+				matches |= set(frappe.get_all("Sales Invoice", filters={**filters, field: pattern}, pluck="name"))
+		filters["name"] = ["in", list(matches) or [""]]
+	total = frappe.db.count("Sales Invoice", filters=filters)
+	names = frappe.get_all(
+		"Sales Invoice",
+		filters=filters,
+		pluck="name",
+		order_by="posting_date desc, creation desc",
+		limit_start=offset,
+		limit_page_length=limit,
+	)
+	return {
+		"items": [_serialize_invoice_row(frappe.get_doc("Sales Invoice", name)) for name in names],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_invoice(invoice: str) -> dict:
+	dealer = _current_dealer()
+	doc = frappe.get_doc("Sales Invoice", invoice)
+	if doc.customer != dealer or doc.docstatus != 1:
+		frappe.throw(_("Invoice {0} does not belong to you.").format(invoice), frappe.PermissionError)
+	return _invoice_detail(doc)
 
 
 @frappe.whitelist(methods=["POST"])

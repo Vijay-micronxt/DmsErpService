@@ -45,6 +45,7 @@ import re
 
 import frappe
 from frappe import _
+from frappe.utils import flt
 
 from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable, item_default_supplier
 from dms_erp.pagination import clamp
@@ -483,9 +484,45 @@ def update_product(item: str, patch: dict):
 	if "seriesRef" in patch and patch["seriesRef"]:
 		doc.custom_series = frappe.db.get_value("Product Series", patch["seriesRef"], "series_name")
 
+	# Checked before saving anything, so a refused price change doesn't leave the
+	# rest of the edit half-applied.
+	new_price = _dealer_price_change(doc.name, patch.get("dealerPrice"))
+
 	doc.save(ignore_permissions=True)
 
+	if new_price is not None:
+		_update_dealer_price(doc.name, new_price)
+
 	return _serialize(doc)
+
+
+def _dealer_price_change(item: str, value) -> float | None:
+	"""The product form's Dealer price box. It used to be silently dropped by
+	update_product, so staff saw their new price "not save". Returns the new rate
+	when it actually differs from the live "Dealer" price, else None -- so an
+	ordinary edit that leaves the price alone still saves for someone without a
+	pricing role. A real change is a pricing change and needs a pricing role
+	(pricing_api.PRICING_WRITE_ROLES), not just product edit rights."""
+	if value in (None, ""):
+		return None
+	rate = flt(value)
+	if rate <= 0:
+		frappe.throw(_("Dealer price must be greater than zero."), frappe.ValidationError)
+	if flt(pricing_api.get_dealer_price(item)) == rate:
+		return None
+	pricing_api._assert_can_manage_pricing()
+	return rate
+
+
+def _update_dealer_price(item: str, rate: float):
+	"""With an Item Price Proposal, goes through approve_price, which keeps the price
+	history and republishes Series tier rates, same as approving on the Pricing
+	screen. Tally-migrated items have no proposal, so they get the "Dealer" Item
+	Price set directly."""
+	if frappe.db.exists("Item Price Proposal", item):
+		pricing_api.approve_price(item, rate, reason="Changed from the product form")
+	else:
+		pricing_api.set_dealer_price(item, rate)
 
 
 @frappe.whitelist(methods=["POST"])
