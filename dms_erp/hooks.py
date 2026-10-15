@@ -35,6 +35,9 @@ override_whitelisted_methods = {
 	# Builder should point its action.api_call at this bare name (matching every
 	# other node above), not the fully-dotted path.
 	"create_custom_style_inquiry": "dms_erp.comms.flow_api.create_custom_style_inquiry",
+	# Place Order's new "show the quotation, then confirm" step (client request, Oct
+	# 2026) -- the Flow's "Create Quotation" api_call node points at this bare name.
+	"create_whatsapp_quotation": "dms_erp.comms.flow_api.create_whatsapp_quotation",
 }
 
 after_install = "dms_erp.setup.install.after_install"

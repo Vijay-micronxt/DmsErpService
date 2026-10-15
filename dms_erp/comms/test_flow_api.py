@@ -60,9 +60,8 @@ class TestGetItemInfo(FrappeTestCase):
 	(catalog.test_products, warehouse tests) -- these only verify this endpoint's own
 	job: resolve the calling dealer from `lead.phone`, log both sides of the exchange
 	as a WhatsApp Message (so it shows up in Communications like any other message),
-	and reply with the right stock + price wording (availability and price used to
-	be two separate endpoints/menu steps -- get_item_price -- merged here per BRD
-	C.2.2's own one-reply illustrated conversation)."""
+	and reply with the right stock wording. No price, ever: it depends on delivery
+	and other details only a quotation settles (client request, Oct 2026)."""
 
 	@classmethod
 	def setUpClass(cls):
@@ -76,7 +75,9 @@ class TestGetItemInfo(FrappeTestCase):
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
 	@patch("dms_erp.catalog.api.resolve_item_mention")
-	def test_replies_with_stock_and_price_when_in_stock(self, mock_resolve, mock_create_inquiry, mock_stock, mock_price):
+	def test_replies_with_stock_and_never_a_price_when_in_stock(
+		self, mock_resolve, mock_create_inquiry, mock_stock, mock_price
+	):
 		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
 		mock_create_inquiry.return_value = {"id": "INQ-0001"}
 		mock_stock.return_value = 40.0
@@ -87,7 +88,9 @@ class TestGetItemInfo(FrappeTestCase):
 		self.assertIn("Nordic Oak", result["message"])
 		self.assertIn("40", result["message"])
 		self.assertIn("in stock", result["message"])
-		self.assertIn("425.5", result["message"])
+		self.assertNotIn("425.5", result["message"])
+		self.assertNotIn("₹", result["message"])
+		mock_price.assert_not_called()
 		mock_create_inquiry.assert_called_once_with(dealer=self.dealer, item="GVT-6013", qty=1, source="WhatsApp")
 
 		# The Flow's own n_set_stock_order_ref node reads this back as
@@ -108,39 +111,22 @@ class TestGetItemInfo(FrappeTestCase):
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
 	@patch("dms_erp.catalog.api.resolve_item_mention")
-	def test_omits_price_when_the_dealers_account_has_it_hidden(
+	def test_never_includes_a_price_even_when_the_dealers_account_shows_prices(
 		self, mock_resolve, mock_create_inquiry, mock_stock, mock_price
 	):
-		frappe.db.set_value("Customer", self.dealer, "custom_price_visible", 0)
-		try:
-			mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
-			mock_create_inquiry.return_value = {"id": "INQ-0013"}
-			mock_stock.return_value = 40.0
-
-			result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
-
-			self.assertIn("in stock", result["message"])
-			self.assertNotIn("₹", result["message"])
-			mock_price.assert_not_called()
-		finally:
-			frappe.db.set_value("Customer", self.dealer, "custom_price_visible", 1)
-
-	@patch("dms_erp.pricing.api.get_price_for_dealer")
-	@patch("dms_erp.warehouse.utils.total_stock_for_item")
-	@patch("dms_erp.sales.inquiry_api._create_inquiry")
-	@patch("dms_erp.catalog.api.resolve_item_mention")
-	def test_omits_price_line_when_no_price_is_published_yet(
-		self, mock_resolve, mock_create_inquiry, mock_stock, mock_price
-	):
+		# custom_price_visible is 1 for this dealer (setUpClass) and a price exists --
+		# the old per-dealer switch no longer matters: no price before a quotation.
 		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
-		mock_create_inquiry.return_value = {"id": "INQ-0014"}
+		mock_create_inquiry.return_value = {"id": "INQ-0013"}
 		mock_stock.return_value = 40.0
-		mock_price.return_value = None
+		mock_price.return_value = 425.5
 
 		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
 
 		self.assertIn("in stock", result["message"])
 		self.assertNotIn("₹", result["message"])
+		self.assertNotIn("425", result["message"])
+		mock_price.assert_not_called()
 
 	@patch("dms_erp.pricing.api.get_price_for_dealer")
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
@@ -318,7 +304,7 @@ class TestGetItemInfo(FrappeTestCase):
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
 	@patch("dms_erp.catalog.api.resolve_item_mention")
-	def test_single_batch_still_uses_the_flat_total_not_a_one_line_breakdown(
+	def test_single_batch_is_named_too(
 		self, mock_resolve, mock_create_inquiry, mock_stock, mock_all_batches
 	):
 		mock_resolve.return_value = {"id": "GVT-6013", "code": "GVT-6013", "name": "Nordic Oak"}
@@ -328,8 +314,7 @@ class TestGetItemInfo(FrappeTestCase):
 
 		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "GVT-6013"})
 
-		self.assertIn("is in stock — 45 boxes available", result["message"])
-		self.assertNotIn("Batch A030", result["message"])
+		self.assertIn("is in stock — Batch A030 (45 boxes)", result["message"])
 
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")
@@ -992,3 +977,147 @@ class TestCreateCustomStyleInquiry(FrappeTestCase):
 		self.assertEqual(inquiries[0]["requestedStyle"], "Carrara Marble Look, 600x1200")
 		self.assertEqual(inquiries[0]["source"], "WhatsApp")
 		self.assertIsNone(inquiries[0]["linkedOpportunity"])
+
+
+class TestWhatsAppQuotationBeforeOrder(FrappeTestCase):
+	"""Place Order no longer goes straight from quantity/note/PO to a Sales Order: the
+	bot first shows a real quotation (create_whatsapp_quotation) and the PO number step
+	then confirms THAT quotation (create_dealer_opportunity with quotation_id)."""
+
+	PHONE = "919620204777"
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		from dms_erp.catalog import dealer_catalog_api
+		from dms_erp.catalog.setup import setup_catalog
+		from dms_erp.pricing import api as pricing_api
+		from dms_erp.pricing.setup import setup_pricing
+		from dms_erp.warehouse.test_fixtures import make_item, make_supplier
+
+		ensure_company()
+		setup_catalog()
+		setup_pricing()
+		supplier = make_supplier("WA Quotation Test Supplier")
+		cls.dealer = make_dealer("WA Quotation Test Dealer")
+		frappe.db.set_value("Customer", cls.dealer, "custom_phone", "9620204777")
+		cls.other_dealer = make_dealer("WA Quotation Other Dealer")
+		frappe.db.set_value("Customer", cls.other_dealer, "custom_phone", "9620204778")
+
+		cls.item = make_item("WAQ-PRICED", "Vitrified")
+		dealer_catalog_api.set_product_visibility(cls.dealer, cls.item, True)
+		dealer_catalog_api.set_product_visibility(cls.other_dealer, cls.item, True)
+		pricing_api.ensure_price_record(cls.item, supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
+
+		cls.unpriced_item = make_item("WAQ-UNPRICED", "Vitrified")
+		dealer_catalog_api.set_product_visibility(cls.dealer, cls.unpriced_item, True)
+
+		cls.unassigned_item = make_item("WAQ-UNASSIGNED", "Vitrified")
+
+	def _lead(self, item, qty="220", message="No note", phone=None, **extra):
+		variables = {"order_item_code": item, "order_qty_band": qty, "order_note": "No note", **extra}
+		return {"event": "quotation.create", "phone": phone or self.PHONE, "message": message, "variables": variables}
+
+	def test_shows_a_real_quotation_for_the_typed_quantity(self):
+		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="220"))
+
+		self.assertTrue(result["quotation_id"])
+		self.assertIn(result["quotation_id"], result["message"])
+		self.assertIn(self.item, result["message"])
+		self.assertIn("220 boxes", result["message"])
+		self.assertIn("₹360", result["message"])  # the dealer's own tier rate, no markup
+		self.assertIn("₹79,200", result["message"])  # 220 x 360
+		self.assertIn("GST and freight extra", result["message"])
+
+		quotation = frappe.get_doc("Quotation", result["quotation_id"])
+		self.assertEqual(quotation.party_name, self.dealer)
+		self.assertEqual(quotation.docstatus, 1)
+		self.assertEqual((quotation.items[0].item_code, quotation.items[0].qty, quotation.items[0].rate), (self.item, 220, 360))
+		# An Inquiry for the quantity actually asked is logged against it.
+		inquiry = frappe.db.get_value("Inquiry", {"linked_quotation": quotation.name}, ["qty", "status", "source"], as_dict=True)
+		self.assertEqual((inquiry.qty, inquiry.status, inquiry.source), (220, "Quoted", "WhatsApp"))
+
+	@patch("dms_erp.warehouse.utils.suggest_batch_combination")
+	def test_the_quotation_names_the_batches_the_quantity_would_come_from(self, mock_combo):
+		mock_combo.return_value = {
+			"sufficient": True,
+			"totalBoxes": 220.0,
+			"batches": [
+				{"batchNumber": "A030", "boxes": 150.0},
+				{"batchNumber": "A031", "boxes": 70.0},
+			],
+		}
+		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="220"))
+		self.assertIn("Suggested Batch A030 (150) + Batch A031 (70)", result["message"])
+
+		mock_combo.return_value = {"sufficient": False, "totalBoxes": 90.0, "batches": [{"batchNumber": "A030", "boxes": 90.0}]}
+		short = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="220"))
+		self.assertIn("In stock: Batch A030 (90) — 90 of 220 boxes", short["message"])
+
+	def test_a_range_label_quotes_its_midpoint(self):
+		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="50 - 100 units"))
+		self.assertTrue(result["quotation_id"])
+		self.assertEqual(frappe.get_doc("Quotation", result["quotation_id"]).items[0].qty, flow_api._QTY_BAND_MIDPOINT["50 - 100 units"])
+
+	def test_an_item_outside_the_dealers_catalog_gets_an_enquiry_not_a_quotation(self):
+		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.unassigned_item))
+		self.assertEqual(result["quotation_id"], "")
+		self.assertIn("isn't yet set up for ordering", result["message"])
+		inquiry = frappe.db.get_value("Inquiry", {"dealer": self.dealer, "item": self.unassigned_item}, "linked_quotation")
+		self.assertFalse(inquiry)  # logged as an enquiry, never quoted
+
+	def test_an_item_with_no_approved_price_gets_an_enquiry_not_a_quotation(self):
+		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.unpriced_item))
+		self.assertEqual(result["quotation_id"], "")
+		self.assertIn("can't prepare a quotation", result["message"])
+		self.assertTrue(frappe.db.exists("Inquiry", {"dealer": self.dealer, "item": self.unpriced_item}))
+
+	def test_unresolvable_phone_and_missing_item_reply_safely(self):
+		self.assertEqual(flow_api.create_whatsapp_quotation(lead=self._lead(self.item, phone="919999999990"))["quotation_id"], "")
+		missing = flow_api.create_whatsapp_quotation(lead={"phone": self.PHONE, "message": "x", "variables": {}})
+		self.assertEqual(missing["quotation_id"], "")
+		self.assertIn("couldn't tell which item", missing["message"])
+
+	def test_confirming_with_a_po_number_places_the_order_from_that_quotation(self):
+		quoted = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="40"))
+		qid = quoted["quotation_id"]
+
+		result = flow_api.create_dealer_opportunity(
+			lead=self._lead(self.item, qty="40", message="PO-WA-1", po_number="PO-WA-1", quotation_id=qid)
+		)
+
+		self.assertIn("has been placed against your PO PO-WA-1", result["message"])
+		self.assertIn(qid, result["message"])
+		order = frappe.get_doc("Sales Order", {"po_no": "PO-WA-1"})
+		self.assertEqual(order.customer, self.dealer)
+		self.assertEqual((order.items[0].item_code, order.items[0].qty, order.items[0].rate), (self.item, 40, 360))
+		self.assertEqual(frappe.db.get_value("Quotation", qid, "status"), "Ordered")
+		self.assertEqual(frappe.db.get_value("Inquiry", {"linked_quotation": qid}, "status"), "Converted to Order")
+
+	def test_another_dealers_quotation_cannot_be_confirmed(self):
+		quoted = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="10"))
+		result = flow_api.create_dealer_opportunity(
+			lead=self._lead(
+				self.item, message="PO-STOLEN", po_number="PO-STOLEN", quotation_id=quoted["quotation_id"], phone="919620204778"
+			)
+		)
+		self.assertIn("couldn't find that quotation", result["message"])
+		self.assertFalse(frappe.db.exists("Sales Order", {"po_no": "PO-STOLEN"}))
+
+	def test_an_expired_quotation_cannot_be_confirmed(self):
+		quoted = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="10"))
+		frappe.db.set_value("Quotation", quoted["quotation_id"], "valid_till", frappe.utils.add_days(frappe.utils.today(), -1))
+		result = flow_api.create_dealer_opportunity(
+			lead=self._lead(self.item, message="PO-LATE", po_number="PO-LATE", quotation_id=quoted["quotation_id"])
+		)
+		self.assertIn("has expired", result["message"])
+		self.assertFalse(frappe.db.exists("Sales Order", {"po_no": "PO-LATE"}))
+
+	def test_a_quotation_cannot_be_confirmed_twice(self):
+		quoted = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="10"))
+		lead = self._lead(self.item, message="PO-ONCE", po_number="PO-ONCE", quotation_id=quoted["quotation_id"])
+		self.assertIn("has been placed", flow_api.create_dealer_opportunity(lead=lead)["message"])
+		again = flow_api.create_dealer_opportunity(lead=lead)
+		self.assertIn("can't be confirmed", again["message"])
+		self.assertEqual(frappe.db.count("Sales Order", {"po_no": "PO-ONCE"}), 1)

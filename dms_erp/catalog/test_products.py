@@ -8,6 +8,7 @@ from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.warehouse.test_fixtures import make_dealer
 
 
 def make_supplier(supplier_name):
@@ -17,15 +18,6 @@ def make_supplier(supplier_name):
 		{"doctype": "Supplier", "supplier_name": supplier_name, "supplier_group": "All Supplier Groups"}
 	).insert(ignore_permissions=True)
 	return supplier_name
-
-
-def make_dealer(customer_name):
-	if frappe.db.exists("Customer", customer_name):
-		return customer_name
-	frappe.get_doc(
-		{"doctype": "Customer", "customer_name": customer_name, "customer_group": "All Customer Groups", "territory": "All Territories"}
-	).insert(ignore_permissions=True)
-	return customer_name
 
 
 class TestProducts(FrappeTestCase):
@@ -718,6 +710,44 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(updated["series"], "Product Test Other Series")
 
 		frappe.delete_doc("Product Series", other_series, force=True, ignore_permissions=True)
+
+	def test_update_product_changes_the_dealer_price_and_records_it(self):
+		# The product form's Dealer price used to be silently dropped by update_product.
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		pricing_api.approve_price(item="PROD-TEST-A", final_price=500, reason="Launch")
+
+		updated = catalog_api.update_product("PROD-TEST-A", {"dealerPrice": 560})
+
+		self.assertEqual(updated["dealerPrice"], 560)
+		latest = pricing_api.get_price_record("PROD-TEST-A")["history"][0]
+		self.assertEqual((latest["oldPrice"], latest["newPrice"]), (500, 560))
+
+	def test_update_product_leaves_an_unchanged_dealer_price_alone(self):
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		pricing_api.approve_price(item="PROD-TEST-A", final_price=500, reason="Launch")
+		history_before = len(pricing_api.get_price_record("PROD-TEST-A")["history"])
+
+		catalog_api.update_product("PROD-TEST-A", {"size": "600x600", "dealerPrice": 500})
+
+		self.assertEqual(len(pricing_api.get_price_record("PROD-TEST-A")["history"]), history_before)
 
 	def test_update_product_rejects_an_unknown_series_ref(self):
 		catalog_api.create_product(

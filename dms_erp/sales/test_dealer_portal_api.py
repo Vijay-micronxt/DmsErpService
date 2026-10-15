@@ -2,13 +2,14 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.auth.dealer_api import _dealer_portal_user
 from dms_erp.catalog import dealer_catalog_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.sales import dealer_portal_api, inquiry_api
+from dms_erp.sales import dealer_portal_api, inquiry_api, order_api, quotation_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
 
 
@@ -149,16 +150,16 @@ class TestDealerPortalApi(FrappeTestCase):
 	def test_convert_to_order_rejects_an_unassigned_item(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		with self.assertRaises(frappe.PermissionError):
-			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-UNASSIGNED")
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-UNASSIGNED")
 
 	def test_convert_to_order_requires_a_customer_po(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
 		with self.assertRaises(frappe.ValidationError):
-			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="")
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="")
 
 	def test_convert_to_order_sets_po_no_and_closes_the_inquiry(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
-		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-DEALER-001")
+		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-DEALER-001")
 
 		self.assertEqual(order["customerPo"], "PO-DEALER-001")
 		self.assertEqual(order["dealerId"], self.dealer)
@@ -171,14 +172,14 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user(self.dealer_user)
 
 		with self.assertRaises(frappe.PermissionError):
-			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-X")
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-X")
 
 	def test_convert_to_order_rejects_an_already_converted_inquiry(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
-		dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-1")
+		dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-1")
 
 		with self.assertRaises(frappe.ValidationError):
-			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-2")
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-2")
 
 	@patch("dms_erp.sales.dealer_portal_api._create_order")
 	def test_convert_to_order_never_leaks_erpnext_native_html_or_emails(self, mock_create_order):
@@ -194,7 +195,7 @@ class TestDealerPortalApi(FrappeTestCase):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
 
 		with self.assertRaises(frappe.ValidationError) as ctx:
-			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-HTML-TEST")
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-HTML-TEST")
 
 		message = str(ctx.exception)
 		self.assertNotIn("<", message)
@@ -214,17 +215,17 @@ class TestDealerPortalApi(FrappeTestCase):
 
 	def test_list_my_orders_never_shows_another_dealers_orders(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
-		dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-MINE")
+		dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-MINE")
 
 		frappe.set_user(self.other_dealer_user)
 		other_inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
-		dealer_portal_api.convert_to_order(inquiry=other_inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-THEIRS")
+		dealer_portal_api.convert_to_order(inquiry=other_inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-THEIRS")
 		mine = dealer_portal_api.list_my_orders()
 		self.assertTrue(all(row["dealerId"] == self.other_dealer for row in mine["items"]))
 
 	def test_get_my_order_rejects_another_dealers_order(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
-		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch="2026-09-01", customer_po="PO-MINE-2")
+		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-MINE-2")
 
 		frappe.set_user(self.other_dealer_user)
 		with self.assertRaises(frappe.PermissionError):
@@ -248,6 +249,202 @@ class TestDealerPortalApi(FrappeTestCase):
 	def test_suggest_alternatives_excludes_the_item_itself(self):
 		alternatives = dealer_portal_api.suggest_alternatives(item=self.item)
 		self.assertNotIn(self.item, [row["code"] for row in alternatives])
+
+	# ---- No price before a quotation ------------------------------------------------
+
+	def test_catalog_and_item_never_carry_any_price(self):
+		# Even though this item has an approved dealer price (setUpClass): the portal
+		# shows no price until a quotation.
+		entry = dealer_portal_api.get_item(self.item)
+		self.assertNotIn("price", entry)
+		self.assertNotIn("dealerPrice", entry)
+		for row in dealer_portal_api.get_catalog()["items"]:
+			self.assertNotIn("price", row)
+			self.assertNotIn("dealerPrice", row)
+
+	def test_raised_and_listed_enquiries_never_carry_a_price(self):
+		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=3)
+		self.assertNotIn("price", inquiry)
+		self.assertNotIn("price", dealer_portal_api.get_my_inquiry(inquiry["id"]))
+		for row in dealer_portal_api.list_my_inquiries()["items"]:
+			self.assertNotIn("price", row)
+
+	@patch("dms_erp.sales.dealer_portal_api.all_batches")
+	@patch("dms_erp.sales.dealer_portal_api.top_batches")
+	def test_item_detail_lists_every_batch_but_the_catalog_list_stays_a_preview(self, mock_top, mock_all):
+		batches = [{"batchNumber": f"B{i}", "itemCode": self.item, "itemName": "x", "boxes": 10 - i} for i in range(5)]
+		mock_all.return_value = batches
+		mock_top.return_value = batches[:3]
+
+		self.assertEqual(len(dealer_portal_api.get_item(self.item)["topBatches"]), 5)
+		self.assertEqual(len(dealer_portal_api.resolve_code(self.item)["topBatches"]), 5)
+		listed = {row["code"]: row for row in dealer_portal_api.get_catalog(limit=100)["items"]}
+		self.assertEqual(len(listed[self.item]["topBatches"]), 3)
+
+	# ---- Separate section for items outside the dealer's catalogue ------------------
+
+	def test_get_catalog_scope_splits_assigned_from_other_items(self):
+		assigned = {row["code"] for row in dealer_portal_api.get_catalog(scope="assigned", limit=100)["items"]}
+		other = {row["code"] for row in dealer_portal_api.get_catalog(scope="other", limit=100)["items"]}
+		self.assertIn(self.item, assigned)
+		self.assertNotIn(self.hidden_item, assigned)
+		self.assertIn(self.hidden_item, other)
+		self.assertNotIn(self.item, other)
+		self.assertFalse(assigned & other)
+
+	# ---- Several items in one enquiry -----------------------------------------------
+
+	def test_raise_inquiries_makes_one_inquiry_per_item_sharing_a_group(self):
+		result = dealer_portal_api.raise_inquiries(
+			items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}], remarks="For a site in Mysore"
+		)
+		self.assertEqual(len(result["items"]), 2)
+		group = result["requestGroup"]
+		self.assertEqual(group, result["items"][0]["id"])
+		for row in result["items"]:
+			self.assertEqual(row["requestGroup"], group)
+			self.assertEqual(frappe.db.get_value("Inquiry", row["id"], "request_group"), group)
+			self.assertEqual(row["source"], "Web")
+			self.assertEqual(row["dealerId"], self.dealer)
+		by_item = {row["productId"]: row for row in result["items"]}
+		self.assertTrue(by_item[self.item]["orderable"])
+		self.assertFalse(by_item[self.hidden_item]["orderable"])
+
+	def test_raise_inquiries_accepts_a_json_string_like_a_form_post(self):
+		import json
+
+		result = dealer_portal_api.raise_inquiries(items=json.dumps([{"item": self.item, "qty": 2}]))
+		self.assertEqual(len(result["items"]), 1)
+
+	def test_raise_inquiries_validates_everything_before_creating_anything(self):
+		before = frappe.db.count("Inquiry", {"dealer": self.dealer})
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 1}, {"item": "NO-SUCH-ITEM", "qty": 1}])
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 1}, {"item": self.item, "qty": 2}])
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 0}])
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.raise_inquiries(items=[])
+		self.assertEqual(frappe.db.count("Inquiry", {"dealer": self.dealer}), before)
+
+	# ---- Quotations the dealer receives and accepts ---------------------------------
+
+	def _staff_quotation(self, dealer=None, inquiries=None, validity_days=7, freight=1200):
+		frappe.set_user("Administrator")
+		try:
+			return quotation_api.create_quotation(
+				dealer=dealer or self.dealer,
+				lines=[{"item": self.item, "qty": 10}],
+				markup_pct=12,
+				freight=freight,
+				validity_days=validity_days,
+				inquiries=inquiries,
+			)
+		finally:
+			frappe.set_user(self.dealer_user)
+
+	def test_dealer_sees_their_quotation_without_any_internal_numbers(self):
+		quotation = self._staff_quotation()
+
+		listed = {row["id"]: row for row in dealer_portal_api.list_my_quotations()["items"]}
+		self.assertIn(quotation["id"], listed)
+		detail = dealer_portal_api.get_my_quotation(quotation["id"])
+		self.assertTrue(detail["canAccept"])
+		self.assertEqual(detail["lines"][0]["itemCode"], self.item)
+		self.assertEqual(detail["lines"][0]["rate"], 403)  # round(360 * 1.12)
+		self.assertEqual(detail["freight"], 1200)
+		self.assertEqual(detail["totalPayable"], detail["netTotal"] + detail["totalTaxesAndCharges"] + 1200)
+		# Pacific's own markup %, sales channel and the item's purchase cost are staff-only.
+		for key in ("markupPct", "channel"):
+			self.assertNotIn(key, detail)
+		for line in detail["lines"]:
+			self.assertNotIn("purchaseCost", line)
+			self.assertNotIn("belowPurchaseCost", line)
+
+	def test_a_dealer_never_sees_another_dealers_quotation(self):
+		quotation = self._staff_quotation(dealer=self.other_dealer)
+		self.assertNotIn(quotation["id"], [row["id"] for row in dealer_portal_api.list_my_quotations()["items"]])
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_my_quotation(quotation["id"])
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "PO-STOLEN")
+
+	def test_accepting_a_quotation_places_the_order_as_quoted_with_the_dealers_po(self):
+		first = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
+		second = dealer_portal_api.raise_inquiry(item=self.item, qty=4)
+		quotation = self._staff_quotation(inquiries=[first["id"], second["id"]])
+
+		order = dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "  PO-ACCEPT-1 ")
+
+		self.assertEqual(order["customerPo"], "PO-ACCEPT-1")
+		self.assertEqual(order["sourceType"], "Quotation")
+		self.assertEqual(order["sourceRef"], quotation["id"])
+		self.assertEqual(order["lines"][0]["rate"], 403)
+		self.assertEqual(order["lines"][0]["qty"], 10)
+		# Every inquiry the quotation covered closes, not only the first one.
+		for inquiry in (first, second):
+			self.assertEqual(frappe.db.get_value("Inquiry", inquiry["id"], "status"), "Converted to Order")
+			self.assertEqual(frappe.db.get_value("Inquiry", inquiry["id"], "linked_sales_order"), order["id"])
+		self.assertFalse(dealer_portal_api.get_my_quotation(quotation["id"])["canAccept"])
+
+	def test_a_quotation_cannot_be_accepted_twice(self):
+		quotation = self._staff_quotation()
+		dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "PO-ONCE")
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "PO-TWICE")
+
+	def test_accepting_needs_a_po_number(self):
+		quotation = self._staff_quotation()
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "   ")
+
+	def test_an_expired_quotation_cannot_be_accepted(self):
+		quotation = self._staff_quotation()
+		frappe.db.set_value("Quotation", quotation["id"], "valid_till", add_days(today(), -1))
+		detail = dealer_portal_api.get_my_quotation(quotation["id"])
+		self.assertFalse(detail["canAccept"])
+		self.assertEqual(detail["status"], "Expired")
+		with self.assertRaises(frappe.ValidationError):
+			dealer_portal_api.accept_quotation(quotation["id"], add_days(today(), 10), "PO-LATE")
+
+	# ---- Invoices on the portal -----------------------------------------------------
+
+	def _invoice_for(self, dealer):
+		# Undone after the test: an invoice left in the shared class transaction would
+		# otherwise leak into test_my_dues_is_zero_with_no_invoices_raised_yet.
+		savepoint = f"dp_invoice_{dealer.replace(' ', '_')}"
+		frappe.db.savepoint(savepoint)
+		self.addCleanup(frappe.db.rollback, save_point=savepoint)
+		frappe.set_user("Administrator")
+		try:
+			order = order_api.create_order(
+				dealer=dealer, lines=[{"item": self.item, "qty": 2}], expected_dispatch=add_days(today(), 5)
+			)
+			frappe.db.set_value("Sales Order", order["id"], "custom_fulfillment_stage", "Dispatched")
+			invoice = order_api.create_sales_invoice(order["id"])
+			return invoice["invoices"][0]["id"] if "invoices" in invoice else invoice["id"]
+		finally:
+			frappe.set_user(self.dealer_user)
+
+	def test_dealer_sees_only_their_own_invoices(self):
+		mine = self._invoice_for(self.dealer)
+		theirs = self._invoice_for(self.other_dealer)
+
+		listed = [row["id"] for row in dealer_portal_api.list_my_invoices(limit=100)["items"]]
+		self.assertIn(mine, listed)
+		self.assertNotIn(theirs, listed)
+		detail = dealer_portal_api.get_my_invoice(mine)
+		self.assertEqual(detail["id"], mine)
+		self.assertEqual(detail["items"][0]["itemCode"], self.item)
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_my_invoice(theirs)
+
+	def test_invoice_search_finds_by_number(self):
+		mine = self._invoice_for(self.dealer)
+		found = [row["id"] for row in dealer_portal_api.list_my_invoices(search=mine)["items"]]
+		self.assertEqual(found, [mine])
+		self.assertEqual(dealer_portal_api.list_my_invoices(search="NO-SUCH-INVOICE")["items"], [])
 
 	def test_a_staff_only_session_cannot_use_the_dealer_portal(self):
 		frappe.set_user("Administrator")

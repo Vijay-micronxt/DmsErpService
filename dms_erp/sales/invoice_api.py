@@ -126,7 +126,14 @@ def list_sales_invoices(
 @frappe.whitelist(methods=["GET"])
 def get_sales_invoice(invoice: str):
 	_assert_can_read_invoices()
-	doc = frappe.get_doc("Sales Invoice", invoice)
+	return _invoice_detail(frappe.get_doc("Sales Invoice", invoice))
+
+
+def _invoice_detail(doc) -> dict:
+	"""Unguarded core of get_sales_invoice -- also what the dealer portal's own
+	get_my_invoice/list_my_invoices return (ownership is that endpoint's check, in
+	place of INVOICE_READ_ROLES). Nothing here is staff-internal: it's the invoice
+	document itself plus the receipts allocated against it."""
 	receipts = frappe.db.sql(
 		"""
 		select pe.name, pe.posting_date, pe.mode_of_payment, pe.reference_no, per.allocated_amount
@@ -140,7 +147,13 @@ def get_sales_invoice(invoice: str):
 	return {
 		**_serialize_row(doc),
 		"dueDate": doc.due_date,
-		"dealerGstin": doc.get("billing_address_gstin") or frappe.db.get_value("Customer", doc.customer, "gstin"),
+		# Customer.gstin only exists where India Compliance is installed.
+		"dealerGstin": doc.get("billing_address_gstin")
+		or (
+			frappe.db.get_value("Customer", doc.customer, "gstin")
+			if frappe.get_meta("Customer").has_field("gstin")
+			else None
+		),
 		"address": doc.get("address_display"),
 		"poNumber": doc.po_no,
 		"returnAgainst": doc.return_against,
