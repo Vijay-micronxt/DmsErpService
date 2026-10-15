@@ -28,6 +28,29 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   check, stock-derived status, the Opportunity mirror) is skipped for one of these;
   `dealer_portal_api.convert_to_order` rejects converting one to an order outright,
   since there's no real item to build a Sales Order line from.
+- **Dealer portal: enquiry → quotation → order** (`dealer_portal_api.py`, client issues
+  of Oct 2026) — a dealer no longer turns an enquiry straight into an order. They
+  enquire (several items at once via `raise_inquiries`: one Inquiry per item, all
+  sharing `request_group`), staff quote them (the Quotation Builder submits
+  immediately, so the quotation is visible to the dealer the moment it exists), and
+  the dealer sees it with `list_my_quotations`/`get_my_quotation` (a dealer-safe
+  shape — no markup %, channel or purchase cost) and places the order with
+  `accept_quotation` (their own PO number + dispatch date; built from the quotation
+  exactly as quoted, closing every inquiry it covered). **No price is shown before a
+  quotation**: catalog, item detail, enquiries and WhatsApp's item lookup all drop it
+  (price depends on delivery and other details), and `Customer.custom_price_visible`
+  is no longer read anywhere. The catalog splits into `scope="assigned"` / `"other"`
+  for the portal's two sections, and `list_my_invoices`/`get_my_invoice` expose the
+  dealer's own Sales Invoices (opening-balance and proforma entries left out). The
+  DMS Dealer role has no DocPerm on any ERPNext doctype, so the order-building call
+  runs through `_run_as_system` after this module's own checks — `convert_to_order`
+  (no longer offered by the portal, kept callable) needed the same, and had been
+  failing with a permission error without it. WhatsApp's Place Order now follows the same rule: after the
+  quantity and note the bot shows a quotation (`flow_api.create_whatsapp_quotation` — a real
+  Quotation at the dealer's tier rate, no markup, GST/freight stated as extra, plus an Inquiry for
+  the quantity) and the PO step then confirms *that* quotation (`create_dealer_opportunity` with
+  `quotation_id`). A Flow that predates this step never sets `quotation_id` and still takes the
+  old direct-order path, so an un-updated live bot keeps working until it's re-imported.
 - **Quotation** (`quotation_api.py`) — ERPNext's native `Quotation` doctype,
   submitted immediately on creation (no draft step, same pattern as Phase 4's
   Purchase Order). Custom fields only for the retail markup % and freight (BRD
@@ -57,7 +80,13 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   (`transport_rate_api.py`, Management-only writes). Quotation lines also carry
   `belowPurchaseCost` — the ticket's "flag if quoted below standard purchase price",
   compared against the item's Item Price Proposal purchase cost; a warning, never a
-  block, and no flag at all when no cost is recorded.
+  block, and no flag at all when no cost is recorded. MOM §3.1's "6-month average freight
+  cost per kg by transport type" is `freight_cost_api.freight_reference`, shown to **staff
+  only** beside the Freight field: nothing else records what freight actually cost, so it
+  averages `Freight Cost Entry` rows (one per shipment: date, Truck/Container, kg, cost —
+  entered under Settings → Freight Costs or bulk-imported from Pacific's history), weighted
+  by kg, over the last 6 months. Empty until entries exist; never shown to a dealer (MOM
+  §3.2 hides internal cost from the dealer-facing quotation).
 - **Order** (`order_api.py`) — ERPNext's native `Sales Order`. Pacific's warehouse-
   fulfillment stages (Confirmed → Picking → Ready to Dispatch → Dispatched →
   Delivered/Cancelled) are a distinct operational flow layered on top via a custom

@@ -264,14 +264,15 @@ def get_item_info(lead=None, **kwargs):
 	step): `lead.message` is the item code(s) the dealer typed after being prompted
 	for one -- see this module's own docstring for how more than one is handled.
 
-	A single combined reply (availability + size/finish + price) per BRD C.2.2's own
-	illustrated exchange -- item availability and price used to be two separate menu
-	steps/endpoints (get_item_price), which was just a shape mismatch against the
-	one-reply BRD conversation, not a missing capability; merged here rather than
-	keeping a second endpoint alive that would otherwise go unused. custom_price_visible
-	still gates the price line the same way it already gates price display in the
-	dealer-portal catalog (sales/dealer_api.py) -- a dealer whose account has prices
-	hidden sees stock/size/finish only, no price line at all, never a placeholder.
+	A single combined reply (availability + size/finish) per BRD C.2.2's own
+	illustrated exchange. No price is ever included: Pacific's price to a dealer
+	depends on delivery and other details that only exist once a quotation is
+	prepared, so a price quoted over WhatsApp first just confuses dealers (client
+	request, Oct 2026: "don't show price before quotation", WhatsApp included) --
+	the dealer-portal catalog drops it for the same reason. BRD C.2.2's illustrated
+	reply did carry a price; this is a deliberate departure from it, and
+	Customer.custom_price_visible is no longer read here. The price reaches the
+	dealer in the quotation.
 
 	Out of stock also surfaces the item's own lead_time_days and, when a real one
 	is available, a suggested alternative (see _alt_item_suggestion) -- BRD C.2.2's
@@ -286,7 +287,6 @@ def get_item_info(lead=None, **kwargs):
 	anything useful from "45 available" if that's scattered across five different
 	lots. No quantity given -- the dealer just typed a code/name -- falls back to
 	that same flat total exactly as before this was added."""
-	from dms_erp.pricing.api import get_price_for_dealer
 	from dms_erp.warehouse.utils import all_batches, suggest_batch_combination, total_stock_for_item
 
 	phone, text = _lead_fields(lead)
@@ -294,11 +294,9 @@ def get_item_info(lead=None, **kwargs):
 	if not dealer:
 		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
 	if not text:
-		return {"message": "Please enter an item code to check availability and price."}
+		return {"message": "Please enter an item code to check availability."}
 
 	_log_inbound_message(dealer, text, related_type="General")
-
-	price_visible = bool(frappe.db.get_value("Customer", dealer, "custom_price_visible"))
 
 	def describe(item, qty):
 		label = f"{item['name']} ({item['code']})"
@@ -326,22 +324,20 @@ def get_item_info(lead=None, **kwargs):
 		else:
 			# No quantity given (WhatsApp gap #2: "if multiple batches are
 			# available, all the batches should list down with the individual
-			# quantities") -- every batch, not just the flat Bin total, whenever
-			# there's more than one to actually break down. A single batch, or
-			# on_hand being real Bin stock with no matching Batch lots at all (a
-			# data inconsistency, not the common case), falls back to the flat
-			# total -- there's nothing more specific to say in either case.
+			# quantities") -- every batch, and (client request, Oct 2026: "which
+			# batch it belongs to") a single batch is named too rather than collapsed
+			# into a bare total. Only on_hand being real Bin stock with no matching
+			# Batch lots at all (a data inconsistency, not the common case) falls
+			# back to the flat total -- there's no batch to name.
 			batches = all_batches(item["id"])
 			if len(batches) > 1:
 				parts = " + ".join(f"Batch {b['batchNumber']} ({int(b['boxes'])})" for b in batches)
 				line = f"{label} is in stock — {parts} ({int(on_hand)} boxes total)."
+			elif batches:
+				line = f"{label} is in stock — Batch {batches[0]['batchNumber']} ({int(batches[0]['boxes'])} boxes)."
 			else:
 				line = f"{label} is in stock — {int(on_hand)} boxes available."
 
-		if price_visible:
-			rate = get_price_for_dealer(item["id"], dealer)
-			if rate is not None:
-				line += f" Price: ₹{rate:,.2f} per box."
 		return line
 
 	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
@@ -552,6 +548,14 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	po_number = variables.get("po_number")
 	note = variables.get("order_note") or text or None
 
+	quotation_id = variables.get("quotation_id")
+	if po_number and quotation_id:
+		# The Flow showed the dealer this quotation (create_whatsapp_quotation) and they
+		# confirmed it -- the order is built from it, exactly as quoted. A Flow that
+		# predates that step never sets quotation_id and still falls through to the
+		# direct-order path below, so an un-updated live bot keeps working.
+		return _accept_whatsapp_quotation(dealer, quotation_id, po_number)
+
 	if po_number:
 		from frappe.utils import add_days, today
 
@@ -630,6 +634,194 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	reply = "Thanks — we've noted your enquiry and someone from our team will follow up shortly."
 	_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
 	return {"message": reply}
+
+
+WHATSAPP_QUOTATION_VALIDITY_DAYS = 7
+
+
+def _quotation_batch_line(doc) -> str | None:
+	"""Which batch(es) the quoted quantity would be supplied from -- the same greedy
+	largest-first suggestion the stock lookup gives (suggest_batch_combination).
+	Indicative only: batches are actually allocated when the order is picked, so the
+	wording is "suggested", and a quantity stock can't cover says so rather than
+	implying it can. One line per item; nothing at all when the item has no batch
+	lots on record."""
+	from dms_erp.warehouse.utils import suggest_batch_combination
+
+	parts = []
+	for row in doc.items:
+		combo = suggest_batch_combination(row.item_code, row.qty)
+		if not combo["batches"]:
+			continue
+		batches = " + ".join(f"Batch {b['batchNumber']} ({int(b['boxes'])})" for b in combo["batches"])
+		if combo["sufficient"]:
+			parts.append(f"Suggested {batches}")
+		else:
+			parts.append(f"In stock: {batches} — {int(combo['totalBoxes'])} of {int(row.qty)} boxes")
+	return "; ".join(parts) if parts else None
+
+
+def _quotation_message(doc) -> str:
+	"""The quotation as a chat message. Rates are the dealer's own tier rate as
+	published (no markup); GST and freight are never part of an automatic quotation,
+	so the message says they're extra rather than leaving the total to be read as
+	final."""
+	from frappe.utils import formatdate
+
+	lines = []
+	for row in doc.items:
+		qty = int(row.qty) if float(row.qty).is_integer() else row.qty
+		lines.append(f"• {row.item_name or row.item_code} ({row.item_code}) — {qty} boxes × ₹{row.rate:,.0f} = ₹{row.amount:,.0f}")
+	text = f"📄 Quotation {doc.name}\n" + "\n".join(lines)
+	batch_line = _quotation_batch_line(doc)
+	if batch_line:
+		text += "\n" + batch_line
+	text += f"\nTotal: ₹{doc.grand_total:,.0f} (GST and freight extra)"
+	if doc.valid_till:
+		text += f"\nValid till {formatdate(doc.valid_till, 'dd MMM yyyy')}."
+	return text
+
+
+@frappe.whitelist()
+def create_whatsapp_quotation(lead=None, **kwargs):
+	"""Flow event `quotation.create` -- the new step between "Place Order"'s quantity/
+	note choices and the PO number: instead of asking for a PO and creating a Sales
+	Order straight away, the bot now shows the dealer a quotation in the chat and asks
+	them to confirm it (client request, Oct 2026: a quotation before the order).
+
+	The quotation is a real one -- a Quotation document built by the same
+	quotation_api._create_quotation the staff Quotation Builder uses, so it also shows
+	on the dealer portal's Quotes tab and in the staff app, and an Inquiry (with the
+	quantity actually asked for) is logged against it, so staff see the demand even if
+	the dealer never confirms. It is automatic -- no staff review -- priced at the
+	dealer's own tier rate with no markup, GST or freight (the message says so); a
+	quotation staff prepare by hand can carry those.
+
+	Returns `quotation_id` ("" when none could be made) alongside the message: the
+	Flow keys its next step on it (confirm buttons when set, just the message when
+	not), and stores it as lead.variables.quotation_id for create_dealer_opportunity.
+	An item outside this dealer's assigned catalog, or one with no approved price
+	yet, gets an enquiry instead of a quotation -- the same outcomes the direct-order
+	path already had for the first of those."""
+	phone, text = _lead_fields(lead)
+	variables = _lead_variables(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {
+			"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support.",
+			"quotation_id": "",
+		}
+
+	item_code = variables.get("order_item_code")
+	if not item_code:
+		return {
+			"message": "We couldn't tell which item this is for. Please start again from the main menu.",
+			"quotation_id": "",
+		}
+
+	if text:
+		_log_inbound_message(dealer, text, related_type="General")
+
+	from dms_erp.catalog.dealer_catalog_api import is_visible
+	from dms_erp.sales.inquiry_api import _create_inquiry
+	from dms_erp.sales.order_channel import auto_classify_channel
+	from dms_erp.sales.quotation_api import _create_quotation
+
+	qty = _resolve_order_qty(variables.get("order_qty_band"))
+	note = variables.get("order_note") or text or None
+
+	def inquiry_only(reply):
+		try:
+			inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=qty, source="WhatsApp", remarks=note)
+			_send_message(dealer, reply, related_type="Inquiry", related_reference=inquiry["id"])
+		except (frappe.PermissionError, frappe.ValidationError):
+			_send_message(dealer, reply, related_type="General")
+		return {"message": reply, "quotation_id": ""}
+
+	if not is_visible(dealer, item_code):
+		return inquiry_only(
+			"This item isn't yet set up for ordering on your account. We've noted your "
+			"enquiry and our team will follow up to get it added."
+		)
+
+	lines = [{"item": item_code, "qty": qty}]
+	try:
+		inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=qty, source="WhatsApp", remarks=note)
+		quotation = _create_quotation(
+			dealer,
+			lines,
+			markup_pct=0,
+			validity_days=WHATSAPP_QUOTATION_VALIDITY_DAYS,
+			inquiries=[inquiry["id"]],
+			channel=auto_classify_channel(dealer, lines),
+		)
+	except (frappe.PermissionError, frappe.ValidationError):
+		reply = (
+			"We can't prepare a quotation for this item right now, but we've noted your "
+			f"enquiry and our team will follow up. {dealer_contact_line(dealer)}"
+		)
+		_send_message(dealer, reply, related_type="General")
+		return {"message": reply, "quotation_id": ""}
+
+	reply = _quotation_message(frappe.get_doc("Quotation", quotation["id"]))
+	_send_message(dealer, reply, related_type="Quotation", related_reference=quotation["id"])
+	return {"message": reply, "quotation_id": quotation["id"]}
+
+
+def _accept_whatsapp_quotation(dealer: str, quotation_id: str, po_number: str) -> dict:
+	"""The dealer confirmed the quotation shown in the chat and gave their PO number:
+	builds the Sales Order from that quotation. Same credit-limit gate the direct
+	WhatsApp order already had (BRD C.11 trigger #1 -- over the limit queues for
+	Management, here with the quotation's exact total rather than an estimate), and the
+	same rule that nothing raw from ERPNext reaches a dealer."""
+	from frappe.utils import add_days, getdate, today
+
+	from dms_erp.sales.credit_limit import gate_credit_limit
+	from dms_erp.sales.quotation_api import _convert_to_order
+	from dms_erp.sales.utils import safe_customer_message
+
+	def reply(text, related_type="General", reference=None):
+		_send_message(dealer, text, related_type=related_type, related_reference=reference)
+		return {"message": text}
+
+	# Existence first -- a mistyped/stale id is routine, not an error (same as _find_dealer_order).
+	doc = frappe.get_doc("Quotation", quotation_id) if frappe.db.exists("Quotation", quotation_id) else None
+	if not doc or doc.party_name != dealer or doc.docstatus != 1:
+		return reply("We couldn't find that quotation on your account. Please start again from the main menu.")
+	if doc.status not in ("Open", "Replied"):
+		return reply(f"Quotation {doc.name} is {doc.status} and can't be confirmed. {dealer_contact_line(dealer)}")
+	if doc.valid_till and getdate(doc.valid_till) < getdate(today()):
+		return reply(f"Quotation {doc.name} has expired. Please start again from the main menu for a fresh one.")
+
+	try:
+		result = gate_credit_limit(
+			dealer=dealer,
+			additional_value=doc.grand_total,
+			reference_doctype="Sales Order",
+			applier_action="convert_to_order",
+			create_fn=_convert_to_order,
+			create_kwargs={
+				"quotation": doc.name,
+				"expected_dispatch": add_days(today(), 7),
+				"customer_po": po_number,
+				"ignore_permissions": True,
+			},
+		)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		return reply(safe_customer_message(e, dealer))
+
+	if isinstance(result, dict) and result.get("approvalRequired"):
+		return reply(
+			f"Your order against PO {po_number} is over your approved credit limit, so it needs "
+			"a quick review by our team before we can confirm it. We'll notify you once it's approved."
+		)
+
+	return reply(
+		f"Order {result['number']} has been placed against your PO {po_number} from quotation {doc.name}. "
+		"We'll confirm dispatch shortly.",
+		related_type="Order",
+		reference=result["number"],
+	)
 
 
 @frappe.whitelist()
