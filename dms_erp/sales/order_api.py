@@ -26,6 +26,7 @@ from dms_erp.catalog.utils import (
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
+from dms_erp.sales.reservation import reservation_summary
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
 from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
 from dms_erp.warehouse.utils import default_company
@@ -77,7 +78,7 @@ def _serialize(doc) -> dict:
 		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
-		"driverMobile": doc.custom_driver_mobile,
+		"driverMobile": doc.get("custom_driver_mobile"),
 		# BRD C.3.4 — interim manual gate ahead of VALS API. See advance_order_stage.
 		"advanceConfirmed": bool(doc.custom_advance_confirmed),
 		"owner": doc.owner,
@@ -86,6 +87,8 @@ def _serialize(doc) -> dict:
 			for row in sorted(doc.custom_stage_history, key=lambda r: r.idx)
 		],
 		"invoices": _order_invoices(doc.name),
+		# ISS-2026-00635 -- 21-day reservation timeline; see sales.reservation.
+		"reservation": reservation_summary(doc),
 	}
 
 
@@ -172,14 +175,23 @@ def list_orders(
 		filters["custom_fulfillment_stage"] = stage
 	if search:
 		# ISS-2026-00630 / BRD §C.12: outward search is primarily by lorry number or
-		# driver mobile, secondarily by order number -- a Sales Invoice number search
-		# is covered separately by sales.invoice_api.list_sales_invoices (and global
-		# search), since this app's own Sales Orders don't carry that link directly.
+		# driver mobile, secondarily by Sales Invoice number. The invoice match goes
+		# through Sales Invoice Item.sales_order -- the same link _order_invoices reads
+		# -- since a Sales Order carries no invoice field of its own. Tally-migrated
+		# invoices have no sales_order on their lines, so they never match here; they
+		# stay findable from the Invoices screen (invoice_api.list_sales_invoices).
 		pattern = ["like", f"%{search}%"]
 		matches = (
 			set(frappe.get_all("Sales Order", filters={"name": pattern}, pluck="name"))
 			| set(frappe.get_all("Sales Order", filters={"custom_vehicle": pattern}, pluck="name"))
 			| set(frappe.get_all("Sales Order", filters={"custom_driver_mobile": pattern}, pluck="name"))
+			| set(
+				frappe.get_all(
+					"Sales Invoice Item",
+					filters={"parent": pattern, "sales_order": ["is", "set"], "docstatus": ["!=", 2]},
+					pluck="sales_order",
+				)
+			)
 		)
 		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Sales Order", filters=filters)

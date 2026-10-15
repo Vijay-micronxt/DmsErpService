@@ -135,6 +135,17 @@ class TestDealerPortalApi(FrappeTestCase):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		self.assertEqual(inquiry["productId"], self.hidden_item)
 
+	def test_inquiries_carry_orderable_for_the_convert_button(self):
+		# ISS-2026-00644: the portal hides "Convert to order" when this is false.
+		assigned = dealer_portal_api.raise_inquiry(item=self.item, qty=5)
+		unassigned = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
+		self.assertTrue(assigned["orderable"])
+		self.assertFalse(unassigned["orderable"])
+		self.assertTrue(dealer_portal_api.get_my_inquiry(assigned["id"])["orderable"])
+		self.assertFalse(dealer_portal_api.get_my_inquiry(unassigned["id"])["orderable"])
+		listed = {i["id"]: i["orderable"] for i in dealer_portal_api.list_my_inquiries(limit=50)["items"]}
+		self.assertFalse(listed[unassigned["id"]])
+
 	def test_convert_to_order_rejects_an_unassigned_item(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		with self.assertRaises(frappe.PermissionError):

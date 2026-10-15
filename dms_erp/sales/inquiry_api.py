@@ -92,7 +92,7 @@ def _serialize(doc) -> dict:
 		# ISS-2026-00636 -- the free-text design/style name a dealer typed through
 		# WhatsApp's "Custom Style" option, when this inquiry has no real item
 		# (productId is null); null for every ordinary, item-backed inquiry.
-		"requestedStyle": doc.custom_requested_style,
+		"requestedStyle": doc.get("custom_requested_style"),
 		"qty": doc.qty,
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
@@ -176,7 +176,16 @@ def _inquiry_filters(dealer: str | None, status: str | None, search: str | None)
 	if status:
 		filters["status"] = status
 	if search:
-		filters["item"] = ["like", f"%{search}%"]
+		# ISS-2026-00636 -- a Custom Style inquiry has no item, only the free-text
+		# custom_requested_style the dealer typed, so search has to look there too or
+		# those inquiries could never be found by what was asked for. A dict filter
+		# can't OR two fields (and frappe.db.count takes no or_filters), hence the
+		# name-set union -- same pattern as order_api.list_orders' search.
+		pattern = ["like", f"%{search}%"]
+		matches = set(frappe.get_all("Inquiry", filters={"item": pattern}, pluck="name")) | set(
+			frappe.get_all("Inquiry", filters={"custom_requested_style": pattern}, pluck="name")
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	return filters
 
 
@@ -378,6 +387,16 @@ def convert_to_purchase_requirement(
 		frappe.throw(
 			_("Inquiry {0} is {1} — only Open, Out of Stock or Pre-order Required inquiries can become a purchase requirement.").format(
 				inquiry, doc.status
+			),
+			frappe.ValidationError,
+		)
+	if not doc.item:
+		# ISS-2026-00636 -- a Custom Style inquiry has only free text, nothing to buy.
+		# Without this, create_purchase_order fails on a None item with an error that
+		# says nothing about why.
+		frappe.throw(
+			_("Inquiry {0} is a custom style request with no catalog item -- find or create the item first.").format(
+				inquiry
 			),
 			frappe.ValidationError,
 		)

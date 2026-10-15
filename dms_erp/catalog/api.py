@@ -129,10 +129,13 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"size": item_doc.custom_size,
 		"finish": item_doc.custom_finish,
 		"color": item_doc.custom_color,
-		"colourAttribute1": item_doc.custom_colour_attribute_1,
-		"colourAttribute2": item_doc.custom_colour_attribute_2,
-		"designAttribute1": item_doc.custom_design_attribute_1,
-		"designAttribute2": item_doc.custom_design_attribute_2,
+		# .get(), not attribute access: a site that has this code but hasn't run `bench migrate`
+		# yet lacks these Custom Fields, and a plain attribute read there turns every product
+		# list/detail call into a 500. The values just come back empty until it's migrated.
+		"colourAttribute1": item_doc.get("custom_colour_attribute_1"),
+		"colourAttribute2": item_doc.get("custom_colour_attribute_2"),
+		"designAttribute1": item_doc.get("custom_design_attribute_1"),
+		"designAttribute2": item_doc.get("custom_design_attribute_2"),
 		"series": item_doc.custom_series,
 		"seriesRef": item_doc.custom_series_ref,
 		"bulkQtyThreshold": item_doc.custom_bulk_qty_threshold,

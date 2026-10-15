@@ -51,7 +51,7 @@ CUSTOM_FIELDS = {
 			"fieldname": "custom_delivery_pincode",
 			"fieldtype": "Data",
 			"label": "Delivery Pincode",
-			"description": "ISS-2026-00633 -- free-text; transport_rate_api.suggest_transport_rate looks this up against Transport Rate Zone for a freight SUGGESTION only, never an enforced rate (no real pincode/zone rate table exists yet -- see that doctype's own docstring).",
+			"description": "ISS-2026-00633 -- free-text; quotation_api.suggest_transport_rate finds every Transport Rate Zone whose pincode range covers this for a freight SUGGESTION only, never an enforced rate.",
 			"insert_after": "custom_freight",
 		},
 		{"fieldname": "custom_inquiry", "fieldtype": "Link", "label": "Source Inquiry", "options": "Inquiry", "insert_after": "custom_delivery_pincode"},
@@ -134,6 +134,26 @@ CUSTOM_FIELDS = {
 			"default": "0",
 			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
 			"insert_after": "custom_order_channel",
+		},
+		# ISS-2026-00635 -- set once each by sales.reservation.review_reservations
+		# (daily); see that module for the 21-day window. Read-only: they record what
+		# the job did, nobody edits them by hand.
+		{
+			"fieldname": "custom_reservation_reminder_sent_on",
+			"fieldtype": "Date",
+			"label": "Reservation Reminder Sent On",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"insert_after": "custom_advance_confirmed",
+		},
+		{
+			"fieldname": "custom_reservation_flagged_on",
+			"fieldtype": "Date",
+			"label": "Reservation Flagged for Review On",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"in_standard_filter": 1,
+			"insert_after": "custom_reservation_reminder_sent_on",
 		},
 	],
 	"Quotation Item": [
