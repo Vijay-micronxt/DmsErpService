@@ -11,8 +11,16 @@
         "label": "Inbound Trigger",
         "config": {
           "keywords": [
+            "Hello",
+            "Hi",
+            "Hii",
+            "Hey",
             "Tiles",
-            "Hello"
+            "Menu",
+            "Start",
+            "Namaste",
+            "Namaskar",
+            "नमस्ते"
           ],
           "match_mode": "exact",
           "case_sensitive": false
@@ -82,6 +90,11 @@
                   "id": "btn_profile",
                   "title": "6. My Profile",
                   "description": "View and manage your profile"
+                },
+                {
+                  "id": "btn_custom_style",
+                  "title": "7. Custom Style",
+                  "description": "Request a design not in our catalog"
                 }
               ],
               "title": "Main Menu"
@@ -120,6 +133,10 @@
           {
             "key": "btn_profile",
             "label": "Main Menu: 6. My Profile"
+          },
+          {
+            "key": "btn_custom_style",
+            "label": "Main Menu: 7. Custom Style"
           }
         ]
       },
@@ -1220,34 +1237,33 @@
         "label": "Ask Order Quantity (List)",
         "config": {
           "buttons": [],
-          "body_text": "📦 How many units/boxes would you like to order?\n👇 Select the closest range.",
+          "body_text": "📦 How many boxes would you like to order?\n👇 Pick a range, or choose *Type exact quantity*.",
           "list_data": [
             {
               "rows": [
                 {
                   "id": "qty_10_50",
-                  "title": "10 - 50 units",
-                  "description": "Small order"
+                  "title": "10 - 50 units"
                 },
                 {
                   "id": "qty_50_100",
-                  "title": "50 - 100 units",
-                  "description": "Medium order"
+                  "title": "50 - 100 units"
                 },
                 {
                   "id": "qty_100_200",
-                  "title": "100 - 200 units",
-                  "description": "Large order"
+                  "title": "100 - 200 units"
                 },
                 {
                   "id": "qty_200_500",
-                  "title": "200 - 500 units",
-                  "description": "Bulk order"
+                  "title": "200 - 500 units"
                 },
                 {
                   "id": "qty_500_plus",
-                  "title": "500+ units",
-                  "description": "Very large order"
+                  "title": "500+ units"
+                },
+                {
+                  "id": "qty_exact",
+                  "title": "✏️ Type exact quantity"
                 }
               ],
               "title": "Quantity"
@@ -1255,7 +1271,7 @@
           ],
           "media_url": "",
           "media_type": "",
-          "footer_text": "Select a range",
+          "footer_text": "Select a range or type your own",
           "header_text": "Order Quantity",
           "media_filename": "",
           "interactive_type": "list",
@@ -1285,6 +1301,10 @@
           {
             "key": "qty_500_plus",
             "label": "Quantity: 500+ units"
+          },
+          {
+            "key": "qty_exact",
+            "label": "Quantity: Type exact quantity"
           }
         ]
       },
@@ -1911,6 +1931,285 @@
       "positionAbsolute": {
         "x": -1100,
         "y": 3920
+      }
+    },
+    {
+      "id": "n_ask_qty_exact",
+      "data": {
+        "label": "Ask Exact Quantity",
+        "config": {
+          "buttons": [],
+          "body_text": "Please type the exact number of boxes you need.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: 35",
+          "header_text": "📦 Order Quantity",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -1700,
+        "y": 2600
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1700,
+        "y": 2600
+      }
+    },
+    {
+      "id": "n_wait_qty_exact",
+      "data": {
+        "label": "Wait Exact Quantity",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -1700,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1700,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_qty_exact",
+      "data": {
+        "label": "Set Qty: Exact",
+        "config": {
+          "key": "order_qty_band",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1700,
+        "y": 3040
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -1700,
+        "y": 3040
+      }
+    },
+    {
+      "id": "n_ask_custom_style",
+      "data": {
+        "label": "Ask Custom Style",
+        "config": {
+          "buttons": [],
+          "body_text": "Tell us the design or style you're looking for (name, size, colour, finish — anything that helps).",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Our team will follow up with you",
+          "header_text": "🎨 Custom Style",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 1900,
+        "y": 208
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 1900,
+        "y": 208
+      }
+    },
+    {
+      "id": "n_wait_custom_style",
+      "data": {
+        "label": "Wait Custom Style",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": 1900,
+        "y": 428
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 1900,
+        "y": 428
+      }
+    },
+    {
+      "id": "n_set_custom_style",
+      "data": {
+        "label": "Set Custom Style",
+        "config": {
+          "key": "custom_style_text",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": 1900,
+        "y": 648
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 1900,
+        "y": 648
+      }
+    },
+    {
+      "id": "n_api_custom_style",
+      "data": {
+        "label": "Create Custom Style Inquiry",
+        "config": {
+          "method": "POST",
+          "event_name": "custom_style.create",
+          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_custom_style_inquiry",
+          "success_rules": [
+            {
+              "path": "message.message",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "custom_style_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": 1900,
+        "y": 868
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 1900,
+        "y": 868
+      }
+    },
+    {
+      "id": "n_show_custom_style",
+      "data": {
+        "label": "Custom Style Logged",
+        "config": {
+          "buttons": [],
+          "body_text": "{{custom_style_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "✅ Request Noted",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": 1900,
+        "y": 1088
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": 1900,
+        "y": 1088
       }
     }
   ],
@@ -2780,6 +3079,149 @@
       "type": "smoothstep",
       "source": "n_set_po_number",
       "target": "n_api_opportunity",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_ask_order_qty_list_qty_exact_n_ask_qty_exact",
+      "type": "smoothstep",
+      "source": "n_ask_order_qty_list",
+      "target": "n_ask_qty_exact",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "qty_exact",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_ask_qty_exact_out_n_wait_qty_exact",
+      "type": "smoothstep",
+      "source": "n_ask_qty_exact",
+      "target": "n_wait_qty_exact",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_wait_qty_exact_on_input_n_set_qty_exact",
+      "type": "smoothstep",
+      "source": "n_wait_qty_exact",
+      "target": "n_set_qty_exact",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_wait_qty_exact_on_timeout_n_error",
+      "type": "smoothstep",
+      "source": "n_wait_qty_exact",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_set_qty_exact_out_n_ask_order_note_list",
+      "type": "smoothstep",
+      "source": "n_set_qty_exact",
+      "target": "n_ask_order_note_list",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_main_menu_btn_custom_style_n_ask_custom_style",
+      "type": "smoothstep",
+      "source": "n_main_menu",
+      "target": "n_ask_custom_style",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_custom_style",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_ask_custom_style_out_n_wait_custom_style",
+      "type": "smoothstep",
+      "source": "n_ask_custom_style",
+      "target": "n_wait_custom_style",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_wait_custom_style_on_input_n_set_custom_style",
+      "type": "smoothstep",
+      "source": "n_wait_custom_style",
+      "target": "n_set_custom_style",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_wait_custom_style_on_timeout_n_error",
+      "type": "smoothstep",
+      "source": "n_wait_custom_style",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_set_custom_style_out_n_api_custom_style",
+      "type": "smoothstep",
+      "source": "n_set_custom_style",
+      "target": "n_api_custom_style",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_api_custom_style_out_n_show_custom_style",
+      "type": "smoothstep",
+      "source": "n_api_custom_style",
+      "target": "n_show_custom_style",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_api_custom_style_error_n_error",
+      "type": "smoothstep",
+      "source": "n_api_custom_style",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_n_show_custom_style_out_n_end",
+      "type": "smoothstep",
+      "source": "n_show_custom_style",
+      "target": "n_end",
       "condition": {
         "type": "always"
       },

@@ -61,15 +61,57 @@ class TestQuotationApi(FrappeTestCase):
 	def test_suggest_transport_rate_returns_none_for_unknown_pincode(self):
 		self.assertIsNone(quotation_api.suggest_transport_rate("999999"))
 
-	def test_suggest_transport_rate_matches_an_exact_pincode(self):
-		frappe.get_doc({"doctype": "Transport Rate Zone", "pincode": "560001", "suggested_freight": 4500}).insert(
-			ignore_permissions=True
-		)
-		try:
-			suggestion = quotation_api.suggest_transport_rate("560001")
-			self.assertEqual(suggestion["suggestedFreight"], 4500)
-		finally:
-			frappe.delete_doc("Transport Rate Zone", "560001", force=True, ignore_permissions=True)
+	def _make_zone(self, zone_name, from_pincode, to_pincode, rate_basis="Per Trip", rate=4500, **extra):
+		doc = frappe.get_doc(
+			{
+				"doctype": "Transport Rate Zone",
+				"zone_name": zone_name,
+				"from_pincode": from_pincode,
+				"to_pincode": to_pincode,
+				"rate_basis": rate_basis,
+				"rate": rate,
+				**extra,
+			}
+		).insert(ignore_permissions=True)
+		self.addCleanup(frappe.delete_doc, "Transport Rate Zone", doc.name, force=True, ignore_permissions=True)
+		return doc
+
+	def test_suggest_transport_rate_matches_a_pincode_inside_a_range(self):
+		self._make_zone("QT Bengaluru Central", "560001", "560050")
+		suggestion = quotation_api.suggest_transport_rate("560023")
+		self.assertEqual(len(suggestion["options"]), 1)
+		self.assertEqual(suggestion["options"][0]["zone"], "QT Bengaluru Central")
+		self.assertEqual(suggestion["options"][0]["suggestedFreight"], 4500)
+		self.assertIsNone(quotation_api.suggest_transport_rate("560051"))
+
+	def test_suggest_transport_rate_prices_per_kg_and_per_km(self):
+		self._make_zone("QT Per Kg", "561001", "561010", rate_basis="Per Kg", rate=2, vehicle_type="Tata 407")
+		self._make_zone("QT Per Km", "561001", "561010", rate_basis="Per Km", rate=40, distance_km=120, vehicle_type="Lorry")
+		by_zone = {o["zone"]: o for o in quotation_api.suggest_transport_rate("561005", weight_kg=1500)["options"]}
+		self.assertEqual(by_zone["QT Per Kg"]["suggestedFreight"], 3000)
+		self.assertEqual(by_zone["QT Per Km"]["suggestedFreight"], 4800)
+		# No weight -> a Per Kg option can't be priced, so no number rather than a guess.
+		by_zone = {o["zone"]: o for o in quotation_api.suggest_transport_rate("561005")["options"]}
+		self.assertIsNone(by_zone["QT Per Kg"]["suggestedFreight"])
+
+	def test_transport_rate_zone_rejects_overlap_for_the_same_vehicle_type(self):
+		self._make_zone("QT Overlap A", "562001", "562050", vehicle_type="Lorry")
+		with self.assertRaises(frappe.ValidationError):
+			self._make_zone("QT Overlap B", "562040", "562060", vehicle_type="Lorry")
+		# A different vehicle type over the same range is the intended case.
+		self._make_zone("QT Overlap C", "562040", "562060", vehicle_type="Tata 407")
+
+	def test_quotation_line_flags_a_rate_below_purchase_cost(self):
+		# priced_item's Item Price Proposal records a purchase cost of 400.
+		below = quotation_api._serialize_line(frappe._dict(item_code=self.priced_item, qty=1, rate=350))
+		self.assertEqual(below["purchaseCost"], 400)
+		self.assertTrue(below["belowPurchaseCost"])
+		above = quotation_api._serialize_line(frappe._dict(item_code=self.priced_item, qty=1, rate=560))
+		self.assertFalse(above["belowPurchaseCost"])
+		# No recorded cost -> no flag, never a comparison against a made-up number.
+		unknown = quotation_api._serialize_line(frappe._dict(item_code=self.unpriced_item, qty=1, rate=1))
+		self.assertIsNone(unknown["purchaseCost"])
+		self.assertFalse(unknown["belowPurchaseCost"])
 
 	def test_quotation_line_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_weight_per_box_kg", 28)

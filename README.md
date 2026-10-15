@@ -79,6 +79,9 @@ time it logs a warning and skips warehouse creation rather than failing the
 whole migration; re-run `bench --site <site-name> migrate` once a Company
 exists.
 
+Loading the Tally-migrated data into a new site (restore, install the app, login keys): see
+[`docs/setting-up-tally-data.md`](docs/setting-up-tally-data.md).
+
 ## Required site_config.json keys
 
 JWT signing keys are **not** auto-generated — set them explicitly so a fresh

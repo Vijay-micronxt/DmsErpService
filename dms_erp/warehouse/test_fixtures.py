@@ -46,11 +46,35 @@ def make_supplier(supplier_name: str) -> str:
 	return supplier_name
 
 
+TEST_CUSTOMER_GROUP = "DMS Test Dealers"
+
+
+def _test_customer_group() -> str:
+	# ERPNext v15 refuses a Customer in a group-type Customer Group, and the root
+	# "All Customer Groups" is one -- every dealer-creating test failed in setUpClass
+	# on a stock v15 site because of it. A leaf group under the root is all it needs.
+	if not frappe.db.exists("Customer Group", TEST_CUSTOMER_GROUP):
+		frappe.get_doc(
+			{
+				"doctype": "Customer Group",
+				"customer_group_name": TEST_CUSTOMER_GROUP,
+				"parent_customer_group": "All Customer Groups",
+				"is_group": 0,
+			}
+		).insert(ignore_permissions=True)
+	return TEST_CUSTOMER_GROUP
+
+
 def make_dealer(customer_name: str) -> str:
 	if frappe.db.exists("Customer", customer_name):
 		return customer_name
 	frappe.get_doc(
-		{"doctype": "Customer", "customer_name": customer_name, "customer_group": "All Customer Groups", "territory": "All Territories"}
+		{
+			"doctype": "Customer",
+			"customer_name": customer_name,
+			"customer_group": _test_customer_group(),
+			"territory": "All Territories",
+		}
 	).insert(ignore_permissions=True)
 	return customer_name
 

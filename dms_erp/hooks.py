@@ -58,6 +58,8 @@ scheduler_events = {
 		"dms_erp.purchase.po_api.flag_overdue_unpaid_pos",
 		# MOM §3.7 -- 3-month dealer inactivity flag + notification (sales/dealer_activity.py).
 		"dms_erp.sales.dealer_activity.flag_inactive_dealers",
+		# ISS-2026-00635 -- day-20 reminder / past-21-days review flag on open Sales Orders.
+		"dms_erp.sales.reservation.review_reservations",
 	],
 	# MOM §3.7 -- "every month, the system will generate a list of active dealer numbers."
 	"monthly": [

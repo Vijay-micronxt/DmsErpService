@@ -202,6 +202,23 @@ class TestInquiryApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.create_inquiry(dealer=self.dealer, qty=1, source="WhatsApp")
 
+	def test_search_finds_a_custom_style_inquiry_by_what_was_typed(self):
+		# ISS-2026-00636: no item to match on, so search has to look at the style text.
+		inquiry = inquiry_api.create_inquiry(
+			dealer=self.dealer, qty=1, source="WhatsApp", requested_style="Onyx gold vein 800x1600"
+		)
+		found = [i["id"] for i in inquiry_api.list_inquiries(search="onyx gold", limit=50)["items"]]
+		self.assertIn(inquiry["id"], found)
+
+	def test_custom_style_inquiry_cannot_be_sent_to_purchase(self):
+		inquiry = inquiry_api.create_inquiry(
+			dealer=self.dealer, qty=3, source="WhatsApp", requested_style="Terrazzo chips, white"
+		)
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.convert_to_purchase_requirement(
+				inquiry=inquiry["id"], expected_ready_date=add_days(today(), 10)
+			)
+
 	def test_convert_to_order_rejects_a_custom_style_inquiry(self):
 		from dms_erp.auth.dealer_api import _dealer_portal_user
 		from dms_erp.sales import dealer_portal_api

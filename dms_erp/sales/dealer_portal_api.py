@@ -236,7 +236,9 @@ def raise_inquiry(item: str, qty: float, remarks: str | None = None):
 	and always unassigned (see inquiry_api._create_inquiry's own staff-only
 	self-assignment default) since this is the dealer, not staff, raising it."""
 	dealer = _current_dealer()
-	return _create_inquiry(dealer, item, qty, source="Web", remarks=remarks)
+	data = _create_inquiry(dealer, item, qty, source="Web", remarks=remarks)
+	data["orderable"] = is_visible(dealer, item)
+	return data
 
 
 @frappe.whitelist(methods=["GET"])
@@ -334,7 +336,7 @@ def list_my_inquiries(status: str | None = None, search: str | None = None, limi
 		"Inquiry", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
 	)
 	return {
-		"items": [_serialize_inquiry(frappe.get_doc("Inquiry", name)) for name in names],
+		"items": [_serialize_dealer_inquiry(frappe.get_doc("Inquiry", name), dealer) for name in names],
 		"total": total,
 		"limit": limit,
 		"offset": offset,
@@ -347,7 +349,19 @@ def get_my_inquiry(inquiry: str) -> dict:
 	doc = frappe.get_doc("Inquiry", inquiry)
 	if doc.dealer != dealer:
 		frappe.throw(_("Inquiry {0} does not belong to you.").format(inquiry), frappe.PermissionError)
-	return _serialize_inquiry(doc)
+	return _serialize_dealer_inquiry(doc, dealer)
+
+
+def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
+	"""ISS-2026-00644 -- a dealer can now enquire on items outside their assigned
+	catalog, and on a Custom Style with no item at all (ISS-2026-00636), but
+	convert_to_order still refuses both. `orderable` is that same rule computed
+	up front, so the portal can hide "Convert to order" instead of showing a
+	button that only ever fails. convert_to_order stays the real gate -- this is
+	a display hint, re-checked there."""
+	data = _serialize_inquiry(doc)
+	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
+	return data
 
 
 @frappe.whitelist(methods=["GET"])
