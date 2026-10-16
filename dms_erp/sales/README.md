@@ -31,7 +31,9 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
 - **Dealer portal: enquiry → quotation → order** (`dealer_portal_api.py`, client issues
   of Oct 2026) — a dealer no longer turns an enquiry straight into an order. They
   enquire (several items at once via `raise_inquiries`: one Inquiry per item, all
-  sharing `request_group`), staff quote them (the Quotation Builder submits
+  sharing `request_group`; the portal's `list_my_enquiries`/`get_my_enquiry` hand them back as
+  ONE enquiry per group, paged by enquiry, with a status that reads "Mixed" when the items
+  differ), staff quote them (the Quotation Builder submits
   immediately, so the quotation is visible to the dealer the moment it exists), and
   the dealer sees it with `list_my_quotations`/`get_my_quotation` (a dealer-safe
   shape — no markup %, channel or purchase cost) and places the order with

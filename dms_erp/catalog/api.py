@@ -80,6 +80,12 @@ def _set_alt_item(item_code: str, alt_item_code: str | None):
 		frappe.delete_doc("Item Alternative", name, ignore_permissions=True)
 
 	if alt_item_code:
+		# ERPNext refuses an Item Alternative unless "Allow Alternative Item" is ticked on the
+		# item -- and on the alternative too, since this link is two-way. No item in the
+		# Tally-migrated data has it ticked (0 of 4,340), so without this every attempt to set
+		# one from the product form failed with "Not allow to set alternative item".
+		for code in (item_code, alt_item_code):
+			frappe.db.set_value("Item", code, "allow_alternative_item", 1)
 		frappe.get_doc(
 			{
 				"doctype": "Item Alternative",
@@ -473,9 +479,13 @@ def update_product(item: str, patch: dict):
 		frappe.throw(_("Unknown Series master: {0}").format(patch["seriesRef"]), frappe.ValidationError)
 
 	doc = frappe.get_doc("Item", item)
+	alt_change = None
 	for key, value in patch.items():
 		if key == "altItemId":
-			_set_alt_item(doc.name, value)
+			# Applied after the save below: _set_alt_item ticks "Allow Alternative Item" on this
+			# item, and doing that first would be undone (or hit a timestamp conflict) when
+			# doc.save() writes back the copy loaded above.
+			alt_change = (value,)
 			continue
 		fieldname = field_map.get(key)
 		if fieldname:
@@ -489,6 +499,10 @@ def update_product(item: str, patch: dict):
 	new_price = _dealer_price_change(doc.name, patch.get("dealerPrice"))
 
 	doc.save(ignore_permissions=True)
+
+	if alt_change is not None:
+		_set_alt_item(doc.name, alt_change[0])
+		doc.reload()
 
 	if new_price is not None:
 		_update_dealer_price(doc.name, new_price)
@@ -650,6 +664,10 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
 # below this ratio is a "mismatch" even when it's the only plausible one; a runner-up
 # within _AMBIGUOUS_MATCH_GAP of the winner is "multiple candidates" even when the
 # winner alone would have cleared the bar -- either case must ask, never guess.
+_MIN_SUBSTRING_CHARS = 3
+# How many matches the WhatsApp reply lists when a typed word fits several items. A reply is
+# one message the dealer reads and answers by typing a code, so it can't list hundreds.
+_MAX_LISTED_MATCHES = 8
 _CONFIDENT_MATCH_RATIO = 0.85
 _AMBIGUOUS_MATCH_GAP = 0.05
 
@@ -715,13 +733,33 @@ def resolve_item_by_name(dealer: str, text: str) -> dict:
 		return {"status": "none"}
 
 	upper_text = text.upper()
-	code_matches = [item for item in items if upper_text in item.name.upper()]
+	# An exact code or name always wins -- typing the full name of one item must not turn
+	# into a pick-list just because a longer item name happens to contain it.
+	exact = [item for item in items if upper_text in (item.name.upper(), (item.item_name or "").upper())]
+	if len(exact) == 1:
+		return {"status": "matched", "item": _serialize(frappe.get_doc("Item", exact[0].name))}
+
+	# The typed text appearing anywhere in the item's code OR name. This used to look at
+	# the code only, so "royal" -- inside exactly one code but in the NAME of many items --
+	# was answered with that one item and the rest never came up. Skipped under 3
+	# characters: "a" or "12" would match most of the catalog.
+	code_matches = (
+		[
+			item
+			for item in items
+			if upper_text in item.name.upper() or upper_text in (item.item_name or "").upper()
+		]
+		if len(upper_text) >= _MIN_SUBSTRING_CHARS
+		else []
+	)
 	if len(code_matches) == 1:
 		return {"status": "matched", "item": _serialize(frappe.get_doc("Item", code_matches[0].name))}
 	if len(code_matches) > 1:
+		code_matches.sort(key=lambda item: item.name)
 		return {
 			"status": "ambiguous",
-			"candidates": [_serialize(frappe.get_doc("Item", item.name)) for item in code_matches[:3]],
+			"candidates": [_serialize(frappe.get_doc("Item", item.name)) for item in code_matches[:_MAX_LISTED_MATCHES]],
+			"total": len(code_matches),
 		}
 
 	by_lower_name = {item.item_name.lower(): item.name for item in items if item.item_name}
