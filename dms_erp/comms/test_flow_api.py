@@ -107,6 +107,28 @@ class TestGetItemInfo(FrappeTestCase):
 		self.assertEqual(thread[-1]["relatedType"], "Inquiry")
 		self.assertEqual(thread[-1]["relatedRef"], "INQ-0001")
 
+	@patch("dms_erp.catalog.api.resolve_item_by_name")
+	@patch("dms_erp.catalog.api.resolve_item_mention")
+	def test_a_word_fitting_several_items_lists_them_numbered_to_pick_from(self, mock_mention, mock_by_name):
+		mock_mention.return_value = None
+		mock_by_name.return_value = {
+			"status": "ambiguous",
+			"total": 11,
+			"candidates": [{"name": f"Royal Tile {i}", "code": f"RT-{i}"} for i in range(1, 8)]
+			# a Tally-migrated item: the name and the code are the same text
+			+ [{"name": "Royal Plain 600x600", "code": "Royal Plain 600x600"}],
+		}
+
+		result = flow_api.get_item_info(lead={"event": "item.lookup", "phone": "919620204657", "message": "royal"})
+
+		self.assertIn("We found 11 items matching 'royal'", result["message"])
+		self.assertIn("1. Royal Tile 1 (RT-1)", result["message"])
+		self.assertIn("8. Royal Plain 600x600\n", result["message"])
+		self.assertNotIn("Royal Plain 600x600 (Royal Plain 600x600)", result["message"])
+		self.assertIn("…and 3 more.", result["message"])
+		self.assertIn("type more of the name to narrow it down", result["message"])
+		self.assertIsNone(result["item_code"])
+
 	@patch("dms_erp.pricing.api.get_price_for_dealer")
 	@patch("dms_erp.warehouse.utils.total_stock_for_item")
 	@patch("dms_erp.sales.inquiry_api._create_inquiry")

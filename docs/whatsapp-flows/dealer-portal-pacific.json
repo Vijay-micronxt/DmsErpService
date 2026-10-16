@@ -2346,15 +2346,15 @@
     {
       "id": "n_show_quote_unavailable",
       "data": {
-        "label": "Quotation Not Possible",
+        "label": "Quotation Not Possible (fixed text)",
         "config": {
           "buttons": [],
-          "body_text": "{{quote_response.message.message}}",
+          "body_text": "We couldn't prepare a quotation for this item right now — it may not be set up for ordering on your account yet. We've noted your enquiry and our team will follow up with you.",
           "list_data": null,
           "media_url": "",
           "media_type": "",
           "footer_text": "Send Hello to return to main menu",
-          "header_text": "Enquiry noted",
+          "header_text": "📝 Enquiry noted",
           "media_filename": "",
           "interactive_type": "none"
         },

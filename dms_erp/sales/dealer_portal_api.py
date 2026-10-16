@@ -312,16 +312,26 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 
 @frappe.whitelist(methods=["GET"])
 def suggest_alternatives(item: str, limit: int = 5) -> list[dict]:
-	"""BRD C.13.1 — "see alternative/recommended items" when the item raised in an
-	enquiry is out of stock. Same-series items in this dealer's own catalog, ranked
-	by on-hand stock, excluding the out-of-stock item itself -- the closest
-	approximation to "recommended" available without a dedicated recommendation
-	engine (none exists anywhere else in this app either)."""
+	"""BRD C.13.1 — "see alternative/recommended items" when the item is out of stock.
+
+	First the alternative STAFF chose for this item (Products -> Edit -> Alternative item;
+	flagged `isRecommended`) -- but only when it's in this dealer's own catalog and has
+	stock, the same two checks WhatsApp's out-of-stock reply makes: recommending an item
+	the dealer can't order, or another dead end, isn't an alternative. Then same-series
+	items in the dealer's catalog, ranked by on-hand stock, excluding the item itself --
+	the closest approximation to "recommended" available without a recommendation
+	engine (none exists anywhere in this app)."""
+	from dms_erp.catalog.api import _get_alt_item
+
 	dealer = _current_dealer()
 	limit, _offset = clamp(limit, 0)
 
+	assigned = set(catalog_for(dealer))
+	chosen = _get_alt_item(item)
+	picks = [chosen] if chosen and chosen != item and chosen in assigned and total_stock_for_item(chosen) > 0 else []
+
 	series_ref = frappe.get_cached_value("Item", item, "custom_series_ref")
-	item_codes = set(catalog_for(dealer)) - {item}
+	item_codes = assigned - {item} - set(picks)
 	if series_ref:
 		same_series = set(frappe.get_all("Item", filters={"custom_series_ref": series_ref}, pluck="name"))
 		candidates = item_codes & same_series
@@ -329,7 +339,10 @@ def suggest_alternatives(item: str, limit: int = 5) -> list[dict]:
 		candidates = item_codes
 
 	ranked = sorted(candidates, key=lambda code: total_stock_for_item(code), reverse=True)
-	return [_catalog_entry(code, dealer) for code in ranked[:limit]]
+	entries = [_catalog_entry(code, dealer) for code in (picks + ranked)[:limit]]
+	for entry in entries:
+		entry["isRecommended"] = entry["id"] in picks
+	return entries
 
 
 @frappe.whitelist(methods=["POST"])
@@ -418,6 +431,79 @@ def list_my_inquiries(status: str | None = None, search: str | None = None, limi
 	}
 
 
+def _enquiry_status(statuses: list[str]) -> str:
+	"""One status for a whole enquiry. When every item is in the same state it's that state;
+	when they differ (two quoted, one out of stock) there is no honest single word, so it
+	says "Mixed" and the detail page shows each item's own status."""
+	distinct = set(statuses)
+	return statuses[0] if len(distinct) == 1 else "Mixed"
+
+
+def _serialize_enquiry(key: str, docs: list, dealer: str) -> dict:
+	"""One enquiry as the dealer sees it: the items they asked about together. The Inquiry
+	doctype is one item per record (stock status, reorder demand and quoting all hang off
+	that), so an enquiry raised with several items is several records sharing a
+	request_group -- this gathers them back into the single enquiry the dealer made.
+	A lone inquiry is just an enquiry of one item, keyed by its own number."""
+	items = [_serialize_dealer_inquiry(doc, dealer) for doc in sorted(docs, key=lambda d: (d.creation, d.name))]
+	return {
+		"id": key,
+		"number": key,
+		"date": items[0]["date"],
+		"createdAt": items[0]["createdAt"],
+		"status": _enquiry_status([i["status"] for i in items]),
+		"itemCount": len(items),
+		"remarks": next((i["remarks"] for i in items if i["remarks"]), None),
+		"linkedQuotations": sorted({i["linkedQuotation"] for i in items if i["linkedQuotation"]}),
+		"items": items,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_my_enquiries(status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+	"""The dealer's enquiries, one entry per enquiry they made -- items raised together from
+	the enquiry list come back as ONE entry holding all of them (see _serialize_enquiry).
+	Paginated by enquiry, not by item, so a 3-item enquiry is never split across pages.
+	`status`/`search` pick the enquiries that have at least one matching item; the whole
+	enquiry is then returned, not only the matching items."""
+	dealer = _current_dealer()
+	limit, offset = clamp(limit, offset)
+	rows = frappe.get_all(
+		"Inquiry",
+		filters=_inquiry_filters(dealer, status, search),
+		fields=["name", "request_group", "creation"],
+		order_by="creation desc",
+	)
+	keys: list[str] = []
+	for row in rows:
+		key = row.request_group or row.name
+		if key not in keys:
+			keys.append(key)
+	page = keys[offset : offset + limit]
+	return {
+		"items": [_enquiry_for(key, dealer) for key in page],
+		"total": len(keys),
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+def _enquiry_for(key: str, dealer: str) -> dict:
+	names = frappe.get_all("Inquiry", filters={"dealer": dealer, "request_group": key}, pluck="name")
+	if not names and frappe.db.exists("Inquiry", {"name": key, "dealer": dealer}):
+		names = [key]
+	if not names:
+		frappe.throw(_("Enquiry {0} does not belong to you.").format(key), frappe.PermissionError)
+	return _serialize_enquiry(key, [frappe.get_doc("Inquiry", name) for name in names], dealer)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_enquiry(enquiry: str) -> dict:
+	"""One enquiry with all its items. `enquiry` is the id list_my_enquiries returned: the
+	shared group id for items raised together, or the inquiry's own number for a single one."""
+	return _enquiry_for(enquiry, _current_dealer())
+
+
 @frappe.whitelist(methods=["GET"])
 def get_my_inquiry(inquiry: str) -> dict:
 	dealer = _current_dealer()
@@ -436,6 +522,7 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	a display hint, re-checked there."""
 	data = _serialize_inquiry(doc)
 	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
+	data["productName"] = frappe.get_cached_value("Item", doc.item, "item_name") if doc.item else None
 	# The tier price inquiry_api's serializer adds for staff -- a price before a
 	# quotation, which the dealer portal never shows (see _catalog_entry).
 	data.pop("price", None)
