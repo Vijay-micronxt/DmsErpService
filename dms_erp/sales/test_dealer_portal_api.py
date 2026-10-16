@@ -328,6 +328,72 @@ class TestDealerPortalApi(FrappeTestCase):
 			dealer_portal_api.raise_inquiries(items=[])
 		self.assertEqual(frappe.db.count("Inquiry", {"dealer": self.dealer}), before)
 
+	# ---- One enquiry, however many items it holds -----------------------------------
+
+	def _third_item(self):
+		return make_item("DP-THIRD-ITEM", "Vitrified")
+
+	def test_items_raised_together_come_back_as_one_enquiry(self):
+		third = self._third_item()
+		result = dealer_portal_api.raise_inquiries(
+			items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}, {"item": third, "qty": 3}]
+		)
+		group = result["requestGroup"]
+
+		enquiries = {e["id"]: e for e in dealer_portal_api.list_my_enquiries(limit=100)["items"]}
+		self.assertIn(group, enquiries)
+		enquiry = enquiries[group]
+		self.assertEqual(enquiry["itemCount"], 3)
+		self.assertEqual({i["productId"] for i in enquiry["items"]}, {self.item, self.hidden_item, third})
+		# None of the group's inquiries shows up again as an enquiry of its own.
+		for row in result["items"]:
+			if row["id"] != group:
+				self.assertNotIn(row["id"], enquiries)
+		self.assertTrue(all(i.get("productName") for i in enquiry["items"]))
+
+	def test_a_single_item_enquiry_is_an_enquiry_of_one(self):
+		single = dealer_portal_api.raise_inquiry(item=self.item, qty=4)
+		enquiries = {e["id"]: e for e in dealer_portal_api.list_my_enquiries(limit=100)["items"]}
+		self.assertEqual(enquiries[single["id"]]["itemCount"], 1)
+
+	def test_enquiries_are_paged_by_enquiry_never_splitting_one(self):
+		third = self._third_item()
+		dealer_portal_api.raise_inquiry(item=self.item, qty=1)
+		result = dealer_portal_api.raise_inquiries(
+			items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}, {"item": third, "qty": 3}]
+		)
+
+		first_page = dealer_portal_api.list_my_enquiries(limit=1)
+		self.assertEqual(len(first_page["items"]), 1)
+		# The newest enquiry is the 3-item one, whole -- not one of its three records.
+		self.assertEqual(first_page["items"][0]["id"], result["requestGroup"])
+		self.assertEqual(first_page["items"][0]["itemCount"], 3)
+		self.assertGreaterEqual(first_page["total"], 2)
+
+	def test_an_enquiry_status_is_the_shared_one_or_mixed(self):
+		third = self._third_item()
+		result = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 5}, {"item": third, "qty": 3}])
+		group = result["requestGroup"]
+		shared = dealer_portal_api.get_my_enquiry(group)
+		self.assertEqual(shared["status"], shared["items"][0]["status"])
+
+		frappe.db.set_value("Inquiry", result["items"][1]["id"], "status", "Quoted")
+		frappe.db.set_value("Inquiry", result["items"][0]["id"], "status", "Out of Stock")
+		self.assertEqual(dealer_portal_api.get_my_enquiry(group)["status"], "Mixed")
+
+	def test_get_my_enquiry_returns_a_group_or_a_single_and_never_another_dealers(self):
+		result = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}])
+		group = result["requestGroup"]
+		self.assertEqual(dealer_portal_api.get_my_enquiry(group)["itemCount"], 2)
+		single = dealer_portal_api.raise_inquiry(item=self.item, qty=2)
+		self.assertEqual(dealer_portal_api.get_my_enquiry(single["id"])["itemCount"], 1)
+
+		frappe.set_user(self.other_dealer_user)
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_my_enquiry(group)
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_my_enquiry(single["id"])
+
 	# ---- Quotations the dealer receives and accepts ---------------------------------
 
 	def _staff_quotation(self, dealer=None, inquiries=None, validity_days=7, freight=1200):
@@ -445,6 +511,47 @@ class TestDealerPortalApi(FrappeTestCase):
 		found = [row["id"] for row in dealer_portal_api.list_my_invoices(search=mine)["items"]]
 		self.assertEqual(found, [mine])
 		self.assertEqual(dealer_portal_api.list_my_invoices(search="NO-SUCH-INVOICE")["items"], [])
+
+	# ---- The alternative item staff set --------------------------------------------
+
+	def _with_alternative(self, alt_code):
+		from dms_erp.catalog.api import _set_alt_item
+
+		out_of_stock = make_item("DP-ALT-SOURCE", "Vitrified")
+		_set_alt_item(out_of_stock, alt_code)
+		return out_of_stock
+
+	@patch("dms_erp.sales.dealer_portal_api.total_stock_for_item")
+	def test_the_alternative_staff_chose_comes_first_and_is_flagged(self, mock_stock):
+		mock_stock.side_effect = lambda code: 10 if code == self.item else 0
+		source = self._with_alternative(self.item)
+
+		result = dealer_portal_api.suggest_alternatives(item=source)
+
+		self.assertEqual(result[0]["id"], self.item)
+		self.assertTrue(result[0]["isRecommended"])
+		self.assertEqual([r["id"] for r in result].count(self.item), 1)  # never listed twice
+		for other in result[1:]:
+			self.assertFalse(other["isRecommended"])
+
+	@patch("dms_erp.sales.dealer_portal_api.total_stock_for_item")
+	def test_an_alternative_with_no_stock_is_not_recommended(self, mock_stock):
+		mock_stock.return_value = 0
+		source = self._with_alternative(self.item)
+
+		result = dealer_portal_api.suggest_alternatives(item=source)
+
+		self.assertFalse(any(r["isRecommended"] for r in result))
+
+	@patch("dms_erp.sales.dealer_portal_api.total_stock_for_item")
+	def test_an_alternative_outside_the_dealers_catalog_is_not_recommended(self, mock_stock):
+		mock_stock.return_value = 10
+		source = self._with_alternative(self.hidden_item)  # assigned to the other dealer only
+
+		result = dealer_portal_api.suggest_alternatives(item=source)
+
+		self.assertNotIn(self.hidden_item, [r["id"] for r in result])
+		self.assertFalse(any(r["isRecommended"] for r in result))
 
 	def test_a_staff_only_session_cannot_use_the_dealer_portal(self):
 		frappe.set_user("Administrator")

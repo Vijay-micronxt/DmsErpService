@@ -198,10 +198,18 @@ def _resolve_and_track_items(
 			if outcome["status"] == "matched":
 				item = outcome["item"]
 			elif outcome["status"] == "ambiguous":
-				names = ", ".join(f"{c['name']} ({c['code']})" for c in outcome["candidates"])
+				candidates = outcome["candidates"]
+				total = outcome.get("total", len(candidates))
+				# Tally-migrated items have the same text for name and code -- print it once.
+				listing = "\n".join(
+					f"{i}. {c['name']}" + ("" if c["name"] == c["code"] else f" ({c['code']})")
+					for i, c in enumerate(candidates, 1)
+				)
+				more = f"\n…and {total - len(candidates)} more." if total > len(candidates) else ""
 				lines.append(
-					f"We found more than one possible match for '{segment}': {names}. "
-					f"Please reply with the exact item code you meant."
+					f"We found {total} items matching '{segment}':\n{listing}{more}\n"
+					f"Please reply with the exact item code of the one you mean"
+					+ (", or type more of the name to narrow it down." if more else ".")
 				)
 				continue
 			else:

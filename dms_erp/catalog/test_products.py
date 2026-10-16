@@ -450,6 +450,86 @@ class TestProducts(FrappeTestCase):
 			self.assertEqual(result["status"], "matched")
 			self.assertEqual(result["item"]["id"], "PT-4040-RUSTIC-GREY")
 
+	def test_a_word_in_several_item_names_lists_them_instead_of_picking_one(self):
+		# "royal" sits in exactly one item CODE but in the NAME of several -- the old code-only
+		# check answered with that one item and the others never came up.
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		for code, name in (
+			("ZZR-100", "Zorbal Glossy Tile"),
+			("ZZR-200", "Zorbal Matt Tile"),
+			("ZORBAL-300", "Plain Tile"),
+		):
+			catalog_api.create_product(
+				code=code,
+				name=name,
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+			)
+		dealer = make_dealer("Dealer Several Matches Test Dealer")
+		for code in ("ZZR-100", "ZZR-200", "ZORBAL-300"):
+			_set_product_visibility(dealer, code, True)
+
+		result = catalog_api.resolve_item_by_name(dealer, "zorbal")
+
+		self.assertEqual(result["status"], "ambiguous")
+		self.assertEqual(result["total"], 3)
+		self.assertEqual({c["id"] for c in result["candidates"]}, {"ZZR-100", "ZZR-200", "ZORBAL-300"})
+
+	def test_an_exact_item_name_wins_over_longer_names_that_contain_it(self):
+		from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
+
+		for code, name in (("YYQ-1", "Quillon"), ("YYQ-2", "Quillon Deluxe")):
+			catalog_api.create_product(
+				code=code,
+				name=name,
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+			)
+		dealer = make_dealer("Dealer Exact Name Test Dealer")
+		for code in ("YYQ-1", "YYQ-2"):
+			_set_product_visibility(dealer, code, True)
+
+		result = catalog_api.resolve_item_by_name(dealer, "quillon")
+
+		self.assertEqual(result["status"], "matched")
+		self.assertEqual(result["item"]["id"], "YYQ-1")
+
+	def test_an_alternative_item_can_be_set_on_a_normal_item(self):
+		# ERPNext needs "Allow Alternative Item" ticked on both items before it will link
+		# them; the product form never ticked it, so setting one always failed.
+		for code in ("ALT-SRC-1", "ALT-DST-1"):
+			catalog_api.create_product(
+				code=code,
+				name=code,
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+			)
+			self.assertFalse(frappe.db.get_value("Item", code, "allow_alternative_item"))
+
+		updated = catalog_api.update_product("ALT-SRC-1", {"altItemId": "ALT-DST-1"})
+
+		self.assertEqual(updated["altItemId"], "ALT-DST-1")
+		self.assertTrue(frappe.db.get_value("Item", "ALT-SRC-1", "allow_alternative_item"))
+		self.assertTrue(frappe.db.get_value("Item", "ALT-DST-1", "allow_alternative_item"))
+		# and it can be cleared again
+		self.assertIsNone(catalog_api.update_product("ALT-SRC-1", {"altItemId": None})["altItemId"])
+
+	def test_a_very_short_word_does_not_match_the_whole_catalog(self):
+		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "a"), {"status": "none"})
+
 	def test_resolve_item_by_name_returns_none_for_an_unrelated_or_blank_name(self):
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, "something totally unrelated"), {"status": "none"})
 		self.assertEqual(catalog_api.resolve_item_by_name(self.dealer, ""), {"status": "none"})
