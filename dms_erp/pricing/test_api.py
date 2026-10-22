@@ -22,6 +22,9 @@ class TestPricingApi(FrappeTestCase):
 		frappe.set_user("Administrator")
 		if frappe.db.exists("Product Series", "Pricing Test Series"):
 			frappe.delete_doc("Product Series", "Pricing Test Series", force=True, ignore_permissions=True)
+		for price_list in ("Pricing Tag Override List", "Pricing Tag Empty List"):
+			if frappe.db.exists("Price List", price_list):
+				frappe.delete_doc("Price List", price_list, force=True, ignore_permissions=True)
 
 	def test_list_price_records_is_paginated(self):
 		before = pricing_api.list_price_records()
@@ -98,6 +101,40 @@ class TestPricingApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			pricing_api.set_dealer_tier_price(item=item, price_list=DEALER_CLASSIFICATION_MASTER, rate=650)
+
+	def test_a_manual_price_list_tag_always_wins_over_the_classification_tier(self):
+		item = make_item("PRICE-TAG-OVERRIDE", "Vitrified")
+		dealer = make_dealer("Pricing Tag Override Dealer")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+		# Dealer defaults to Standard Dealer tier (no rate published for it) but is
+		# bumped to Master Dealer by sales volume -- the tag must still beat even a
+		# real, non-default classification, not just the Standard Dealer default.
+		frappe.db.set_value("Customer", dealer, "custom_dealer_classification", DEALER_CLASSIFICATION_MASTER)
+		pricing_api.set_price_for_list(item, DEALER_CLASSIFICATION_MASTER, 700)
+
+		frappe.get_doc(
+			{"doctype": "Price List", "price_list_name": "Pricing Tag Override List", "selling": 1, "enabled": 1, "currency": "INR"}
+		).insert(ignore_permissions=True)
+		pricing_api.set_price_for_list(item, "Pricing Tag Override List", 999)
+		frappe.db.set_value("Customer", dealer, "default_price_list", "Pricing Tag Override List")
+
+		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 999)
+
+	def test_a_manual_price_list_tag_still_falls_back_to_the_dealer_list_when_unpriced(self):
+		item = make_item("PRICE-TAG-FALLBACK", "Vitrified")
+		dealer = make_dealer("Pricing Tag Fallback Dealer")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		frappe.get_doc(
+			{"doctype": "Price List", "price_list_name": "Pricing Tag Empty List", "selling": 1, "enabled": 1, "currency": "INR"}
+		).insert(ignore_permissions=True)
+		frappe.db.set_value("Customer", dealer, "default_price_list", "Pricing Tag Empty List")
+
+		# The tagged list has no rate for this item at all -- falls back to the flat
+		# "Dealer" list rather than returning no price for a dealer who has a tag set.
+		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 500)
 
 
 class TestSuggestPriceFromHistory(FrappeTestCase):

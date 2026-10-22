@@ -335,15 +335,22 @@ Thin read layer over native Customer — every other module already treats a dea
 [
   { "id": "CUST-0004", "name": "Shree Ganesh Tiles", "group": "Retail Dealer",
     "territory": "Saurashtra", "creditLimit": 500000, "disabled": false,
-    "classification": "Dealer", "dealerType": "Retail", "salesperson": "priya@pacific.example" },
+    "classification": "Dealer", "priceList": null, "dealerType": "Retail", "salesperson": "priya@pacific.example",
+    "phone": "9820012345", "priceVisible": true, "email": "shreeganesh@example.com",
+    "outOfStation": false, "gstin": "24ABCDE1234F1Z5", "address": "Ring Road, Rajkot",
+    "outstanding": 42000,
+    "portalAccountCreated": true, "hasPassword": true, "lastLoginAt": "2026-10-20 09:14:02" },
   { "id": "CUST-0007", "name": "Om Sanitary & Tiles", "group": "Retail Dealer",
     "territory": "Kutch", "creditLimit": 250000, "disabled": false,
-    "classification": "Standard Dealer", "dealerType": "Retail", "salesperson": null }
+    "classification": "Standard Dealer", "priceList": "Export", "dealerType": "Retail", "salesperson": null,
+    "phone": null, "priceVisible": true, "email": null, "outOfStation": false,
+    "gstin": null, "address": null, "outstanding": 0,
+    "portalAccountCreated": false, "hasPassword": false, "lastLoginAt": null }
 ]
 ```
 
-> ⚠️ no city/phone/dealer-code fields — `classification`/`dealerType`/`salesperson` are the only three custom fields on Customer
-> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `dealerType` is written through `create_dealer` / `update_dealer` below. `salesperson` is written through `set_dealer_salesperson` below.
+> `classification` is recomputed nightly (recompute_dealer_classifications) from confirmed Sales Order value, not editable directly. `priceList` (ERPNext's native `Customer.default_price_list`) is a manual override that always wins over `classification` for every quote/order line when set (`pricing.api.get_price_for_dealer`) — null means "no override, price off the classification tier as usual." `dealerType` is written through `create_dealer` / `update_dealer` below. `salesperson` is written through `set_dealer_salesperson` below. `phone`/`email`/`gstin`/`address`/`priceVisible`/`outOfStation`/`priceList` are also written through `create_dealer` / `update_dealer`.
+> `portalAccountCreated`/`hasPassword`/`lastLoginAt` (BRD C.13) are staff-only onboarding visibility, read-only here — a portal `User` is created lazily on a dealer's first OTP login (never at Customer-creation time), and a password is always self-service (`auth.dealer_api.set_my_password` — no staff-side equivalent exists). `lastLoginAt` is the most recent `Auth Session.issued_at` for that dealer, bumped on refresh-token rotation too, so it reflects "last active," not just "last fresh login."
 
 
 #### GET `dms_erp.sales.dealer_api.get_dealer`
@@ -395,11 +402,35 @@ Thin read layer over native Customer — every other module already treats a dea
 | `dealer_type` | string | optional | Retail / Bulk / Project |
 | `credit_limit` | number | optional | stored on the Customer Credit Limit child row for this app's company |
 | `salesperson` | string | optional | a User id |
+| `phone` | string | optional | dealer portal OTP login identifier (BRD C.13); normalized to a bare 10-digit Indian mobile number, rejected if it can't be |
+| `price_visible` | bool | optional | left unset takes the field's own default (visible — BRD C.13.1) |
+| `email` | string | optional | rejected if already registered to another dealer (see dealer_api's module docstring) |
+| `out_of_station` | bool | optional | BRD C.1.4 floor; only takes effect at the next classification recompute |
+| `gstin` | string | optional | free text, not checksum-validated |
+| `address` | string | optional | free text |
+| `price_list` | string | optional | manual override of the classification tier (`dms_erp.sales.dealer_api.list_price_lists` for valid values); rejected if not an enabled selling Price List |
 
 **Response**
 
 ```json
 (same shape as one row of list_dealers)
+```
+
+
+#### GET `dms_erp.sales.dealer_api.list_price_lists`
+
+**List enabled selling Price Lists**, for the `priceList` / `price_list` picker above — includes the three classification-tier lists (Standard Dealer / Dealer / Master Dealer) alongside any other selling Price List staff have created in Desk.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `search` | string | optional | substring match on Price List name |
+
+**Response**
+
+```json
+["Dealer", "Master Dealer", "Standard Dealer", "Export"]
 ```
 
 
@@ -412,7 +443,7 @@ Thin read layer over native Customer — every other module already treats a dea
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `dealer` | string | required | Customer id |
-| `patch` | object | required | keys: name, group, territory, dealerType, salesperson, creditLimit, disabled |
+| `patch` | object | required | keys: name, group, territory, dealerType, salesperson, creditLimit, disabled, phone, priceVisible, email, outOfStation, gstin, address, priceList |
 
 **Response**
 

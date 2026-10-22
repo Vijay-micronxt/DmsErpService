@@ -1,6 +1,9 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils.password import update_password
 
+from dms_erp.auth.api import _issue_tokens
+from dms_erp.auth.dealer_api import _dealer_portal_user
 from dms_erp.sales import dealer_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer
 from dms_erp.warehouse.utils import default_company
@@ -81,3 +84,136 @@ class TestDealerApi(FrappeTestCase):
 
 		result = dealer_api.update_dealer(dealer, {"email": "keepme@pacific.example"})
 		self.assertEqual(result["email"], "keepme@pacific.example")
+
+
+class TestDealerPriceListTag(FrappeTestCase):
+	"""BRD C.1.4 manual override — Customer.default_price_list, settable here unlike
+	`classification` itself. See pricing.api.get_price_for_dealer for the precedence
+	(tag always wins) and dealer_api's own module docstring for why the two fields
+	are independent."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		if not frappe.db.exists("Price List", "Dealer Api Export List"):
+			frappe.get_doc(
+				{"doctype": "Price List", "price_list_name": "Dealer Api Export List", "selling": 1, "enabled": 1, "currency": "INR"}
+			).insert(ignore_permissions=True)
+		if not frappe.db.exists("Price List", "Dealer Api Disabled List"):
+			frappe.get_doc(
+				{"doctype": "Price List", "price_list_name": "Dealer Api Disabled List", "selling": 1, "enabled": 0, "currency": "INR"}
+			).insert(ignore_permissions=True)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_create_dealer_sets_the_price_list_tag(self):
+		result = dealer_api.create_dealer(name="Dealer Api Price Tag Co", price_list="Dealer Api Export List")
+		self.assertEqual(result["priceList"], "Dealer Api Export List")
+
+	def test_create_dealer_rejects_a_disabled_price_list(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer(name="Dealer Api Bad Price Tag Co", price_list="Dealer Api Disabled List")
+
+	def test_create_dealer_rejects_a_nonexistent_price_list(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer(name="Dealer Api No Such Price Tag Co", price_list="No Such List At All")
+
+	def test_update_dealer_sets_and_clears_the_price_list_tag(self):
+		dealer = make_dealer("Dealer Api Price Tag Update Co")
+
+		tagged = dealer_api.update_dealer(dealer, {"priceList": "Dealer Api Export List"})
+		self.assertEqual(tagged["priceList"], "Dealer Api Export List")
+
+		cleared = dealer_api.update_dealer(dealer, {"priceList": None})
+		self.assertIsNone(cleared["priceList"])
+
+	def test_update_dealer_rejects_an_invalid_price_list(self):
+		dealer = make_dealer("Dealer Api Price Tag Invalid Co")
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.update_dealer(dealer, {"priceList": "Dealer Api Disabled List"})
+
+	def test_list_dealers_and_get_dealer_report_the_price_list_tag(self):
+		dealer = dealer_api.create_dealer(
+			name="Dealer Api Price Tag List Co", price_list="Dealer Api Export List"
+		)["id"]
+
+		self.assertEqual(dealer_api.get_dealer(dealer)["priceList"], "Dealer Api Export List")
+		listed = next(r for r in dealer_api.list_dealers(search="Dealer Api Price Tag List") if r["id"] == dealer)
+		self.assertEqual(listed["priceList"], "Dealer Api Export List")
+
+	def test_list_price_lists_excludes_disabled_lists(self):
+		names = dealer_api.list_price_lists()
+		self.assertIn("Dealer Api Export List", names)
+		self.assertNotIn("Dealer Api Disabled List", names)
+
+
+class TestDealerPortalStatus(FrappeTestCase):
+	"""BRD C.13 staff-side onboarding visibility -- whether a dealer has ever
+	actually logged into the portal, set a password, or neither, since nothing
+	about that shows on the Customer form itself."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def _cleanup_portal_user(self, dealer: str):
+		user = frappe.db.get_value("User", {"custom_dealer": dealer}, "name")
+		if user:
+			frappe.db.delete("Auth Session", {"user": user})
+			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
+
+	def test_a_dealer_who_never_logged_in_shows_no_portal_account(self):
+		dealer = make_dealer("Portal Status Never Logged In Co")
+		result = dealer_api.get_dealer(dealer)
+		self.assertFalse(result["portalAccountCreated"])
+		self.assertFalse(result["hasPassword"])
+		self.assertIsNone(result["lastLoginAt"])
+
+	def test_a_dealer_who_logged_in_via_otp_but_never_set_a_password(self):
+		dealer = make_dealer("Portal Status OTP Only Co")
+		_dealer_portal_user(dealer)
+		try:
+			result = dealer_api.get_dealer(dealer)
+			self.assertTrue(result["portalAccountCreated"])
+			self.assertFalse(result["hasPassword"])
+		finally:
+			self._cleanup_portal_user(dealer)
+
+	def test_a_dealer_who_has_set_a_password(self):
+		dealer = make_dealer("Portal Status Password Set Co")
+		user = _dealer_portal_user(dealer)
+		update_password(user, "SuperSecret123")
+		try:
+			result = dealer_api.get_dealer(dealer)
+			self.assertTrue(result["portalAccountCreated"])
+			self.assertTrue(result["hasPassword"])
+		finally:
+			self._cleanup_portal_user(dealer)
+
+	def test_last_login_reflects_the_most_recent_session(self):
+		dealer = make_dealer("Portal Status Last Login Co")
+		user = _dealer_portal_user(dealer)
+		try:
+			_issue_tokens(user, "dev-1", None)
+			result = dealer_api.get_dealer(dealer)
+			self.assertIsNotNone(result["lastLoginAt"])
+		finally:
+			self._cleanup_portal_user(dealer)
+
+	def test_list_dealers_reports_portal_status_per_row(self):
+		onboarded = make_dealer("Portal Status List Onboarded Co")
+		not_onboarded = make_dealer("Portal Status List Not Onboarded Co")
+		_dealer_portal_user(onboarded)
+		try:
+			results = dealer_api.list_dealers(search="Portal Status List")
+			by_id = {r["id"]: r for r in results}
+			self.assertTrue(by_id[onboarded]["portalAccountCreated"])
+			self.assertFalse(by_id[not_onboarded]["portalAccountCreated"])
+		finally:
+			self._cleanup_portal_user(onboarded)

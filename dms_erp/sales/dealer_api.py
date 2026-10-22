@@ -28,6 +28,25 @@ recomputed nightly.
 `gstin`/`address` are plain Customer custom fields (sales/setup.py), free text like
 `phone`/`email` — GSTIN isn't validated against the checksum format, and address
 isn't a linked Address doctype record.
+
+`portalAccountCreated`/`hasPassword`/`lastLoginAt` (see `_portal_status_for`) are
+read-only staff visibility into BRD C.13 onboarding -- the Customer form itself
+has no such field, since a dealer's portal User is created lazily on their first
+OTP login, not at Customer-creation time, and a password is always self-service
+(auth.dealer_api.set_my_password) -- there's no staff-side way to set one, so
+there needed to be *some* way for staff to tell "has this dealer ever actually
+logged in" apart from "we typed an email into their record."
+
+`priceList` is ERPNext's own native Customer.default_price_list field -- unused
+anywhere in this app until now. It's a manual override of BRD C.1.4's automatic
+Standard/Dealer/Master classification tiering (pricing.api.get_price_for_dealer):
+when set, it always wins over the dealer's classification for every quote/order
+line, for a dealer with a genuine reason to be billed off a specific list
+(export, a project rate, any other Price List staff have created) rather than
+the volume-tier lookup. It is settable here, unlike `classification` itself --
+the two are independent: the nightly recompute keeps updating
+custom_dealer_classification in the background even for a tagged dealer, it's
+just ignored for pricing as long as the tag is set.
 """
 
 import frappe
@@ -87,6 +106,23 @@ def create_customer_group(name: str, parent: str | None = None):
 	return doc.name
 
 
+@frappe.whitelist(methods=["GET"])
+def list_price_lists(search: str | None = None):
+	"""Enabled selling Price Lists, for the dealer edit form's manual price-list
+	picker (default_price_list) -- includes the three classification-tier lists
+	(pricing/setup.py) alongside any other selling Price List staff have created
+	in Desk (export, project rates, anything else)."""
+	filters = {"enabled": 1, "selling": 1}
+	if search:
+		filters["price_list_name"] = ["like", f"%{search}%"]
+	return frappe.get_all("Price List", filters=filters, pluck="name", order_by="name asc")
+
+
+def _validate_price_list(price_list: str | None):
+	if price_list and not frappe.db.exists("Price List", {"name": price_list, "enabled": 1, "selling": 1}):
+		frappe.throw(_("Invalid or disabled Price List: {0}").format(price_list), frappe.ValidationError)
+
+
 def _serialize(
 	name: str,
 	customer_name: str,
@@ -104,7 +140,10 @@ def _serialize(
 	gstin: str | None = None,
 	address: str | None = None,
 	outstanding: float = 0,
+	portal_status: dict | None = None,
+	price_list: str | None = None,
 ) -> dict:
+	portal_status = portal_status or _NO_PORTAL_ACCOUNT
 	return {
 		"id": name,
 		"name": customer_name,
@@ -113,6 +152,11 @@ def _serialize(
 		"creditLimit": credit_limit or 0,
 		"disabled": bool(disabled),
 		"classification": classification,
+		# BRD C.1.4 — ERPNext's native Customer.default_price_list, a manual override
+		# that always wins over `classification` above when set (see
+		# pricing.api.get_price_for_dealer). Null means "no override, price off the
+		# automatic classification tier as usual" — the common case.
+		"priceList": price_list,
 		"dealerType": dealer_type,
 		"salesperson": salesperson,
 		# BRD C.13 — the dealer portal's login identifier (see auth.dealer_api).
@@ -130,7 +174,72 @@ def _serialize(
 		"gstin": gstin,
 		"address": address,
 		"outstanding": outstanding,
+		# BRD C.13 — staff-side onboarding visibility, since nothing about a
+		# dealer's portal status shows on the Customer form itself (there's no
+		# "has this dealer ever logged in" field — see _portal_status_for).
+		"portalAccountCreated": portal_status["portalAccountCreated"],
+		"hasPassword": portal_status["hasPassword"],
+		"lastLoginAt": portal_status["lastLoginAt"],
 	}
+
+
+_NO_PORTAL_ACCOUNT = {"portalAccountCreated": False, "hasPassword": False, "lastLoginAt": None}
+
+
+def _portal_status_for(customer_names: list[str]) -> dict[str, dict]:
+	"""Batch lookup of each dealer's portal-onboarding status (BRD C.13): has a
+	portal User ever been created for them (auth.dealer_api._dealer_portal_user,
+	created lazily on that dealer's *first successful OTP login* -- never at
+	Customer-creation time, so a freshly onboarded dealer shows nothing here
+	until they actually log in once), have they set a password
+	(auth.dealer_api.set_my_password -- self-service only, see that function's
+	own docstring for why there's no staff-side equivalent), and when they last
+	obtained a session at all (OTP or password login; Auth Session.issued_at is
+	also bumped on every refresh_token rotation, so this is "last active", not
+	just "last fresh login").
+
+	__Auth isn't a real doctype (no meta/permissions) -- queried the same way
+	Frappe's own frappe.utils.password module does, raw SQL, never
+	frappe.get_all. Returns a dense map covering every name in `customer_names`,
+	defaulted to "never onboarded", so callers never need their own fallback."""
+	status = {name: dict(_NO_PORTAL_ACCOUNT) for name in customer_names}
+	if not customer_names:
+		return status
+
+	users = frappe.get_all("User", filters={"custom_dealer": ["in", customer_names]}, fields=["name", "custom_dealer"])
+	if not users:
+		return status
+
+	user_names = [u.name for u in users]
+	password_set_users = {
+		row.name
+		for row in frappe.db.sql(
+			"select name from `__Auth` where doctype=%s and fieldname=%s and name in %s",
+			("User", "password", user_names),
+			as_dict=True,
+		)
+	}
+	last_login_by_user = {
+		row.user: row.last_login
+		for row in frappe.db.sql(
+			"""
+			select user, max(issued_at) as last_login
+			from `tabAuth Session`
+			where user in %s
+			group by user
+			""",
+			(user_names,),
+			as_dict=True,
+		)
+	}
+
+	for user in users:
+		status[user.custom_dealer] = {
+			"portalAccountCreated": True,
+			"hasPassword": user.name in password_set_users,
+			"lastLoginAt": last_login_by_user.get(user.name),
+		}
+	return status
 
 
 def _credit_limits_for(customer_names: list[str], company: str) -> dict[str, float]:
@@ -167,12 +276,14 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_out_of_station",
 			"custom_gstin",
 			"custom_address",
+			"default_price_list",
 		],
 		order_by="customer_name asc",
 	)
 	company = default_company()
 	credit_limits = _credit_limits_for([r.name for r in rows], company)
 	outstanding = party_balances("Customer", [r.name for r in rows], company)
+	portal_status = _portal_status_for([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -191,6 +302,8 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_gstin,
 			r.custom_address,
 			outstanding.get(r.name, 0),
+			portal_status.get(r.name),
+			r.default_price_list,
 		)
 		for r in rows
 	]
@@ -218,6 +331,8 @@ def get_dealer(dealer: str):
 		doc.custom_gstin,
 		doc.custom_address,
 		party_balances("Customer", [doc.name], company).get(doc.name, 0),
+		_portal_status_for([doc.name]).get(doc.name),
+		doc.default_price_list,
 	)
 
 
@@ -288,12 +403,15 @@ def create_dealer(
 	out_of_station: bool | None = None,
 	gstin: str | None = None,
 	address: str | None = None,
+	price_list: str | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
 	rejected by ERPNext itself, so pass a real leaf group. `price_visible` left unset
 	takes the field's own default (visible — BRD C.13.1). `out_of_station` only takes
-	effect at the next classification recompute (BRD C.1.4), not immediately."""
+	effect at the next classification recompute (BRD C.1.4), not immediately.
+	`price_list`, left unset, prices this dealer off the automatic classification tier
+	as usual — see pricing.api.get_price_for_dealer."""
 	_assert_can_manage_dealers()
 
 	name = (name or "").strip()
@@ -303,6 +421,7 @@ def create_dealer(
 	if frappe.db.exists("Customer", name) or frappe.db.exists("Customer", {"customer_name": name}):
 		frappe.throw(_("A dealer named {0} already exists.").format(name), frappe.DuplicateEntryError)
 	_validate_dealer_type(dealer_type)
+	_validate_price_list(price_list)
 
 	values = {"doctype": "Customer", "customer_name": name, "customer_type": "Company"}
 	if group:
@@ -327,6 +446,8 @@ def create_dealer(
 		values["custom_gstin"] = gstin.strip().upper()
 	if address:
 		values["custom_address"] = address.strip()
+	if price_list:
+		values["default_price_list"] = price_list
 
 	doc = frappe.get_doc(values)
 	if credit_limit is not None:
@@ -338,8 +459,11 @@ def create_dealer(
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible, email, outOfStation, gstin, address. Anything else — including
-	`classification`, which is recomputed nightly — is ignored."""
+	phone, priceVisible, email, outOfStation, gstin, address, priceList. Anything else —
+	including `classification`, which is recomputed nightly — is ignored.
+
+	`priceList` (null to clear) is the manual override of the automatic classification
+	tier — see pricing.api.get_price_for_dealer and dealer_api's own module docstring."""
 	_assert_can_manage_dealers()
 
 	field_map = {
@@ -349,9 +473,12 @@ def update_dealer(dealer: str, patch: dict):
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
 		"address": "custom_address",
+		"priceList": "default_price_list",
 	}
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
+	if "priceList" in patch:
+		_validate_price_list(patch["priceList"])
 	if patch.get("email"):
 		_assert_email_available(patch["email"].strip(), exclude=dealer)
 

@@ -2,6 +2,18 @@
 
 Phase 2: Product launch pricing. Implemented.
 
+`get_price_for_dealer` (BRD C.1.4) normally keys off a dealer's automatic
+Standard/Dealer/Master classification tier. `Customer.default_price_list`
+(ERPNext's own native field, otherwise unused in this app) is a manual
+override that **always wins** over the tier when staff set it, via
+`sales.dealer_api.create_dealer`/`update_dealer`'s `priceList` field — for a
+dealer with a genuine reason to bill off a specific list (export, a project
+rate, any other selling Price List on the site) rather than their volume
+tier. Still falls back to the flat "Dealer" list if the tagged list has no
+rate for an item yet, same safety net the classification path already has.
+The nightly classification recompute keeps running regardless — it just
+has no effect on pricing for a tagged dealer.
+
 `api.py` + `doctype/item_price_proposal` — a custom doctype (no ERPNext equivalent
 for a proposed landing-cost/margin breakdown awaiting approval, with an audit trail).
 Once approved, the live price is published to the standard ERPNext `Item Price` (on
