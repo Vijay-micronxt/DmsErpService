@@ -32,6 +32,16 @@ from frappe.utils import cint, flt, getdate, now_datetime
 
 SYNC_ROLES = ("System Manager", "Accounts Manager")
 
+# Off until the sync is fully completed and signed off: the Sales Invoice hooks are
+# commented out in hooks.py and the custom fields aren't created on migrate, and the
+# two agent endpoints below refuse while this is False.
+TALLY_SYNC_ENABLED = False
+
+
+def _assert_enabled():
+	if not TALLY_SYNC_ENABLED:
+		frappe.throw(_("ERP -> Tally sync is not enabled on this site yet."), frappe.ValidationError)
+
 STATUS_PENDING = "Pending"
 STATUS_SYNCED = "Synced"
 STATUS_FAILED = "Failed"
@@ -125,6 +135,7 @@ def get_pending_invoices(limit: int = 20):
 	One that can't be converted (a ledger/batch the mapping can't resolve) is marked
 	Failed with the reason instead of blocking the rest of the queue -- which is a
 	write, hence POST: Frappe rolls back whatever a GET request writes."""
+	_assert_enabled()
 	frappe.only_for(SYNC_ROLES)
 	names = frappe.get_all(
 		"Sales Invoice",
@@ -156,6 +167,7 @@ def get_pending_invoices(limit: int = 20):
 
 @frappe.whitelist(methods=["POST"])
 def report_sync_result(invoice: str, ok, tally_voucher_no: str | None = None, error: str | None = None):
+	_assert_enabled()
 	frappe.only_for(SYNC_ROLES)
 	if frappe.db.get_value("Sales Invoice", invoice, "tally_sync_status") != STATUS_PENDING:
 		# Already reported (an agent retry after a network blip) -- first answer wins.

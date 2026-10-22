@@ -163,7 +163,9 @@ Pick Tasks; everyone reads.
   auto-cancel; releasing the stock stays a person's call. Both dates are stored on
   the order and never cleared, so each happens once; `order_api` returns the state
   as `reservation`.
-- **ERP -> Tally sync** (`tally_sync.py`, client request Oct 2026 -- not in the BRD,
+- **ERP -> Tally sync — DISABLED, in development** (see `hooks.py`: hooks commented out,
+  no custom fields on migrate, agent endpoints refuse until `TALLY_SYNC_ENABLED`).
+  (`tally_sync.py`, client request Oct 2026 -- not in the BRD,
   which scopes only a one-time migration). Tally stays Pacific's live books on an
   office PC the cloud can't reach, and Tally can't push, so it is pull-based: the
   agent in `tools/tally_sync_agent` (on the Tally PC) asks `get_pending_invoices` for

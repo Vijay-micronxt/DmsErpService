@@ -769,6 +769,8 @@ individually; they catch integration bugs that per-module testing alone won't.
 
 ## 18. Tally Sync — ERP → Tally (client request, not in the BRD)
 
+> **Status: disabled — still in development.** Not active on any site until it is fully completed and signed off: the Sales Invoice hooks are commented out in `hooks.py`, the Tally fields are not created on `bench migrate`, and the agent endpoints refuse (`tally_sync.TALLY_SYNC_ENABLED = False`). Nothing in any other flow runs Tally code. The cases below are for when it is switched on.
+
 The BRD only scopes a one-time migration from Tally; this sync was requested in Oct 2026.
 Direction built so far: **ERP → Tally, Sales Invoices only.** It needs the sync agent
 (`tools/tally_sync_agent`) running on the PC where TallyPrime is open, with TallyPrime's

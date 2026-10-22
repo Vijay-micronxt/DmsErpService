@@ -275,8 +275,14 @@ CUSTOM_FIELDS = {
 			"insert_after": "custom_last_activity_on",
 		},
 	],
-	# ERP -> Tally sync (see sales/tally_sync.py). Everything but the opt-in tick is
-	# written only by the sync itself, hence read-only + allow_on_submit.
+}
+
+
+# ERP -> Tally sync (see sales/tally_sync.py). Everything but the opt-in tick is written
+# only by the sync itself, hence read-only + allow_on_submit. NOT created on migrate
+# while the sync is disabled (see hooks.py) -- deliberately kept out of CUSTOM_FIELDS so
+# a live site gets no Tally fields at all until it's switched on.
+TALLY_SYNC_CUSTOM_FIELDS = {
 	"Sales Invoice": [
 		{
 			"fieldname": "sync_to_tally",

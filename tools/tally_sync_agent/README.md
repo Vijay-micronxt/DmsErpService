@@ -1,5 +1,7 @@
 # Tally sync agent (ERP → Tally, Sales Invoices)
 
+> **Status: disabled — still in development.** Not active on any site until it is fully completed and signed off: the Sales Invoice hooks are commented out in `hooks.py`, the Tally fields are not created on `bench migrate`, and the agent endpoints refuse (`tally_sync.TALLY_SYNC_ENABLED = False`). Nothing in any other flow runs Tally code. Don't install this on the Tally PC until then — the ERP will refuse it.
+
 Runs on the PC where **TallyPrime** is open. Every `interval_seconds` it asks the DMS
 ERP for submitted Sales Invoices ticked **Sync to Tally**, creates each one in Tally as
 a Sales voucher, and writes the result back on the invoice (status, Tally voucher
