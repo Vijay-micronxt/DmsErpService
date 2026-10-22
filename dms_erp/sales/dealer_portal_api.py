@@ -857,6 +857,16 @@ def my_profile() -> dict:
 		"phone": doc.custom_phone,
 		"email": doc.custom_email,
 		"classification": doc.custom_dealer_classification,
+		# The portal prompts after every OTP login until this is true, so the dealer
+		# can sign in with email + password instead of waiting on an OTP each time.
+		# Read off the session user (the account that would log in with it), the same
+		# __Auth check sales.dealer_api._portal_status_for uses for staff.
+		"hasPassword": bool(
+			frappe.db.sql(
+				"select 1 from `__Auth` where doctype='User' and fieldname='password' and name=%s",
+				(frappe.session.user,),
+			)
+		),
 	}
 
 

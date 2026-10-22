@@ -246,6 +246,15 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertEqual(profile["id"], self.dealer)
 		self.assertEqual(profile["name"], self.dealer)
 
+	def test_my_profile_reports_whether_a_password_is_set(self):
+		# Drives the portal's post-OTP "set an email + password" prompt.
+		from frappe.utils.password import update_password
+
+		frappe.db.sql("delete from `__Auth` where doctype='User' and fieldname='password' and name=%s", (self.dealer_user,))
+		self.assertFalse(dealer_portal_api.my_profile()["hasPassword"])
+		update_password(self.dealer_user, "a-long-password-1")
+		self.assertTrue(dealer_portal_api.my_profile()["hasPassword"])
+
 	def test_suggest_alternatives_excludes_the_item_itself(self):
 		alternatives = dealer_portal_api.suggest_alternatives(item=self.item)
 		self.assertNotIn(self.item, [row["code"] for row in alternatives])

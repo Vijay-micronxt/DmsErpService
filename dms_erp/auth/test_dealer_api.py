@@ -41,15 +41,17 @@ class TestDealerAuthApi(FrappeTestCase):
 		self.assertTrue(frappe.db.exists("Dealer Login OTP", {"dealer": self.dealer}))
 		self.assertTrue(frappe.db.exists("WhatsApp Message", {"dealer": self.dealer, "direction": "Outbound"}))
 
-	def test_request_otp_for_unregistered_phone_returns_same_generic_response_and_sends_nothing(self):
-		result = dealer_api.request_otp(phone="9999999999")
-		self.assertEqual(result, {"success": True})
-		self.assertEqual(frappe.db.count("Dealer Login OTP"), 0)
-		self.assertEqual(frappe.db.count("WhatsApp Message"), 0)
+	def test_request_otp_for_unregistered_phone_says_so_and_sends_nothing(self):
+		# counted before/after: other modules' tests can leave WhatsApp Messages behind
+		otps, messages = frappe.db.count("Dealer Login OTP"), frappe.db.count("WhatsApp Message")
+		with self.assertRaisesRegex(frappe.DoesNotExistError, "isn't registered"):
+			dealer_api.request_otp(phone="9999999999")
+		self.assertEqual(frappe.db.count("Dealer Login OTP"), otps)
+		self.assertEqual(frappe.db.count("WhatsApp Message"), messages)
 
-	def test_request_otp_for_malformed_phone_returns_same_generic_response_and_sends_nothing(self):
-		result = dealer_api.request_otp(phone="not-a-phone-number")
-		self.assertEqual(result, {"success": True})
+	def test_request_otp_for_malformed_phone_says_not_registered_and_sends_nothing(self):
+		with self.assertRaises(frappe.DoesNotExistError):
+			dealer_api.request_otp(phone="not-a-phone-number")
 		self.assertEqual(frappe.db.count("Dealer Login OTP"), 0)
 
 	def test_request_otp_matches_the_dealer_regardless_of_how_the_phone_is_formatted(self):

@@ -5,6 +5,7 @@ from dms_erp.catalog import dealer_catalog_api as api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.warehouse.test_fixtures import make_dealer
 
 
 def make_item(item_code, item_group="Vitrified"):
@@ -20,15 +21,6 @@ def make_item(item_code, item_group="Vitrified"):
 			"is_stock_item": 1,
 		}
 	).insert(ignore_permissions=True)
-
-
-def make_dealer(customer_name):
-	if frappe.db.exists("Customer", customer_name):
-		return customer_name
-	frappe.get_doc(
-		{"doctype": "Customer", "customer_name": customer_name, "customer_group": "All Customer Groups", "territory": "All Territories"}
-	).insert(ignore_permissions=True)
-	return customer_name
 
 
 def make_supplier(supplier_name):
@@ -87,6 +79,39 @@ class TestDealerCatalog(FrappeTestCase):
 
 		api.set_product_visibility(self.dealer, self.item_a, False)
 		self.assertFalse(api.is_visible(self.dealer, self.item_a))
+
+	def test_hiding_one_item_from_an_unassigned_dealer_keeps_everything_else(self):
+		# The real report: hiding one item from a dealer with no catalog left them an
+		# EMPTY catalog (orderable 4,338 -> 0) instead of "everything but that one".
+		api.set_product_visibility(self.dealer, self.item_a, False)
+
+		self.assertFalse(api.is_visible(self.dealer, self.item_a))
+		self.assertTrue(api.is_visible(self.dealer, self.item_b))
+		catalog = api.catalog_for(self.dealer)
+		self.assertNotIn(self.item_a, catalog)
+		self.assertIn(self.item_b, catalog)
+		self.assertEqual(len(catalog), len(api.browsable_catalog_for(self.dealer)) - 1)
+
+	def test_hide_all_category_on_an_unassigned_dealer_keeps_other_categories(self):
+		api.set_category_visibility(self.dealer, "Vitrified", False)
+
+		self.assertFalse(api.is_visible(self.dealer, self.item_a))
+		self.assertTrue(api.is_visible(self.dealer, self.item_b))
+		self.assertEqual(api.category_coverage(self.dealer, "Vitrified")["visible"], 0)
+
+	def test_visibility_accepts_string_booleans(self):
+		# A form-encoded POST delivers "false" as a truthy string.
+		api.set_product_visibility(self.dealer, self.item_a, "false")
+		self.assertFalse(api.is_visible(self.dealer, self.item_a))
+		self.assertTrue(api.is_visible(self.dealer, self.item_b))
+
+	def test_list_catalog_assignments_only_lists_dealers_with_a_catalog(self):
+		self.assertNotIn(self.dealer, api.list_catalog_assignments())
+		api.set_product_visibility(self.dealer, self.item_a, True)
+		self.assertEqual(api.list_catalog_assignments()[self.dealer], [self.item_a])
+		api.set_product_visibility(self.dealer, self.item_a, False)
+		# An existing-but-empty catalog is still listed -- it means "nothing", not "everything".
+		self.assertEqual(api.list_catalog_assignments()[self.dealer], [])
 
 	def test_set_category_visibility_bulk_toggles(self):
 		api.set_category_visibility(self.dealer, "Vitrified", True)

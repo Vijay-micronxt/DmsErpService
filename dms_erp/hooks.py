@@ -43,6 +43,16 @@ override_whitelisted_methods = {
 after_install = "dms_erp.setup.install.after_install"
 after_migrate = "dms_erp.setup.install.after_migrate"
 
+# ERP -> Tally sync: a submitted Sales Invoice with "Sync to Tally" ticked is queued
+# for the agent on the Tally PC (see sales/tally_sync.py for why it's pull-based).
+doc_events = {
+	"Sales Invoice": {
+		"on_submit": "dms_erp.sales.tally_sync.on_submit",
+		"on_update_after_submit": "dms_erp.sales.tally_sync.on_update_after_submit",
+		"on_cancel": "dms_erp.sales.tally_sync.on_cancel",
+	},
+}
+
 # BRD C.4.1: nobody is told a draft reorder plan needs review -- a daily digest to
 # the purchase team is the smallest fix that closes that gap (see reorder_api.py).
 # BRD C.1.4: dealer price-tier classification is recomputed nightly from confirmed

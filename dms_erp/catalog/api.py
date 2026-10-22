@@ -45,7 +45,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable, item_default_supplier
 from dms_erp.pagination import clamp
@@ -285,6 +285,219 @@ def list_products(
 		"limit": limit,
 		"offset": offset,
 	}
+
+
+_BULK_ITEM_FIELDS = (
+	"name",
+	"item_code",
+	"item_name",
+	"item_group",
+	"lead_time_days",
+	"custom_size",
+	"custom_finish",
+	"custom_color",
+	"custom_colour_attribute_1",
+	"custom_colour_attribute_2",
+	"custom_design_attribute_1",
+	"custom_design_attribute_2",
+	"custom_series",
+	"custom_series_ref",
+	"custom_bulk_qty_threshold",
+	"custom_retail_qty_threshold",
+	"custom_swatch_color",
+	"custom_discontinuation_status",
+	"custom_pieces_per_box",
+	"custom_sqft_per_box",
+	"custom_weight_per_box_kg",
+	"custom_default_supplier",
+	"custom_moq",
+	"custom_production_moq",
+	"gst_hsn_code",
+)
+
+
+def _serialize_many(codes: list[str]) -> list[dict]:
+	"""The same dict _serialize builds, for many items at once, in a fixed handful of
+	queries instead of ~10 per item. The staff app needs the *whole* catalog in memory
+	(29 screens share one product store, and pickers/search all work client-side), and
+	list_products' one-by-one path took minutes for the ~4,500 Tally-migrated items --
+	it was only ever asked for its first page of 20, so every screen silently showed
+	20 products. Output must stay key-for-key identical to _serialize (the frontend
+	shares one Product type for both); test_api.py's bulk test pins that.
+
+	Item rows come from get_all, which skips Document's numeric casting -- a NULL Int/
+	Float column reads as None here but 0 on a loaded doc -- so numeric fields are cast
+	the same way BaseDocument does. Fields missing from this site's Item meta (custom
+	fields not yet migrated, gst_hsn_code without india_compliance) read as None, same
+	as _serialize's .get()/getattr fallbacks."""
+	if not codes:
+		return []
+
+	meta = frappe.get_meta("Item")
+	fields = [f for f in _BULK_ITEM_FIELDS if f in ("name", "item_code") or meta.has_field(f)]
+	numeric = {}
+	for f in fields:
+		df = meta.get_field(f)
+		if df and df.fieldtype in ("Int", "Check"):
+			numeric[f] = cint
+		elif df and df.fieldtype in ("Float", "Currency", "Percent"):
+			numeric[f] = flt
+	items = {}
+	for row in frappe.get_all("Item", filters={"name": ["in", codes]}, fields=fields):
+		for f, cast in numeric.items():
+			row[f] = cast(row.get(f))
+		items[row.name] = row
+
+	stock = {
+		r.item_code: float(r.qty or 0)
+		for r in frappe.db.sql(
+			"select item_code, sum(actual_qty) as qty from `tabBin` where item_code in %s group by item_code",
+			(codes,),
+			as_dict=True,
+		)
+	}
+
+	dealer_price = {}
+	for r in frappe.get_all(
+		"Item Price",
+		filters={"item_code": ["in", codes], "price_list": pricing_api.DEALER_PRICE_LIST},
+		fields=["item_code", "price_list_rate"],
+		order_by="creation desc",
+	):
+		dealer_price.setdefault(r.item_code, r.price_list_rate)
+
+	series_refs = {row.custom_series_ref for row in items.values() if row.get("custom_series_ref")}
+	series_supplier = (
+		dict(frappe.get_all("Product Series", filters={"name": ["in", list(series_refs)]}, fields=["name", "supplier"], as_list=True))
+		if series_refs
+		else {}
+	)
+
+	alt_forward, alt_reverse = {}, {}
+	for r in frappe.get_all(
+		"Item Alternative",
+		or_filters={"item_code": ["in", codes], "alternative_item_code": ["in", codes]},
+		fields=["item_code", "alternative_item_code", "two_way"],
+		order_by="creation asc",
+	):
+		alt_forward.setdefault(r.item_code, r.alternative_item_code)
+		if r.two_way:
+			alt_reverse.setdefault(r.alternative_item_code, r.item_code)
+
+	dealer_codes, images = {}, {}
+	for r in frappe.get_all(
+		"Item Dealer Code",
+		filters={"parent": ["in", codes], "parenttype": "Item", "parentfield": "custom_dealer_codes"},
+		fields=["parent", "dealer", "customer_item_code", "sample_issued"],
+		order_by="idx asc",
+	):
+		dealer_codes.setdefault(r.parent, []).append(_serialize_dealer_code(r))
+	for r in frappe.get_all(
+		"Product Image",
+		filters={"parent": ["in", codes], "parenttype": "Item", "parentfield": "custom_images"},
+		fields=["parent", "image", "image_type", "is_primary"],
+		order_by="idx asc",
+	):
+		images.setdefault(r.parent, []).append(_serialize_image(r))
+
+	out = []
+	for code in codes:
+		row = items.get(code)
+		if not row:
+			continue
+		status = row.get("custom_discontinuation_status") or "Active"
+		out.append(
+			{
+				"id": row.name,
+				"code": row.item_code,
+				"name": row.item_name,
+				"size": row.get("custom_size"),
+				"finish": row.get("custom_finish"),
+				"color": row.get("custom_color"),
+				"colourAttribute1": row.get("custom_colour_attribute_1"),
+				"colourAttribute2": row.get("custom_colour_attribute_2"),
+				"designAttribute1": row.get("custom_design_attribute_1"),
+				"designAttribute2": row.get("custom_design_attribute_2"),
+				"series": row.get("custom_series"),
+				"seriesRef": row.get("custom_series_ref"),
+				"bulkQtyThreshold": row.get("custom_bulk_qty_threshold"),
+				"retailQtyThreshold": row.get("custom_retail_qty_threshold"),
+				"category": row.item_group,
+				"swatch": row.get("custom_swatch_color"),
+				"stockQty": stock.get(code, 0.0),
+				"bay": "—",
+				"lastSoldDays": 0,
+				"dealerPrice": dealer_price.get(code),
+				"status": status,
+				"isReorderable": is_reorderable(status),
+				"isSellable": is_sellable(status),
+				"piecesPerBox": row.get("custom_pieces_per_box"),
+				"sqftPerBox": row.get("custom_sqft_per_box"),
+				"weightPerBoxKg": row.get("custom_weight_per_box_kg"),
+				"defaultSupplier": row.get("custom_default_supplier")
+				or (series_supplier.get(row.custom_series_ref) if row.get("custom_series_ref") else None),
+				"leadTimeDays": row.lead_time_days,
+				"moq": row.get("custom_moq") or 0,
+				"productionMoq": row.get("custom_production_moq") or 0,
+				"altItemId": alt_forward.get(code) or alt_reverse.get(code),
+				"dealerCodes": dealer_codes.get(code, []),
+				"images": images.get(code, []),
+				"hsnCode": row.get("gst_hsn_code"),
+			}
+		)
+	return out
+
+
+@frappe.whitelist(methods=["GET"])
+def list_all_products_bulk(
+	search: str | None = None,
+	category: str | None = None,
+	status: str | None = None,
+	supplier: str | None = None,
+):
+	"""Every matching product in one response, for the staff app's shared product
+	store (see _serialize_many for why that store needs the whole catalog, not a
+	page). Unpaginated on purpose -- list_products stays the paginated endpoint for
+	anything that genuinely wants pages."""
+	filters = _product_filters(None, search, category, status, supplier)
+	codes = frappe.get_all("Item", filters=filters, pluck="name", order_by="item_code asc")
+	return _serialize_many(codes)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_item_prices(item: str) -> list[dict]:
+	"""Every selling Price List rate this item has -- the Tally-migrated lists
+	(e.g. a party-specific list a dealer is tagged to via Customer.default_price_list)
+	as well as the three tier lists -- view-only, for the item page and the pricing
+	screen. get_dealer_tier_prices only ever covered the three tier lists, so a rate
+	that actually bills a tagged dealer was invisible anywhere in the staff app."""
+	frappe.get_doc("Item", item)  # 404s an unknown item rather than returning [].
+	# Keyed off the Price List's own selling flag, not the copy on each Item Price row --
+	# rows bulk-imported from Tally aren't guaranteed to carry it.
+	selling_lists = frappe.get_all("Price List", filters={"selling": 1}, pluck="name")
+	if not selling_lists:
+		return []
+	rows = frappe.get_all(
+		"Item Price",
+		filters={"item_code": item, "price_list": ["in", selling_lists]},
+		fields=["price_list", "price_list_rate", "currency", "uom", "valid_from", "creation"],
+		order_by="price_list asc, creation desc",
+	)
+	seen, out = set(), []
+	for r in rows:
+		if r.price_list in seen:
+			continue
+		seen.add(r.price_list)
+		out.append(
+			{
+				"priceList": r.price_list,
+				"rate": r.price_list_rate,
+				"currency": r.currency,
+				"uom": r.uom,
+				"validFrom": r.valid_from,
+			}
+		)
+	return out
 
 
 @frappe.whitelist(methods=["GET"])

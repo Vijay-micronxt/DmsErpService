@@ -120,6 +120,22 @@ GET /api/method/dms_erp.catalog.api.get_product?item=WT-3030
 GET /api/method/dms_erp.catalog.api.list_products
 ```
 
+**`list_all_products_bulk`** — GET, optional `?search=&category=&status=&supplier=` — ✅ (local, 4,340 items)
+```
+GET /api/method/dms_erp.catalog.api.list_all_products_bulk
+```
+```json
+{ "message": [ { "id": "WT-3030", "code": "WT-3030", "stockQty": 70.888889, "piecesPerBox": 9, "dealerPrice": 500, ... } ] }
+```
+
+**`get_item_prices`** — GET — ✅ (local)
+```
+GET /api/method/dms_erp.catalog.api.get_item_prices?item=WT-3030
+```
+```json
+{ "message": [ { "priceList": "Dealer", "rate": 500, "currency": "INR", "uom": "Box", "validFrom": "2026-08-01" } ] }
+```
+
 **`update_product`** — POST — ⬜
 ```json
 POST /api/method/dms_erp.catalog.api.update_product
@@ -136,7 +152,15 @@ GET /api/method/dms_erp.catalog.dealer_catalog_api.is_visible?dealer=Sharma Tile
 GET /api/method/dms_erp.catalog.dealer_catalog_api.catalog_for?dealer=Sharma Tiles
 ```
 
-**`dealer_catalog_api.set_product_visibility`** — POST — ⬜
+**`dealer_catalog_api.list_catalog_assignments`** — GET — ✅ (local)
+```
+GET /api/method/dms_erp.catalog.dealer_catalog_api.list_catalog_assignments
+```
+```json
+{ "message": { "Sharma Tiles": ["WT-3030", "WT-4040"] } }
+```
+
+**`dealer_catalog_api.set_product_visibility`** — POST — ✅ (local)
 ```json
 POST /api/method/dms_erp.catalog.dealer_catalog_api.set_product_visibility
 { "dealer": "Sharma Tiles", "item": "WT-3030", "visible": true }
