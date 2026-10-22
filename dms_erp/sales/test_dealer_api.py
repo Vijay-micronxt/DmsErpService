@@ -86,6 +86,69 @@ class TestDealerApi(FrappeTestCase):
 		self.assertEqual(result["email"], "keepme@pacific.example")
 
 
+class TestDealerPriceListTag(FrappeTestCase):
+	"""BRD C.1.4 manual override — Customer.default_price_list, settable here unlike
+	`classification` itself. See pricing.api.get_price_for_dealer for the precedence
+	(tag always wins) and dealer_api's own module docstring for why the two fields
+	are independent."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		if not frappe.db.exists("Price List", "Dealer Api Export List"):
+			frappe.get_doc(
+				{"doctype": "Price List", "price_list_name": "Dealer Api Export List", "selling": 1, "enabled": 1, "currency": "INR"}
+			).insert(ignore_permissions=True)
+		if not frappe.db.exists("Price List", "Dealer Api Disabled List"):
+			frappe.get_doc(
+				{"doctype": "Price List", "price_list_name": "Dealer Api Disabled List", "selling": 1, "enabled": 0, "currency": "INR"}
+			).insert(ignore_permissions=True)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_create_dealer_sets_the_price_list_tag(self):
+		result = dealer_api.create_dealer(name="Dealer Api Price Tag Co", price_list="Dealer Api Export List")
+		self.assertEqual(result["priceList"], "Dealer Api Export List")
+
+	def test_create_dealer_rejects_a_disabled_price_list(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer(name="Dealer Api Bad Price Tag Co", price_list="Dealer Api Disabled List")
+
+	def test_create_dealer_rejects_a_nonexistent_price_list(self):
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.create_dealer(name="Dealer Api No Such Price Tag Co", price_list="No Such List At All")
+
+	def test_update_dealer_sets_and_clears_the_price_list_tag(self):
+		dealer = make_dealer("Dealer Api Price Tag Update Co")
+
+		tagged = dealer_api.update_dealer(dealer, {"priceList": "Dealer Api Export List"})
+		self.assertEqual(tagged["priceList"], "Dealer Api Export List")
+
+		cleared = dealer_api.update_dealer(dealer, {"priceList": None})
+		self.assertIsNone(cleared["priceList"])
+
+	def test_update_dealer_rejects_an_invalid_price_list(self):
+		dealer = make_dealer("Dealer Api Price Tag Invalid Co")
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.update_dealer(dealer, {"priceList": "Dealer Api Disabled List"})
+
+	def test_list_dealers_and_get_dealer_report_the_price_list_tag(self):
+		dealer = dealer_api.create_dealer(
+			name="Dealer Api Price Tag List Co", price_list="Dealer Api Export List"
+		)["id"]
+
+		self.assertEqual(dealer_api.get_dealer(dealer)["priceList"], "Dealer Api Export List")
+		listed = next(r for r in dealer_api.list_dealers(search="Dealer Api Price Tag List") if r["id"] == dealer)
+		self.assertEqual(listed["priceList"], "Dealer Api Export List")
+
+	def test_list_price_lists_excludes_disabled_lists(self):
+		names = dealer_api.list_price_lists()
+		self.assertIn("Dealer Api Export List", names)
+		self.assertNotIn("Dealer Api Disabled List", names)
+
+
 class TestDealerPortalStatus(FrappeTestCase):
 	"""BRD C.13 staff-side onboarding visibility -- whether a dealer has ever
 	actually logged into the portal, set a password, or neither, since nothing

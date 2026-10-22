@@ -85,7 +85,24 @@ def get_price_for_dealer(item: str, dealer: str) -> float | None:
 	rate yet for this item — the common case until a Series with tiered
 	price_list_rates exists for it — so this is a drop-in, backward-compatible
 	replacement for get_dealer_price(item) everywhere it was called with a dealer
-	already in hand."""
+	already in hand.
+
+	Customer.default_price_list (ERPNext's own native field, otherwise unused in
+	this app) is a manual override that always wins over the classification tier
+	when staff have set it — a dealer with a genuine business reason to be billed
+	off a specific list (export, a project rate, whatever other Price Lists exist
+	on the site) isn't just another tier alongside Standard/Dealer/Master, it
+	fully replaces the classification lookup for that dealer. Still falls back to
+	the flat "Dealer" list if the tagged list has no rate for this item yet, same
+	safety net the classification path already has — a manual tag should never
+	produce a hard "no price" where the untagged path would have found one."""
+	tagged_price_list = frappe.db.get_value("Customer", dealer, "default_price_list")
+	if tagged_price_list:
+		rate = get_dealer_price(item, price_list=tagged_price_list)
+		if rate is not None:
+			return rate
+		return get_dealer_price(item)
+
 	classification = frappe.db.get_value("Customer", dealer, "custom_dealer_classification") or DEALER_CLASSIFICATION_STANDARD
 	rate = get_dealer_price(item, price_list=classification)
 	if rate is not None:
