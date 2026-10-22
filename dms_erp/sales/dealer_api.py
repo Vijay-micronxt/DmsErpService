@@ -28,6 +28,14 @@ recomputed nightly.
 `gstin`/`address` are plain Customer custom fields (sales/setup.py), free text like
 `phone`/`email` — GSTIN isn't validated against the checksum format, and address
 isn't a linked Address doctype record.
+
+`portalAccountCreated`/`hasPassword`/`lastLoginAt` (see `_portal_status_for`) are
+read-only staff visibility into BRD C.13 onboarding -- the Customer form itself
+has no such field, since a dealer's portal User is created lazily on their first
+OTP login, not at Customer-creation time, and a password is always self-service
+(auth.dealer_api.set_my_password) -- there's no staff-side way to set one, so
+there needed to be *some* way for staff to tell "has this dealer ever actually
+logged in" apart from "we typed an email into their record."
 """
 
 import frappe
@@ -104,7 +112,9 @@ def _serialize(
 	gstin: str | None = None,
 	address: str | None = None,
 	outstanding: float = 0,
+	portal_status: dict | None = None,
 ) -> dict:
+	portal_status = portal_status or _NO_PORTAL_ACCOUNT
 	return {
 		"id": name,
 		"name": customer_name,
@@ -130,7 +140,72 @@ def _serialize(
 		"gstin": gstin,
 		"address": address,
 		"outstanding": outstanding,
+		# BRD C.13 — staff-side onboarding visibility, since nothing about a
+		# dealer's portal status shows on the Customer form itself (there's no
+		# "has this dealer ever logged in" field — see _portal_status_for).
+		"portalAccountCreated": portal_status["portalAccountCreated"],
+		"hasPassword": portal_status["hasPassword"],
+		"lastLoginAt": portal_status["lastLoginAt"],
 	}
+
+
+_NO_PORTAL_ACCOUNT = {"portalAccountCreated": False, "hasPassword": False, "lastLoginAt": None}
+
+
+def _portal_status_for(customer_names: list[str]) -> dict[str, dict]:
+	"""Batch lookup of each dealer's portal-onboarding status (BRD C.13): has a
+	portal User ever been created for them (auth.dealer_api._dealer_portal_user,
+	created lazily on that dealer's *first successful OTP login* -- never at
+	Customer-creation time, so a freshly onboarded dealer shows nothing here
+	until they actually log in once), have they set a password
+	(auth.dealer_api.set_my_password -- self-service only, see that function's
+	own docstring for why there's no staff-side equivalent), and when they last
+	obtained a session at all (OTP or password login; Auth Session.issued_at is
+	also bumped on every refresh_token rotation, so this is "last active", not
+	just "last fresh login").
+
+	__Auth isn't a real doctype (no meta/permissions) -- queried the same way
+	Frappe's own frappe.utils.password module does, raw SQL, never
+	frappe.get_all. Returns a dense map covering every name in `customer_names`,
+	defaulted to "never onboarded", so callers never need their own fallback."""
+	status = {name: dict(_NO_PORTAL_ACCOUNT) for name in customer_names}
+	if not customer_names:
+		return status
+
+	users = frappe.get_all("User", filters={"custom_dealer": ["in", customer_names]}, fields=["name", "custom_dealer"])
+	if not users:
+		return status
+
+	user_names = [u.name for u in users]
+	password_set_users = {
+		row.name
+		for row in frappe.db.sql(
+			"select name from `__Auth` where doctype=%s and fieldname=%s and name in %s",
+			("User", "password", user_names),
+			as_dict=True,
+		)
+	}
+	last_login_by_user = {
+		row.user: row.last_login
+		for row in frappe.db.sql(
+			"""
+			select user, max(issued_at) as last_login
+			from `tabAuth Session`
+			where user in %s
+			group by user
+			""",
+			(user_names,),
+			as_dict=True,
+		)
+	}
+
+	for user in users:
+		status[user.custom_dealer] = {
+			"portalAccountCreated": True,
+			"hasPassword": user.name in password_set_users,
+			"lastLoginAt": last_login_by_user.get(user.name),
+		}
+	return status
 
 
 def _credit_limits_for(customer_names: list[str], company: str) -> dict[str, float]:
@@ -173,6 +248,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 	company = default_company()
 	credit_limits = _credit_limits_for([r.name for r in rows], company)
 	outstanding = party_balances("Customer", [r.name for r in rows], company)
+	portal_status = _portal_status_for([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -191,6 +267,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_gstin,
 			r.custom_address,
 			outstanding.get(r.name, 0),
+			portal_status.get(r.name),
 		)
 		for r in rows
 	]
@@ -218,6 +295,7 @@ def get_dealer(dealer: str):
 		doc.custom_gstin,
 		doc.custom_address,
 		party_balances("Customer", [doc.name], company).get(doc.name, 0),
+		_portal_status_for([doc.name]).get(doc.name),
 	)
 
 
