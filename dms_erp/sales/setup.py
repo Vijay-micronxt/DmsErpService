@@ -278,5 +278,66 @@ CUSTOM_FIELDS = {
 }
 
 
+# ERP -> Tally sync (see sales/tally_sync.py). Everything but the opt-in tick is written
+# only by the sync itself, hence read-only + allow_on_submit. NOT created on migrate
+# while the sync is disabled (see hooks.py) -- deliberately kept out of CUSTOM_FIELDS so
+# a live site gets no Tally fields at all until it's switched on.
+TALLY_SYNC_CUSTOM_FIELDS = {
+	"Sales Invoice": [
+		{
+			"fieldname": "sync_to_tally",
+			"fieldtype": "Check",
+			"label": "Sync to Tally",
+			"default": "0",
+			"allow_on_submit": 1,
+			"description": "Send this invoice to Tally as a Sales voucher once it is submitted (re-tick after a failure to retry).",
+			"insert_after": "due_date",
+		},
+		{
+			"fieldname": "tally_sync_status",
+			"fieldtype": "Select",
+			"label": "Tally Sync Status",
+			"options": "\nPending\nSynced\nFailed\nSkipped",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"in_standard_filter": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.sync_to_tally || doc.tally_sync_status",
+			"insert_after": "sync_to_tally",
+		},
+		{
+			"fieldname": "tally_synced_voucher_no",
+			"fieldtype": "Data",
+			"label": "Tally Voucher (synced)",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_synced_voucher_no",
+			"insert_after": "tally_sync_status",
+		},
+		{
+			"fieldname": "tally_synced_on",
+			"fieldtype": "Datetime",
+			"label": "Synced to Tally On",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_synced_on",
+			"insert_after": "tally_synced_voucher_no",
+		},
+		{
+			"fieldname": "tally_sync_error",
+			"fieldtype": "Small Text",
+			"label": "Tally Sync Message",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_sync_error",
+			"insert_after": "tally_synced_on",
+		},
+	],
+}
+
+
 def setup_sales():
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)

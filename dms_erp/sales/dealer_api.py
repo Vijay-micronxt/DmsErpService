@@ -51,6 +51,7 @@ just ignored for pricing as long as the tag is set.
 
 import frappe
 from frappe import _
+from frappe.utils import flt
 
 from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
@@ -381,12 +382,27 @@ def _assert_email_available(email: str, exclude: str | None = None):
 
 
 def _set_credit_limit(doc, credit_limit: float | None):
+	"""Leaves the table untouched when nothing actually changes, and treats 0 as "no
+	dealer-level limit" (removes the row) rather than a literal ₹0 limit. Both matter
+	because ERPNext's Customer.validate_credit_limit_on_change re-checks every row
+	against current outstanding whenever the table differs from what's saved, and
+	throws if a limit is below it: the dealer edit form always sent creditLimit, so a
+	dealer with no limit row (0 in the form) and real dues got a fresh ₹0 row appended
+	on *any* edit -- a phone-number change failed with "New credit limit is less than
+	current outstanding". 0-means-none is what sales.credit_limit.get_credit_limit
+	already reads it as (falls through to Customer Group / Company), so no behaviour
+	changes for the credit gate."""
 	company = default_company()
+	credit_limit = flt(credit_limit)
 	row = next((r for r in doc.get("credit_limits") or [] if r.company == company), None)
-	if row:
-		row.credit_limit = credit_limit or 0
+	if (flt(row.credit_limit) if row else 0) == credit_limit:
+		return
+	if not credit_limit:
+		doc.remove(row)
+	elif row:
+		row.credit_limit = credit_limit
 	else:
-		doc.append("credit_limits", {"company": company, "credit_limit": credit_limit or 0})
+		doc.append("credit_limits", {"company": company, "credit_limit": credit_limit})
 
 
 @frappe.whitelist(methods=["POST"])

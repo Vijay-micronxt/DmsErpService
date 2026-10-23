@@ -944,3 +944,55 @@ class TestProducts(FrappeTestCase):
 			catalog_api.upload_product_image(item="PROD-TEST-IMG-1")
 		with self.assertRaises(frappe.PermissionError):
 			catalog_api.remove_product_image(item="PROD-TEST-IMG-1", image="/files/a.jpg")
+
+	def _make_bulk_test_items(self):
+		for code in ("PROD-TEST-C", "PROD-TEST-D"):
+			catalog_api.create_product(
+				code=code,
+				name=f"Bulk Test {code}",
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+				pieces_per_box=4,
+			)
+		catalog_api.update_product(
+			"PROD-TEST-C",
+			{
+				"altItemId": "PROD-TEST-D",
+				"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "BULK-1", "sample_issued": True}],
+			},
+		)
+		pricing_api.approve_price(item="PROD-TEST-C", final_price=500, reason="Launch")
+
+	def test_bulk_serializer_matches_one_by_one(self):
+		# list_all_products_bulk feeds the same Product type every staff screen reads,
+		# so it must be key-for-key what _serialize/get_product returns -- including
+		# the two-way alternative seen from the other side, and child tables.
+		self._make_bulk_test_items()
+		codes = ["PROD-TEST-C", "PROD-TEST-D"]
+
+		bulk = catalog_api._serialize_many(codes)
+
+		self.assertEqual(bulk, [catalog_api.get_product(code) for code in codes])
+		self.assertEqual(bulk[0]["altItemId"], "PROD-TEST-D")
+		self.assertEqual(bulk[1]["altItemId"], "PROD-TEST-C")
+		self.assertEqual(bulk[0]["dealerPrice"], 500)
+		self.assertEqual(bulk[0]["dealerCodes"][0]["customerItemCode"], "BULK-1")
+
+	def test_list_all_products_bulk_returns_every_match_unpaginated(self):
+		self._make_bulk_test_items()
+		result = catalog_api.list_all_products_bulk(search="Bulk Test PROD-TEST")
+		self.assertEqual([p["code"] for p in result], ["PROD-TEST-C", "PROD-TEST-D"])
+
+	def test_get_item_prices_lists_every_selling_price_list(self):
+		self._make_bulk_test_items()
+		pricing_api.set_dealer_tier_price("PROD-TEST-C", "Master Dealer", 450)
+
+		prices = {p["priceList"]: p["rate"] for p in catalog_api.get_item_prices("PROD-TEST-C")}
+
+		self.assertEqual(prices["Dealer"], 500)
+		self.assertEqual(prices["Master Dealer"], 450)
+		self.assertEqual(catalog_api.get_item_prices("PROD-TEST-D"), [])

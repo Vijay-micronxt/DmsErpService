@@ -33,7 +33,7 @@ from html import escape as _esc
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import now_datetime, sbool
 
 from dms_erp.catalog.utils import is_sellable
 from dms_erp.pricing.api import get_price_for_dealer
@@ -80,6 +80,22 @@ def catalog_for(dealer: str):
 
 
 @frappe.whitelist(methods=["GET"])
+def list_catalog_assignments() -> dict:
+	"""{dealer: [assigned item codes]} for every dealer that HAS a Dealer Catalog --
+	a dealer absent from the map has none and sees the full (sellable) catalog. The
+	staff app used to call catalog_for once per dealer, each returning the whole
+	catalog for unassigned dealers; once the app held all ~4,500 items that was
+	dealers x 4,500 codes over the wire. Raw assignment, not sellable-filtered: the
+	frontend already applies isSellable itself everywhere it builds an orderable list."""
+	out = {}
+	for row in frappe.get_all("Dealer Catalog Item", fields=["parent", "item"], order_by="parent asc, idx asc"):
+		out.setdefault(row.parent, []).append(row.item)
+	for dealer in frappe.get_all("Dealer Catalog", pluck="name"):
+		out.setdefault(dealer, [])
+	return out
+
+
+@frappe.whitelist(methods=["GET"])
 def browsable_catalog_for(dealer: str):
 	"""ISS-2026-00644 — "dealers can see unassigned items too, but can only inquire,
 	not order, on them." Every currently-sellable item in the system, regardless of
@@ -90,11 +106,35 @@ def browsable_catalog_for(dealer: str):
 	return _sellable_item_codes(frappe.get_all("Item", pluck="name"))
 
 
+def _materialize_full_catalog(dealer: str) -> "frappe.model.document.Document":
+	"""A first Dealer Catalog for a dealer who has none yet, seeded with every item --
+	exactly what they could already see via the no-record fallback -- so an admin's
+	first *hide* narrows that set instead of replacing it. Creating it empty (what
+	_get_or_create does) and then removing one item left the dealer able to order
+	nothing at all: a real report, hiding one item from a dealer with no catalog took
+	their orderable set from 4,338 items to 0. Every Item, not only sellable ones,
+	since is_visible's own fallback is "everything" and catalog_for re-applies the
+	sellable filter on read anyway."""
+	doc = frappe.get_doc(
+		{"doctype": "Dealer Catalog", "dealer": dealer, "items": [{"item": code} for code in frappe.get_all("Item", pluck="name")]}
+	)
+	doc.insert(ignore_permissions=True)
+	return doc
+
+
 def _set_product_visibility(dealer: str, item: str, visible: bool) -> dict:
 	"""Unguarded core of set_product_visibility -- also called directly by
 	catalog.sample_api.issue_sample, whose own DMS Warehouse/Management role check is
-	the actual authorization for that path (see this module's docstring)."""
-	doc = _get_or_create(dealer)
+	the actual authorization for that path (see this module's docstring).
+
+	Hiding an item from a dealer with no catalog yet starts from the full set they
+	could already see (_materialize_full_catalog), never an empty one. Showing one
+	still creates a catalog of just that item, as before -- that's BRD C.1.5's
+	sample-driven catalog starting with its first issued sample."""
+	if not visible and not frappe.db.exists("Dealer Catalog", dealer):
+		doc = _materialize_full_catalog(dealer)
+	else:
+		doc = _get_or_create(dealer)
 	already_visible = any(row.item == item for row in doc.items)
 
 	if visible and not already_visible:
@@ -110,14 +150,20 @@ def _set_product_visibility(dealer: str, item: str, visible: bool) -> dict:
 @frappe.whitelist(methods=["POST", "PUT"])
 def set_product_visibility(dealer: str, item: str, visible: bool):
 	_assert_can_manage_catalog()
-	return _set_product_visibility(dealer, item, visible)
+	return _set_product_visibility(dealer, item, sbool(visible))
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def set_category_visibility(dealer: str, item_group: str, visible: bool):
 	_assert_can_manage_catalog()
+	visible = sbool(visible)
 
-	doc = _get_or_create(dealer)
+	# Same trap as _set_product_visibility: "Hide all" on a dealer with no catalog yet
+	# must start from the full set they could already see, not an empty one.
+	if not visible and not frappe.db.exists("Dealer Catalog", dealer):
+		doc = _materialize_full_catalog(dealer)
+	else:
+		doc = _get_or_create(dealer)
 	category_items = set(frappe.get_all("Item", filters={"item_group": item_group}, pluck="name"))
 	current = {row.item for row in doc.items}
 

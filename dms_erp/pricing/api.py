@@ -28,7 +28,7 @@ carry pre-configured price_list_rates.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import now_datetime, nowdate
 
 from dms_erp.pagination import clamp
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER, DEALER_CLASSIFICATION_STANDARD
@@ -288,6 +288,12 @@ def save_cost_inputs(
 ):
 	_assert_can_manage_pricing()
 
+	# Upsert, not update-only: every Tally-migrated item (all of them, on a migrated
+	# site) has live Item Prices but no proposal, because proposals were only ever
+	# seeded by create_product. Without this the pricing screen had no way to start
+	# a landing-cost/margin record for any existing item.
+	if not frappe.db.exists("Item Price Proposal", item):
+		ensure_price_record(item, supplier, purchase_cost, margin_pct, effective_date or nowdate(), remarks)
 	doc = frappe.get_doc("Item Price Proposal", item)
 	doc.supplier = supplier
 	doc.purchase_cost = purchase_cost
