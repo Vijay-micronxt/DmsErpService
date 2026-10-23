@@ -83,3 +83,14 @@ instead of a `0` stub, now that Warehouse exists.
   Driver master — none exists anywhere in this app, and BRD explicitly notes
   a driver is "assigned on a pickup plan", not permanently tied to a
   vehicle.
+
+- **BRD fleet + weight-based capacity** (Phase 1 task 1.7, BRD C.1.7) — `setup.seed_brd_fleet` (run by
+  `bench migrate`) adds the 11 confirmed Morbi → Bengaluru vehicle types with tonnes and mode; it never changes
+  or removes existing types. Vehicle Type's box capacity is now optional: a pickup run is checked against
+  `capacity_boxes` when set, and by weight against `capacity_tonnes` when every line's item has a weight per
+  box (`pickup_run_api._check_weight_capacity`) — skipped rather than guessed when a weight is missing.
+- **Supplier contact** (client finding 7.3) — `custom_phone` / `custom_email`, plus india_compliance's own
+  `Supplier.gstin` when that app is installed. The bank account is ERPNext's own
+  `Bank Account` (party_type Supplier, `is_default`), read/written through `bank` on create/update_supplier --
+  not a custom field, so Payment Entries see the same record. Only the default non-company account is managed;
+  others set up in Desk are left alone. The `Bank` master is created on first use.

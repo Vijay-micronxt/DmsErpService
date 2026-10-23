@@ -73,3 +73,7 @@ catalog visibility. Implemented.
 
 `stockQty`, `bay` and `lastSoldDays` are stubbed in API responses — they come from
 Phase 3 (Warehouse/Stock) and Phase 5 (Sales) respectively.
+
+- **Categories** — `list_item_group_names` returns every leaf category unpaginated (the staff app had been
+  using `list_item_groups`' first page of 20 as "all categories", so Dealer Catalogs missed every item outside
+  them on a migrated site with ~1,100); `create_item_group` adds one from the product form's picker.

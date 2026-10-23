@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
@@ -9,6 +10,12 @@ from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
 from dms_erp.sales import utils as sales_utils
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+
+
+# Relative to today: fixed dates rot into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date").
+DISPATCH = str(add_days(today(), 30))
+LINE_DELIVERY = str(add_days(today(), 44))
 
 
 class TestOrderApi(FrappeTestCase):
@@ -32,7 +39,7 @@ class TestOrderApi(FrappeTestCase):
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
 		return order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 
 	def test_create_order_exposes_created_at_timestamp(self):
@@ -45,7 +52,7 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_order_from_inquiry_uses_approved_price_directly(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 40}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 40}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 
 		self.assertEqual(order["lines"][0]["rate"], 360)
@@ -71,7 +78,7 @@ class TestOrderApi(FrappeTestCase):
 
 		inquiry = inquiry_api.create_inquiry(dealer=master_dealer, item=item, qty=10, source="Phone")
 		order = order_api.create_order(
-			dealer=master_dealer, lines=[{"item": item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=master_dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 
 		# Flat "Dealer" list price is 500; this dealer's Master Dealer tier rate is
@@ -98,7 +105,7 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_order_accepts_bulk_channel(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 500}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Bulk"
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 500}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Bulk"
 		)
 		self.assertEqual(order["channel"], "Bulk")
 
@@ -106,7 +113,7 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 		with self.assertRaises(frappe.ValidationError):
 			order_api.create_order(
-				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Wholesale"
+				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Wholesale"
 			)
 
 	def test_create_order_channel_override_by_an_unauthorized_user_is_queued_not_applied(self):
@@ -128,7 +135,7 @@ class TestOrderApi(FrappeTestCase):
 
 		frappe.set_user(email)
 		result = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Bulk"
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Bulk"
 		)
 
 		self.assertTrue(result["approvalRequired"])
@@ -141,7 +148,7 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=bulk_dealer, item=self.item, qty=10, source="Phone")
 
 		order = order_api.create_order(
-			dealer=bulk_dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=bulk_dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 		self.assertEqual(order["channel"], "Project")
 
@@ -219,7 +226,7 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=1, source="Phone")
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
-			order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+			order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
 
 	def test_list_orders_is_paginated_and_searchable(self):
 		dealer = make_dealer("Order Pagination Dealer")
@@ -231,7 +238,7 @@ class TestOrderApi(FrappeTestCase):
 		for _ in range(3):
 			inquiry = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="Phone")
 			created.append(
-				order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+				order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
 			)
 
 		page = order_api.list_orders(dealer=dealer, limit=2, offset=0)
@@ -258,7 +265,7 @@ class TestOrderApi(FrappeTestCase):
 		order = order_api.create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 10, "discount_percentage": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 		line = order["lines"][0]
@@ -272,7 +279,7 @@ class TestOrderApi(FrappeTestCase):
 			order_api.create_order(
 				dealer=self.dealer,
 				lines=[{"item": self.item, "qty": 10, "discount_percentage": 150}],
-				expected_dispatch="2026-09-01",
+				expected_dispatch=DISPATCH,
 				inquiry=inquiry["id"],
 			)
 
@@ -280,16 +287,18 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 		order = order_api.create_order(
 			dealer=self.dealer,
-			lines=[{"item": self.item, "qty": 10, "delivery_date": "2026-09-15"}],
-			expected_dispatch="2026-09-01",
+			lines=[{"item": self.item, "qty": 10, "delivery_date": LINE_DELIVERY}],
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
-		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-15")
-		self.assertEqual(order["expectedDispatch"], "2026-09-01")
+		self.assertEqual(order["lines"][0]["deliveryDate"], LINE_DELIVERY)
+		# ERPNext's own SalesOrder.validate moves the header delivery date to the latest
+		# line's date, so a later per-line date becomes the order's expected dispatch.
+		self.assertEqual(order["expectedDispatch"], LINE_DELIVERY)
 
 	def test_create_order_falls_back_to_the_order_level_delivery_date(self):
 		order = self._make_order()
-		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
+		self.assertEqual(order["lines"][0]["deliveryDate"], DISPATCH)
 
 	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
 		company = ensure_company()
@@ -329,7 +338,7 @@ class TestOrderApi(FrappeTestCase):
 		order = order_api.create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 			taxes_and_charges=template_name,
 		)
@@ -367,3 +376,26 @@ class TestOrderApi(FrappeTestCase):
 		template_name = self._make_tax_template("B", rate=12)
 		templates = sales_utils.list_tax_templates()
 		self.assertIn(template_name, [t["id"] for t in templates])
+
+	def test_same_items_and_quantities_again_are_flagged_as_a_possible_duplicate(self):
+		# BRD C.2.4: same dealer, same material and quantity, different PO number.
+		from dms_erp.warehouse.test_fixtures import make_dealer
+
+		dealer = make_dealer("Duplicate PO Test Dealer")
+		lines = [{"item": self.item, "qty": 7}]
+		first = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_po="PO-A")
+		self.assertEqual(first["possibleDuplicates"], [])
+
+		second = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_po="PO-B")
+		self.assertEqual(second["possibleDuplicates"], [first["id"]])
+		self.assertTrue(any("Possible duplicate" in (e.get("note") or "") for e in second["history"]))
+
+		# A different quantity is a different order, not a duplicate.
+		third = order_api.create_order(dealer=dealer, lines=[{"item": self.item, "qty": 8}], expected_dispatch=DISPATCH)
+		self.assertEqual(third["possibleDuplicates"], [])
+
+		# A cancelled order no longer counts.
+		order_api.advance_order_stage(first["id"], "Cancelled")
+		order_api.advance_order_stage(second["id"], "Cancelled")
+		fourth = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH)
+		self.assertEqual(fourth["possibleDuplicates"], [])

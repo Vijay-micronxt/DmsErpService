@@ -195,9 +195,42 @@ _CATALOG_EXPORT_CSS = """
 	th, td { border-bottom: 1px solid #dce0df; padding: 8px 10px; text-align: left; vertical-align: middle; }
 	th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: #545c61; }
 	td.price, th.price { text-align: right; white-space: nowrap; }
-	img.thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; background: #f5f6f5; }
+	td.imgs { width: 1%; }
+	.imgs-row { display: flex; flex-wrap: wrap; gap: 6px; width: 260px; }
+	figure { margin: 0; display: grid; gap: 2px; justify-items: center; }
+	figure img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; background: #f5f6f5; display: block; }
+	figure.main img { width: 72px; height: 72px; }
+	figcaption { font-size: 9px; color: #8a9196; text-transform: uppercase; letter-spacing: .04em; }
+	.more { align-self: center; font-size: 10px; color: #8a9196; }
 	@media print { body { padding: 0; } }
 """
+
+
+# Shown under each thumbnail so a dealer can tell the room shot from the product shot.
+_IMAGE_CAPTIONS = {"Product": "Product", "Application": "Room", "Additional": "More"}
+_MAX_EXPORT_IMAGES = 6
+
+
+def _absolute_file_url(path: str) -> str:
+	"""Image paths are stored site-relative (/files/...). The export is opened from the
+	staff app, which may live on another host, so a relative path would point there."""
+	return frappe.utils.get_url(path) if path.startswith("/") else path
+
+
+def _images_cell(images: list) -> str:
+	if not images:
+		return ""
+	shown = images[:_MAX_EXPORT_IMAGES]
+	figures = []
+	for i, img in enumerate(shown):
+		caption = _IMAGE_CAPTIONS.get(img.image_type or "", img.image_type or "")
+		figures.append(
+			f'<figure class="{"main" if i == 0 else ""}"><img src="{_esc(_absolute_file_url(img.image))}" alt="{_esc(caption)}">'
+			f"<figcaption>{_esc(caption)}</figcaption></figure>"
+		)
+	extra = len(images) - len(shown)
+	more = f'<span class="more">+{extra} more</span>' if extra > 0 else ""
+	return f'<div class="imgs-row">{"".join(figures)}{more}</div>'
 
 
 @frappe.whitelist(methods=["GET"])
@@ -236,16 +269,19 @@ def dealer_catalog_export(dealer: str, include_price: str | int | bool = True) -
 		if item_codes
 		else {}
 	)
-	primary_images = (
-		{
-			row.parent: row.image
-			for row in frappe.get_all(
-				"Product Image", filters={"parent": ["in", item_codes], "is_primary": 1}, fields=["parent", "image"]
-			)
-		}
-		if item_codes
-		else {}
-	)
+	# Every image, not just the primary one: BRD C.14.1 has each catalog entry carry the
+	# product image, the application/room image and the additional images. Primary first,
+	# then the rest in the order staff arranged them.
+	images_by_item: dict[str, list] = {}
+	if item_codes:
+		for row in frappe.get_all(
+			"Product Image",
+			filters={"parent": ["in", item_codes], "parenttype": "Item", "parentfield": "custom_images"},
+			fields=["parent", "image", "image_type", "is_primary"],
+			order_by="is_primary desc, idx asc",
+		):
+			if row.image:
+				images_by_item.setdefault(row.parent, []).append(row)
 
 	price_header = "<th class=\"price\">Price / box</th>" if include_price_flag else ""
 	rows = []
@@ -254,13 +290,12 @@ def dealer_catalog_export(dealer: str, include_price: str | int | bool = True) -
 		if include_price_flag:
 			rate = get_price_for_dealer(it.name, dealer)
 			price_cell = f"<td class=\"price\">{f'₹{rate:,.2f}' if rate is not None else '—'}</td>"
-		image = primary_images.get(it.name)
-		thumb = f"<img class=\"thumb\" src=\"{_esc(image)}\" alt=\"\">" if image else ""
+		thumb = _images_cell(images_by_item.get(it.name, []))
 		dealer_code = dealer_codes.get(it.name)
 		code_display = f"{_esc(it.name)}<br><span style=\"color:#8a9196\">{_esc(dealer_code)}</span>" if dealer_code else _esc(it.name)
 		rows.append(
 			f"""<tr>
-	<td>{thumb}</td>
+	<td class="imgs">{thumb}</td>
 	<td>{code_display}</td>
 	<td>{_esc(it.item_name or '')}</td>
 	<td>{_esc(it.custom_series or '—')}</td>
@@ -271,7 +306,7 @@ def dealer_catalog_export(dealer: str, include_price: str | int | bool = True) -
 
 	table = f"""<table>
 	<thead><tr><th></th><th>Item code</th><th>Name</th><th>Series</th><th>Size / Finish</th>{price_header}</tr></thead>
-	<tbody>{''.join(rows) if rows else '<tr><td colspan="6">No items are currently visible in this dealer’s catalog.</td></tr>'}</tbody>
+	<tbody>{''.join(rows) if rows else f'<tr><td colspan="{6 if include_price_flag else 5}">No items are currently visible in this dealer’s catalog.</td></tr>'}</tbody>
 </table>"""
 
 	return (

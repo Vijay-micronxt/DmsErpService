@@ -1038,3 +1038,28 @@ def list_item_groups(search: str | None = None, limit: int = 20, offset: int = 0
 		"limit": limit,
 		"offset": offset,
 	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_group_names() -> list[str]:
+	"""Every leaf category name, unpaginated. The staff app used list_item_groups' first
+	page (20) as "all categories", but a Tally-migrated site has ~1,100 of them -- so the
+	Dealer Catalogs screen, which built its sections from that list, silently left out
+	every item in any other category. Names only, so even 1,100 is a small response."""
+	return frappe.get_all("Item Group", filters={"is_group": 0}, pluck="name", order_by="name asc")
+
+
+@frappe.whitelist(methods=["POST"])
+def create_item_group(name: str) -> str:
+	"""Client requirement 3.2 / 8.6 -- "every dropdown has 'create new'". A new leaf
+	category under the root, the same place catalog/setup.py seeds them."""
+	_assert_can_manage_products()
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("A category name is required."), frappe.ValidationError)
+	if frappe.db.exists("Item Group", name):
+		frappe.throw(_("Category {0} already exists.").format(name), frappe.DuplicateEntryError)
+	root = frappe.db.get_value("Item Group", {"is_group": 1, "parent_item_group": ["is", "not set"]}, "name") or "All Item Groups"
+	doc = frappe.get_doc({"doctype": "Item Group", "item_group_name": name, "parent_item_group": root, "is_group": 0})
+	doc.insert(ignore_permissions=True)
+	return doc.name

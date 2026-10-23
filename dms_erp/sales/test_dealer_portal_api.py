@@ -255,6 +255,18 @@ class TestDealerPortalApi(FrappeTestCase):
 		update_password(self.dealer_user, "a-long-password-1")
 		self.assertTrue(dealer_portal_api.my_profile()["hasPassword"])
 
+	def test_my_orders_never_carry_pacific_internal_fields(self):
+		from frappe.utils import add_days, today
+
+		frappe.set_user("Administrator")
+		order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
+		frappe.set_user(self.dealer_user)
+
+		for o in (dealer_portal_api.get_my_order(order["id"]), *dealer_portal_api.list_my_orders()["items"]):
+			for key in ("channel", "owner", "advanceConfirmed", "reservation"):
+				self.assertNotIn(key, o)
+			self.assertTrue(all("by" not in e for e in o["history"]))
+
 	def test_suggest_alternatives_excludes_the_item_itself(self):
 		alternatives = dealer_portal_api.suggest_alternatives(item=self.item)
 		self.assertNotIn(self.item, [row["code"] for row in alternatives])

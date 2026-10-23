@@ -152,6 +152,24 @@ class TestPricingApi(FrappeTestCase):
 		self.assertTrue(record["effectiveDate"])
 
 
+	def test_landing_cost_includes_loading_and_insurance_pct(self):
+		# BRD C.7.1: Basic + Freight + Loading + Insurance (% of basic) + Other landed costs.
+		item = make_item("PRICE-BUILDUP", "Vitrified")
+		record = pricing_api.save_cost_inputs(
+			item=item, supplier=self.supplier, purchase_cost=300, freight=20, handling=5, other_costs=4,
+			margin_pct=10, loading=15, insurance_pct=2,
+		)
+		self.assertEqual(record["loading"], 15)
+		self.assertEqual(record["insurancePct"], 2)
+		self.assertEqual(record["insuranceAmount"], 6)  # 2% of 300
+		self.assertEqual(record["landingCost"], 350)  # 300 + 20 + 15 + 6 + 5 + 4
+		self.assertEqual(record["suggestedPrice"], 385)  # 350 x 1.10
+
+		# An older client that doesn't send the new fields leaves them as they were.
+		again = pricing_api.save_cost_inputs(item=item, supplier=self.supplier, purchase_cost=300, margin_pct=10)
+		self.assertEqual(again["loading"], 15)
+		self.assertEqual(again["insurancePct"], 2)
+
 class TestSuggestPriceFromHistory(FrappeTestCase):
 	"""ISS-2026-00623 -- Purchase Invoice/Sales Invoice history is real, migration-only
 	data this app never creates itself (see pricing/README.md's own note), so there's

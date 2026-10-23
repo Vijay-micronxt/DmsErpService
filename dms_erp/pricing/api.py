@@ -48,6 +48,10 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 		"supplier": doc.supplier,
 		"purchaseCost": doc.purchase_cost,
 		"freight": doc.freight,
+		# BRD C.7.1 cost build-up: loading and insurance % (of purchase cost).
+		"loading": doc.get("loading") or 0,
+		"insurancePct": doc.get("insurance_pct") or 0,
+		"insuranceAmount": doc.insurance_amount(),
 		"handling": doc.handling,
 		"otherCosts": doc.other_costs,
 		"marginPct": doc.margin_pct,
@@ -285,6 +289,8 @@ def save_cost_inputs(
 	margin_pct: float = 0,
 	effective_date=None,
 	remarks: str | None = None,
+	loading: float | None = None,
+	insurance_pct: float | None = None,
 ):
 	_assert_can_manage_pricing()
 
@@ -300,6 +306,11 @@ def save_cost_inputs(
 	doc.freight = freight
 	doc.handling = handling
 	doc.other_costs = other_costs
+	# None = "not sent" (an older client): leave the stored value alone.
+	if loading is not None:
+		doc.loading = loading
+	if insurance_pct is not None:
+		doc.insurance_pct = insurance_pct
 	doc.margin_pct = margin_pct
 	if effective_date:
 		doc.effective_date = effective_date

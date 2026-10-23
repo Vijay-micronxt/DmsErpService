@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.purchase import pickup_run_api, po_api
@@ -25,7 +26,10 @@ class TestPickupRunApi(FrappeTestCase):
 
 	def _ready_line(self, supplier=None, ordered_qty=1000, ready_qty=500):
 		po = po_api.create_purchase_order(
-			item=self.item, ordered_qty=ordered_qty, supplier=supplier or self.supplier, expected_ready_date="2026-09-01"
+			item=self.item, ordered_qty=ordered_qty, supplier=supplier or self.supplier,
+			# Relative, not a fixed date: a fixed one rots into the past and ERPNext then
+			# refuses the PO ("Reqd by Date cannot be before Transaction Date").
+			expected_ready_date=add_days(today(), 30),
 		)
 		line_id = po["lines"][0]["id"]
 		po_api.set_line_ready(po["id"], line_id, ready_qty)
@@ -51,6 +55,9 @@ class TestPickupRunApi(FrappeTestCase):
 		self.assertEqual(page["offset"], 0)
 
 	def test_list_pickup_runs_is_paginated_and_filters_by_supplier_and_status(self):
+		# Other tests in this class create runs for the same supplier, so count from a baseline.
+		before_total = pickup_run_api.list_pickup_runs(supplier=self.supplier)["total"]
+		before_dispatched = pickup_run_api.list_pickup_runs(supplier=self.supplier, status="Dispatched")["total"]
 		line1 = self._ready_line(ready_qty=300)
 		line2 = self._ready_line(ready_qty=300)
 		line3 = self._ready_line(supplier=self.other_supplier, ready_qty=300)
@@ -60,12 +67,12 @@ class TestPickupRunApi(FrappeTestCase):
 		pickup_run_api.advance_pickup_run_status(run2["id"], "Dispatched")
 
 		page = pickup_run_api.list_pickup_runs(supplier=self.supplier, limit=1, offset=0)
-		self.assertEqual(page["total"], 2)
+		self.assertEqual(page["total"], before_total + 2)
 		self.assertEqual(len(page["items"]), 1)
 
 		by_status = pickup_run_api.list_pickup_runs(supplier=self.supplier, status="Dispatched")
-		self.assertEqual(by_status["total"], 1)
-		self.assertEqual(by_status["items"][0]["id"], run2["id"])
+		self.assertEqual(by_status["total"], before_dispatched + 1)
+		self.assertIn(run2["id"], {r["id"] for r in by_status["items"]})
 
 	def test_create_pickup_run_computes_total_boxes(self):
 		line = self._ready_line(ready_qty=400)
@@ -202,3 +209,35 @@ class TestPickupRunApi(FrappeTestCase):
 			pickup_run_api.create_pickup_run(
 				supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line, "qty": 100}]
 			)
+
+	def test_brd_fleet_is_seeded_once_with_tonnes_and_mode(self):
+		from dms_erp.purchase.setup import BRD_FLEET, seed_brd_fleet
+
+		seed_brd_fleet()
+		seed_brd_fleet()  # idempotent
+		for name, tonnes, mode in BRD_FLEET:
+			self.assertEqual(frappe.db.count("Vehicle Type", {"name": name}), 1)
+			self.assertEqual(frappe.db.get_value("Vehicle Type", name, ["capacity_tonnes", "mode"]), (tonnes, mode))
+
+	def test_tonnage_vehicle_rejects_a_run_heavier_than_its_capacity(self):
+		# BRD C.1.7: capacity is in tonnes. 28 kg/box: 150 boxes = 4.2 t fits 5 t, 200 = 5.6 t doesn't.
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		vt = pickup_run_api.create_vehicle_type("Tonnage Test 5 T", capacity_tonnes=5, mode="Road")
+		self.assertIsNone(vt["capacityBoxes"])
+		self.assertEqual(vt["capacityTonnes"], 5)
+
+		ok_line = self._ready_line(ready_qty=400)
+		run = pickup_run_api.create_pickup_run(
+			supplier=self.supplier, vehicle_type=vt["id"], lines=[{"purchase_order_item": ok_line, "qty": 150}]
+		)
+		self.assertEqual(run["totalBoxes"], 150)
+
+		heavy_line = self._ready_line(ready_qty=400)
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_pickup_run(
+				supplier=self.supplier, vehicle_type=vt["id"], lines=[{"purchase_order_item": heavy_line, "qty": 200}]
+			)
+
+	def test_vehicle_type_needs_some_capacity(self):
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_vehicle_type("No Capacity Truck")

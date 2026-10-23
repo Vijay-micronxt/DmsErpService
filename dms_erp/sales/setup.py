@@ -83,6 +83,9 @@ CUSTOM_FIELDS = {
 			"in_standard_filter": 1,
 			"insert_after": "dms_fulfillment_section",
 			"allow_on_submit": 1,
+			# Moved only through order_api.advance_order_stage, which applies the cancel
+			# approval (BRD C.11) and the advance gate (C.3.4); editable in Desk it skipped both.
+			"read_only": 1,
 		},
 		{
 			"fieldname": "custom_vehicle",
@@ -132,6 +135,9 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Check",
 			"label": "Advance Payment Confirmed",
 			"default": "0",
+			# Set only by order_api.confirm_advance_payment (Management only); editable in
+			# Desk it let anyone open the dispatch gate (BRD C.3.4).
+			"read_only": 1,
 			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
 			"insert_after": "custom_order_channel",
 		},
@@ -216,6 +222,16 @@ CUSTOM_FIELDS = {
 			"label": "Phone",
 			"description": "BRD C.13 — the dealer portal's login identifier and OTP delivery target (see auth.dealer_api). Not used elsewhere in the app.",
 			"insert_after": "custom_salesperson",
+		},
+		# Client requirement 8.9 -- several people at one dealer enquire from their own
+		# phones. Every number here works for OTP login and WhatsApp exactly like
+		# custom_phone (phone_utils.dealer_for_phone checks both).
+		{
+			"fieldname": "custom_additional_phones",
+			"fieldtype": "Table",
+			"label": "Additional Phone Numbers",
+			"options": "Dealer Phone",
+			"insert_after": "custom_phone",
 		},
 		{
 			"fieldname": "custom_price_visible",

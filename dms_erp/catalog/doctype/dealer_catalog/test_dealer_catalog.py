@@ -193,6 +193,25 @@ class TestDealerCatalog(FrappeTestCase):
 		self.assertNotIn("<script>", html)
 		self.assertIn("&lt;script&gt;", html)
 
+	def test_dealer_catalog_export_shows_every_image_with_its_type(self):
+		# BRD C.14.1: product, application/room and additional images, not just the primary.
+		api.set_product_visibility(self.dealer, self.item_a, True)
+		doc = frappe.get_doc("Item", self.item_a)
+		doc.set("custom_images", [])
+		doc.append("custom_images", {"image": "/files/room.jpg", "image_type": "Application", "is_primary": 0})
+		doc.append("custom_images", {"image": "/files/main.jpg", "image_type": "Product", "is_primary": 1})
+		doc.append("custom_images", {"image": "https://cdn.example.com/extra.jpg", "image_type": "Additional", "is_primary": 0})
+		doc.save(ignore_permissions=True)
+
+		html = api.dealer_catalog_export(self.dealer, include_price=False)
+
+		main, room, extra = (html.find(s) for s in ("main.jpg", "room.jpg", "extra.jpg"))
+		self.assertTrue(0 < main < room < extra, "primary first, then the rest in order")
+		self.assertIn(frappe.utils.get_url("/files/main.jpg"), html)  # relative paths made absolute
+		self.assertIn("https://cdn.example.com/extra.jpg", html)  # absolute URLs left alone
+		for caption in ("Product", "Room", "More"):
+			self.assertIn(f"<figcaption>{caption}</figcaption>", html)
+
 	def test_dealer_catalog_export_handles_an_empty_catalog(self):
 		# an actually-empty (not merely unassigned) Dealer Catalog -- add then remove
 		# the one item so the record exists with items=[], unlike the fallback-to-full

@@ -5,7 +5,12 @@ from frappe.utils.password import update_password
 from dms_erp.auth.api import _issue_tokens
 from dms_erp.auth.dealer_api import _dealer_portal_user
 from dms_erp.sales import dealer_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer
+from dms_erp.warehouse.test_fixtures import (
+	TEST_CUSTOMER_GROUP,
+	_test_customer_group,
+	ensure_company,
+	make_dealer,
+)
 from dms_erp.warehouse.utils import default_company
 
 
@@ -23,7 +28,8 @@ class TestDealerApi(FrappeTestCase):
 		result = dealer_api.get_dealer(self.dealer)
 		self.assertEqual(result["id"], self.dealer)
 		self.assertEqual(result["name"], self.dealer)
-		self.assertEqual(result["group"], "All Customer Groups")
+		# make_dealer's own leaf group: ERPNext v15 refuses the root "All Customer Groups".
+		self.assertEqual(result["group"], TEST_CUSTOMER_GROUP)
 		self.assertEqual(result["territory"], "All Territories")
 		self.assertFalse(result["disabled"])
 
@@ -67,20 +73,20 @@ class TestDealerApi(FrappeTestCase):
 		# Email now doubles as a login-password lookup key (auth.dealer_api.
 		# login_with_password) -- two dealers sharing one would make that
 		# resolve to whichever one frappe.db.get_value happens to pick.
-		dealer_api.create_dealer(name="Dealer Api Email Owner Co", email="shared@pacific.example")
+		dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Email Owner Co", email="shared@pacific.example")
 
 		with self.assertRaises(frappe.ValidationError):
-			dealer_api.create_dealer(name="Dealer Api Email Squatter Co", email="shared@pacific.example")
+			dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Email Squatter Co", email="shared@pacific.example")
 
 	def test_update_dealer_rejects_an_email_already_used_by_another_dealer(self):
-		dealer_api.create_dealer(name="Dealer Api Email Taken Co", email="taken@pacific.example")
-		other = dealer_api.create_dealer(name="Dealer Api Email Wants It Co")["id"]
+		dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Email Taken Co", email="taken@pacific.example")
+		other = dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Email Wants It Co")["id"]
 
 		with self.assertRaises(frappe.ValidationError):
 			dealer_api.update_dealer(other, {"email": "taken@pacific.example"})
 
 	def test_update_dealer_allows_keeping_its_own_unchanged_email(self):
-		dealer = dealer_api.create_dealer(name="Dealer Api Keep Own Email Co", email="keepme@pacific.example")["id"]
+		dealer = dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Keep Own Email Co", email="keepme@pacific.example")["id"]
 
 		result = dealer_api.update_dealer(dealer, {"email": "keepme@pacific.example"})
 		self.assertEqual(result["email"], "keepme@pacific.example")
@@ -96,6 +102,7 @@ class TestDealerPriceListTag(FrappeTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		ensure_company()
+		_test_customer_group()  # create_dealer below needs a real leaf group to put them in
 		if not frappe.db.exists("Price List", "Dealer Api Export List"):
 			frappe.get_doc(
 				{"doctype": "Price List", "price_list_name": "Dealer Api Export List", "selling": 1, "enabled": 1, "currency": "INR"}
@@ -109,16 +116,16 @@ class TestDealerPriceListTag(FrappeTestCase):
 		frappe.set_user("Administrator")
 
 	def test_create_dealer_sets_the_price_list_tag(self):
-		result = dealer_api.create_dealer(name="Dealer Api Price Tag Co", price_list="Dealer Api Export List")
+		result = dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Price Tag Co", price_list="Dealer Api Export List")
 		self.assertEqual(result["priceList"], "Dealer Api Export List")
 
 	def test_create_dealer_rejects_a_disabled_price_list(self):
 		with self.assertRaises(frappe.ValidationError):
-			dealer_api.create_dealer(name="Dealer Api Bad Price Tag Co", price_list="Dealer Api Disabled List")
+			dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api Bad Price Tag Co", price_list="Dealer Api Disabled List")
 
 	def test_create_dealer_rejects_a_nonexistent_price_list(self):
 		with self.assertRaises(frappe.ValidationError):
-			dealer_api.create_dealer(name="Dealer Api No Such Price Tag Co", price_list="No Such List At All")
+			dealer_api.create_dealer(group=TEST_CUSTOMER_GROUP, name="Dealer Api No Such Price Tag Co", price_list="No Such List At All")
 
 	def test_update_dealer_sets_and_clears_the_price_list_tag(self):
 		dealer = make_dealer("Dealer Api Price Tag Update Co")
@@ -136,7 +143,7 @@ class TestDealerPriceListTag(FrappeTestCase):
 
 	def test_list_dealers_and_get_dealer_report_the_price_list_tag(self):
 		dealer = dealer_api.create_dealer(
-			name="Dealer Api Price Tag List Co", price_list="Dealer Api Export List"
+			group=TEST_CUSTOMER_GROUP, name="Dealer Api Price Tag List Co", price_list="Dealer Api Export List"
 		)["id"]
 
 		self.assertEqual(dealer_api.get_dealer(dealer)["priceList"], "Dealer Api Export List")

@@ -9,6 +9,7 @@ dealer's Inquiry needs a real link back to it (closing the Inquiry status
 lifecycle's unused "Mapped to PO" state), not just a remarks note.
 """
 
+import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 CUSTOM_FIELDS = {
@@ -132,11 +133,28 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.1.6 — who to reach for vendor enquiry and material-ready follow-up. Free text (name and/or phone), not a Link to Contact.",
 			"insert_after": "custom_address",
 		},
+		# Client finding 7.3 -- supplier contact details editable from the staff app. Plain
+		# fields like Customer.custom_phone/custom_email rather than ERPNext's Contact
+		# doctype, which the staff app never manages.
+		{
+			"fieldname": "custom_phone",
+			"fieldtype": "Data",
+			"label": "Phone",
+			"options": "Phone",
+			"insert_after": "custom_contact_person",
+		},
+		{
+			"fieldname": "custom_email",
+			"fieldtype": "Data",
+			"label": "Email",
+			"options": "Email",
+			"insert_after": "custom_phone",
+		},
 		{
 			"fieldname": "custom_moq_section",
 			"fieldtype": "Section Break",
 			"label": "MOQ (Vendor Level)",
-			"insert_after": "custom_contact_person",
+			"insert_after": "custom_email",
 		},
 		{
 			"fieldname": "custom_moq",
@@ -156,5 +174,36 @@ CUSTOM_FIELDS = {
 }
 
 
+# BRD C.1.7's confirmed Morbi -> Bengaluru full-load fleet (Phase 1 task 1.7). Box
+# capacity is left unset on purpose -- it depends on the tiles' weight, so runs are
+# checked by weight against the tonnage instead (pickup_run_api._check_weight_capacity).
+BRD_FLEET = [
+	("Truck 43.5 T", 43.5, "Road"),
+	("Truck 42 T", 42.0, "Road"),
+	("Truck 41 T", 41.0, "Road"),
+	("Truck 40.5 T", 40.5, "Road"),
+	("Truck 35 T", 35.0, "Road"),
+	("Truck 31 T", 31.0, "Road"),
+	("Truck 25 T", 25.0, "Road"),
+	("Container 32.5 T (Rail + Road)", 32.5, "Rail + Road"),
+	("Container 31 T (Rail + Road)", 31.0, "Rail + Road"),
+	("Container 28 T (Ship + Road)", 28.0, "Ship + Road"),
+	("Container 31 T (Ship + Road)", 31.0, "Ship + Road"),
+]
+
+
+def seed_brd_fleet():
+	"""Adds any BRD fleet vehicle type that's missing; never changes or removes existing ones."""
+	if not frappe.get_meta("Vehicle Type").has_field("capacity_tonnes"):
+		return
+	for name, tonnes, mode in BRD_FLEET:
+		if frappe.db.exists("Vehicle Type", name):
+			continue
+		frappe.get_doc(
+			{"doctype": "Vehicle Type", "vehicle_type_name": name, "capacity_tonnes": tonnes, "mode": mode, "capacity_boxes": 0}
+		).insert(ignore_permissions=True)
+
+
 def setup_purchase():
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+	seed_brd_fleet()
