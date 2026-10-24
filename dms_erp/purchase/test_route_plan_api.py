@@ -22,12 +22,12 @@ def _set_supplier_gps(supplier: str, lat: float, lng: float):
 	frappe.db.set_value("Supplier", supplier, {"custom_latitude": lat, "custom_longitude": lng})
 
 
-def _fake_optimize_result(order, legs):
-	return {"order": order, "legs": [{"distance_km": d, "duration_minutes": m} for d, m in legs]}
+def _fake_optimize_result(order, legs, polyline="fake-polyline"):
+	return {"order": order, "legs": [{"distance_km": d, "duration_minutes": m} for d, m in legs], "polyline": polyline}
 
 
-def _fake_legs(legs):
-	return [{"distance_km": d, "duration_minutes": m} for d, m in legs]
+def _fake_legs(legs, polyline="fake-polyline"):
+	return {"legs": [{"distance_km": d, "duration_minutes": m} for d, m in legs], "polyline": polyline}
 
 
 class TestRoutePlanApi(FrappeTestCase):
@@ -108,7 +108,9 @@ class TestRoutePlanApi(FrappeTestCase):
 	def test_optimize_route_reorders_stops_and_sets_totals(self):
 		plan = self._two_stop_plan()
 		with patch("dms_erp.purchase.routing_client.optimize_waypoints") as mock_optimize:
-			mock_optimize.return_value = _fake_optimize_result([1, 0], [(120, 150), (80, 100)])
+			mock_optimize.return_value = _fake_optimize_result(
+				[1, 0], [(120, 150), (80, 100)], polyline="encoded-abc"
+			)
 			optimized = route_plan_api.optimize_route(plan["id"])
 
 		mock_optimize.assert_called_once()
@@ -116,6 +118,11 @@ class TestRoutePlanApi(FrappeTestCase):
 		self.assertEqual([s["sequenceNo"] for s in optimized["stops"]], [1, 2])
 		self.assertEqual(optimized["totalDistanceKm"], 200)
 		self.assertEqual(optimized["totalDurationMinutes"], 250)
+		self.assertEqual(optimized["routePolyline"], "encoded-abc")
+
+	def test_get_route_plan_has_no_polyline_before_the_first_optimize(self):
+		plan = self._two_stop_plan()
+		self.assertIsNone(route_plan_api.get_route_plan(plan["id"])["routePolyline"])
 
 	def test_resequence_route_stops_accepts_manual_order_and_recomputes_legs(self):
 		plan = self._two_stop_plan()
@@ -128,7 +135,7 @@ class TestRoutePlanApi(FrappeTestCase):
 		manual_order = list(reversed(stop_ids))
 
 		with patch("dms_erp.purchase.routing_client.compute_fixed_order_legs") as mock_fixed:
-			mock_fixed.return_value = _fake_legs([(90, 100), (70, 80)])
+			mock_fixed.return_value = _fake_legs([(90, 100), (70, 80)], polyline="encoded-xyz")
 			resequenced = route_plan_api.resequence_route_stops(plan["id"], manual_order)
 
 		mock_fixed.assert_called_once()
@@ -138,6 +145,9 @@ class TestRoutePlanApi(FrappeTestCase):
 		self.assertEqual([s["sequenceNo"] for s in resequenced["stops"]], [1, 2])
 		self.assertEqual(resequenced["totalDistanceKm"], 160)
 		self.assertEqual(resequenced["totalDurationMinutes"], 180)
+		# Resequencing re-measures the now-fixed order, so the polyline is refreshed too, not
+		# left pointing at the stale pre-optimize-then-manually-reordered geometry.
+		self.assertEqual(resequenced["routePolyline"], "encoded-xyz")
 
 	def test_dispatch_nets_ready_qty_against_both_pickup_runs_and_route_plans(self):
 		# A Draft Pickup Run reserves 400 of supplier_a's 500 ready boxes first...

@@ -25,15 +25,14 @@ _STOP_A = (22.8181, 70.8328)
 _STOP_B = (22.4707, 70.0577)
 
 
-def _route_response(order, legs):
-	return {
-		"routes": [
-			{
-				"optimizedIntermediateWaypointIndex": order,
-				"legs": [{"distanceMeters": leg[0] * 1000, "duration": f"{leg[1] * 60}s"} for leg in legs],
-			}
-		]
+def _route_response(order, legs, polyline=None):
+	route = {
+		"optimizedIntermediateWaypointIndex": order,
+		"legs": [{"distanceMeters": leg[0] * 1000, "duration": f"{leg[1] * 60}s"} for leg in legs],
 	}
+	if polyline is not None:
+		route["polyline"] = {"encodedPolyline": polyline}
+	return {"routes": [route]}
 
 
 class TestRoutingClient(FrappeTestCase):
@@ -59,25 +58,43 @@ class TestRoutingClient(FrappeTestCase):
 
 	def test_optimize_waypoints_sends_the_expected_payload(self):
 		with patch("dms_erp.purchase.routing_client.requests.post") as mock_post:
-			mock_post.return_value = _FakeResponse(200, _route_response([1, 0], [[100, 120], [80, 90]]))
+			mock_post.return_value = _FakeResponse(
+				200, _route_response([1, 0], [[100, 120], [80, 90]], polyline="abc123")
+			)
 			result = routing_client.optimize_waypoints(_ORIGIN, [_STOP_A, _STOP_B])
 
 		mock_post.assert_called_once()
 		_args, kwargs = mock_post.call_args
 		self.assertEqual(kwargs["headers"]["X-Goog-Api-Key"], TEST_API_KEY)
+		self.assertIn("routes.polyline.encodedPolyline", kwargs["headers"]["X-Goog-FieldMask"])
 		self.assertTrue(kwargs["json"]["optimizeWaypointOrder"])
 		self.assertEqual(len(kwargs["json"]["intermediates"]), 2)
 		self.assertEqual(result["order"], [1, 0])
 		self.assertEqual(result["legs"], [{"distance_km": 100.0, "duration_minutes": 120}, {"distance_km": 80.0, "duration_minutes": 90}])
+		self.assertEqual(result["polyline"], "abc123")
+
+	def test_optimize_waypoints_polyline_is_none_when_google_omits_it(self):
+		with patch("dms_erp.purchase.routing_client.requests.post") as mock_post:
+			mock_post.return_value = _FakeResponse(200, _route_response([0], [[10, 10]]))
+			result = routing_client.optimize_waypoints(_ORIGIN, [_STOP_A])
+
+		self.assertIsNone(result["polyline"])
 
 	def test_compute_fixed_order_legs_does_not_ask_for_optimization(self):
 		with patch("dms_erp.purchase.routing_client.requests.post") as mock_post:
-			mock_post.return_value = _FakeResponse(200, _route_response(None, [[50, 60]]))
-			legs = routing_client.compute_fixed_order_legs(_ORIGIN, [_STOP_A])
+			mock_post.return_value = _FakeResponse(200, _route_response(None, [[50, 60]], polyline="xyz789"))
+			result = routing_client.compute_fixed_order_legs(_ORIGIN, [_STOP_A])
 
 		_args, kwargs = mock_post.call_args
 		self.assertFalse(kwargs["json"]["optimizeWaypointOrder"])
-		self.assertEqual(legs, [{"distance_km": 50.0, "duration_minutes": 60}])
+		self.assertEqual(result["legs"], [{"distance_km": 50.0, "duration_minutes": 60}])
+		self.assertEqual(result["polyline"], "xyz789")
+
+	def test_compute_fixed_order_legs_returns_empty_without_a_network_call(self):
+		with patch("dms_erp.purchase.routing_client.requests.post") as mock_post:
+			result = routing_client.compute_fixed_order_legs(_ORIGIN, [])
+			mock_post.assert_not_called()
+		self.assertEqual(result, {"legs": [], "polyline": None})
 
 	def test_a_non_200_response_raises_route_optimization_failed(self):
 		with patch("dms_erp.purchase.routing_client.requests.post") as mock_post:

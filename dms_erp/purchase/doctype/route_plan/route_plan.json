@@ -15,6 +15,7 @@
   "total_distance_km",
   "total_duration_minutes",
   "total_weight_kg",
+  "route_polyline",
   "section_break_stops",
   "stops",
   "section_break_lines",
@@ -80,6 +81,13 @@
    "fieldname": "total_weight_kg",
    "fieldtype": "Float",
    "label": "Total Weight (kg)",
+   "read_only": 1
+  },
+  {
+   "description": "Google's encoded-polyline string for the real road path, as of the last optimize/resequence call -- opaque here, decoded only by the frontend map. Null until the route has been optimized at least once.",
+   "fieldname": "route_polyline",
+   "fieldtype": "Long Text",
+   "label": "Route Polyline",
    "read_only": 1
   },
   {

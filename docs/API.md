@@ -2718,7 +2718,7 @@ Capacity-aware planning layer in front of supplier-ready PO lines — groups the
 
 ## Route Plan
 
-BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→Bengaluru corridor, distinct from Pickup Run above (which stays as-is for a simple single-supplier booking). Links to the real `Transporter`/`Transporter Vehicle` fleet (tonnage + mode), not Pickup Run's box-capacity `Vehicle Type`. Stop sequencing/leg distance/time come from `dms_erp.purchase.routing_client` (Google Maps Routes API) — see the root `README.md` for the `dms_erp_google_maps_api_key` site_config requirement, and `DMS Purchase Settings.route_origin_latitude/longitude` for the fixed depot origin every leg is measured from. Not yet built: live GPS tracking / per-stop arrival-dwell-departure capture (BRD C.5.1), any `approvals` gating, and container-vs-truck auto-selection (staff picks at creation time).
+BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→Bengaluru corridor, distinct from Pickup Run above (which stays as-is for a simple single-supplier booking). Links to the real `Transporter`/`Transporter Vehicle` fleet (tonnage + mode), not Pickup Run's box-capacity `Vehicle Type`. Stop sequencing/leg distance/time come from `dms_erp.purchase.routing_client` (Google Maps Routes API) — see the root `README.md` for the `dms_erp_google_maps_api_key` site_config requirement, and `DMS Purchase Settings.route_origin_latitude/longitude` for the fixed depot origin every leg is measured from. `routePolyline` is Google's encoded-polyline string for the real road path (opaque here — decoding it is the frontend's job, so the map can draw the actual route instead of a straight line between stops); null until `optimize_route`/`resequence_route_stops` has run at least once. Not yet built: live GPS tracking / per-stop arrival-dwell-departure capture (BRD C.5.1), any `approvals` gating, and container-vs-truck auto-selection (staff picks at creation time).
 
 #### GET `dms_erp.purchase.route_plan_api.list_route_plans`
 
@@ -2741,6 +2741,7 @@ BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→
     "id": "RTP-2026-0003", "transporter": "Orient Transport Co", "transporterVehicle": "row-7",
     "vehicleKind": "Truck", "scheduledDate": null, "status": "Draft",
     "totalDistanceKm": 0, "totalDurationMinutes": 0, "totalWeightKg": 600,
+    "routePolyline": null,
     "stops": [
       { "id": "row-a1", "sequenceNo": 1, "supplier": "Orient Ceramics", "latitude": 22.8181, "longitude": 70.8328, "legDistanceKm": null, "legDurationMinutes": null },
       { "id": "row-a2", "sequenceNo": 2, "supplier": "Moonstone Tiles", "latitude": 22.4707, "longitude": 70.0577, "legDistanceKm": null, "legDurationMinutes": null }
@@ -2809,7 +2810,7 @@ BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→
 
 #### POST `dms_erp.purchase.route_plan_api.optimize_route`
 
-**Let Google choose the stop order** for a Draft plan's current stops (Routes API `optimizeWaypointOrder`), overwriting every stop's `sequenceNo`/`legDistanceKm`/`legDurationMinutes` and the plan's `totalDistanceKm`/`totalDurationMinutes`. Raises on any Maps-API failure (missing key, network error, no route found) rather than returning a degraded result — this is a synchronous staff action with no safe default to fall back to.
+**Let Google choose the stop order** for a Draft plan's current stops (Routes API `optimizeWaypointOrder`), overwriting every stop's `sequenceNo`/`legDistanceKm`/`legDurationMinutes`, the plan's `totalDistanceKm`/`totalDurationMinutes`, and `routePolyline` (the real road path, replacing whatever was there before). Raises on any Maps-API failure (missing key, network error, no route found) rather than returning a degraded result — this is a synchronous staff action with no safe default to fall back to.
 
 **Params**
 
@@ -2822,7 +2823,7 @@ BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→
 
 #### POST `dms_erp.purchase.route_plan_api.resequence_route_stops`
 
-**Manually reorder stops** after `optimize_route` — recomputes legs for the now-fixed order (the Directions API, not re-optimized) so totals never go stale after a hand edit.
+**Manually reorder stops** after `optimize_route` — recomputes legs and `routePolyline` for the now-fixed order (the Directions API, not re-optimized) so totals and the drawn route never go stale after a hand edit.
 
 **Params**
 

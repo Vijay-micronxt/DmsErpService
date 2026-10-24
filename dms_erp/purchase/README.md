@@ -106,6 +106,13 @@ instead of a `0` stub, now that Warehouse exists.
   pin), not a credential, unlike the Google Maps API key itself
   (`dms_erp_google_maps_api_key`, see the root `README.md`).
 
+  Both calls also store `route_polyline` — Google's encoded-polyline string
+  for the real road path, not just the straight line between stop points.
+  `dms_erp` treats it as opaque (never decodes it; that's the frontend map's
+  job) and it's `null` until the route has been optimized at least once.
+  Re-running optimize/resequence always overwrites it with the freshly
+  measured geometry, same as the distance/duration totals.
+
   `po_api.remaining_ready_qty_for_line` nets a PO line's remaining
   ready-for-pickup qty against Draft reservations from **both** booking
   models now (`exclude_pickup_run`/`exclude_route_plan`), so a line can't be

@@ -23,7 +23,13 @@ README.md's "Required site_config.json keys"):
 for a caller-supplied fixed order (the Directions API) -- used by
 resequence_route_stops after a staff member manually re-orders stops, where
 the order is no longer Google's to decide.
-"""
+
+Both also return the route's `polyline` -- Google's encoded-polyline string
+for the real road path (not just the stop points), per BRD C.5's "GPS
+coordinates ... plan pickups" -- so the frontend can draw the actual route
+instead of a straight line between stops. Only ever stored as the opaque
+encoded string; decoding it is the frontend's job (dms_erp has no reason to
+decode geometry it never otherwise touches)."""
 
 import frappe
 import requests
@@ -88,10 +94,11 @@ def _call_routes_api(payload: dict, field_mask: str) -> dict:
 def optimize_waypoints(origin: tuple[float, float], stops: list[tuple[float, float]]) -> dict:
 	"""Lets Google choose the visiting order for `stops` (Routes API
 	`optimizeWaypointOrder: true`), starting and ending at `origin` (the depot).
-	Returns {"order": [int, ...], "legs": [{"distance_km": float, "duration_minutes": int}, ...]}
-	-- `order` is the 0-based permutation of the input `stops` list Google
-	chose, and `legs` has one entry per stop in that chosen order (the leg
-	arriving at it)."""
+	Returns {"order": [int, ...], "legs": [{"distance_km": float, "duration_minutes": int}, ...],
+	"polyline": str | None} -- `order` is the 0-based permutation of the input
+	`stops` list Google chose, `legs` has one entry per stop in that chosen
+	order (the leg arriving at it), and `polyline` is the whole route's
+	encoded-polyline string (None if Google's response didn't include one)."""
 	if not stops:
 		frappe.throw("optimize_waypoints needs at least one stop.", exc=RouteOptimizationFailed)
 
@@ -104,7 +111,8 @@ def optimize_waypoints(origin: tuple[float, float], stops: list[tuple[float, flo
 	}
 	data = _call_routes_api(
 		payload,
-		field_mask="routes.optimizedIntermediateWaypointIndex,routes.legs.distanceMeters,routes.legs.duration",
+		field_mask="routes.optimizedIntermediateWaypointIndex,routes.legs.distanceMeters,"
+		"routes.legs.duration,routes.polyline.encodedPolyline",
 	)
 	route = data["routes"][0]
 	order = route.get("optimizedIntermediateWaypointIndex") or list(range(len(stops)))
@@ -112,17 +120,18 @@ def optimize_waypoints(origin: tuple[float, float], stops: list[tuple[float, flo
 	# The API returns one leg per hop including the final return-to-origin leg;
 	# only the legs arriving at each stop (not the trip back) matter here.
 	leg_summaries = [_summarize_leg(leg) for leg in legs[: len(stops)]]
-	return {"order": order, "legs": leg_summaries}
+	return {"order": order, "legs": leg_summaries, "polyline": _route_polyline(route)}
 
 
-def compute_fixed_order_legs(origin: tuple[float, float], ordered_stops: list[tuple[float, float]]) -> list[dict]:
+def compute_fixed_order_legs(origin: tuple[float, float], ordered_stops: list[tuple[float, float]]) -> dict:
 	"""Computes leg distance/duration for a caller-fixed stop order (the
 	Directions API, via Routes API's computeRoutes without optimizeWaypointOrder)
 	-- used after a staff member manually reorders stops, where Google is no
-	longer choosing the sequence, only measuring it. Returns one
-	{"distance_km", "duration_minutes"} per stop, in the given order."""
+	longer choosing the sequence, only measuring it. Returns
+	{"legs": [{"distance_km", "duration_minutes"}, ...], "polyline": str | None},
+	one leg per stop in the given order."""
 	if not ordered_stops:
-		return []
+		return {"legs": [], "polyline": None}
 
 	payload = {
 		"origin": _waypoint(origin),
@@ -131,9 +140,16 @@ def compute_fixed_order_legs(origin: tuple[float, float], ordered_stops: list[tu
 		"travelMode": "DRIVE",
 		"optimizeWaypointOrder": False,
 	}
-	data = _call_routes_api(payload, field_mask="routes.legs.distanceMeters,routes.legs.duration")
-	legs = data["routes"][0].get("legs") or []
-	return [_summarize_leg(leg) for leg in legs[: len(ordered_stops)]]
+	data = _call_routes_api(
+		payload, field_mask="routes.legs.distanceMeters,routes.legs.duration,routes.polyline.encodedPolyline"
+	)
+	route = data["routes"][0]
+	legs = route.get("legs") or []
+	return {"legs": [_summarize_leg(leg) for leg in legs[: len(ordered_stops)]], "polyline": _route_polyline(route)}
+
+
+def _route_polyline(route: dict) -> str | None:
+	return (route.get("polyline") or {}).get("encodedPolyline")
 
 
 def _summarize_leg(leg: dict) -> dict:

@@ -199,6 +199,9 @@ def _serialize(doc) -> dict:
 		"totalDistanceKm": doc.total_distance_km,
 		"totalDurationMinutes": doc.total_duration_minutes,
 		"totalWeightKg": doc.total_weight_kg,
+		# Google's encoded-polyline string for the real road path -- opaque here, the frontend
+		# map decodes it. Null until optimize_route/resequence_route_stops has run at least once.
+		"routePolyline": doc.route_polyline,
 		"stops": [_serialize_stop(row) for row in sorted(doc.stops, key=lambda r: r.sequence_no)],
 		"lines": [_serialize_line(row) for row in doc.lines],
 	}
@@ -343,6 +346,7 @@ def _optimize_route(route_plan: str) -> dict:
 	doc.set("stops", new_stops)
 	doc.total_distance_km = sum(s["leg_distance_km"] for s in new_stops)
 	doc.total_duration_minutes = sum(s["leg_duration_minutes"] for s in new_stops)
+	doc.route_polyline = result.get("polyline")
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
 
@@ -370,10 +374,10 @@ def _resequence_route_stops(route_plan: str, stop_order: list[str]) -> dict:
 
 	origin = _route_origin()
 	ordered_rows = [rows_by_name[name] for name in stop_order]
-	legs = routing_client.compute_fixed_order_legs(origin, [(r.latitude, r.longitude) for r in ordered_rows])
+	result = routing_client.compute_fixed_order_legs(origin, [(r.latitude, r.longitude) for r in ordered_rows])
 
 	new_stops = []
-	for position, (row, leg) in enumerate(zip(ordered_rows, legs)):
+	for position, (row, leg) in enumerate(zip(ordered_rows, result["legs"])):
 		new_stops.append(
 			{
 				"sequence_no": position + 1,
@@ -388,6 +392,7 @@ def _resequence_route_stops(route_plan: str, stop_order: list[str]) -> dict:
 	doc.set("stops", new_stops)
 	doc.total_distance_km = sum(s["leg_distance_km"] for s in new_stops)
 	doc.total_duration_minutes = sum(s["leg_duration_minutes"] for s in new_stops)
+	doc.route_polyline = result.get("polyline")
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
 
