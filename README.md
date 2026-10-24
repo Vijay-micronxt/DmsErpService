@@ -130,6 +130,21 @@ recorded, but nothing goes out over WhatsApp — this is logged, not raised, so
 a WhatsApp outage or a not-yet-configured site never changes the endpoint's
 response shape.
 
+BRD C.5's route planning (`dms_erp/purchase/routing_client.py`) calls the
+Google Maps Routes API to sequence and measure a multi-stop pickup run:
+
+```bash
+bench --site <site-name> set-config dms_erp_google_maps_api_key "<Google Maps Platform API key, Routes API enabled>"
+```
+
+Unlike `send_otp_template`'s silent-degrade pattern above, a missing or
+failing Maps key is a **hard error** on `route_plan_api.optimize_route`/
+`resequence_route_stops` (`routing_client.RouteOptimizationFailed`) rather
+than degrading silently — these are synchronous staff actions with no safe
+default route to fall back to. The route's fixed start/end point (the
+Morbi/Bengaluru warehouse's own GPS pin) is business data, not a credential,
+and lives on `DMS Purchase Settings` instead of here.
+
 ## Roles
 
 Four Frappe Roles are created automatically on install/migrate, all with

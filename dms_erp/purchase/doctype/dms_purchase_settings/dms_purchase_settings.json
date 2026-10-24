@@ -6,7 +6,11 @@
  "field_order": [
   "target_stock_months",
   "default_moq",
-  "default_production_moq"
+  "default_production_moq",
+  "section_break_route_origin",
+  "route_origin_latitude",
+  "column_break_route_origin",
+  "route_origin_longitude"
  ],
  "fields": [
   {
@@ -29,6 +33,28 @@
    "fieldname": "default_production_moq",
    "fieldtype": "Int",
    "label": "Default Production MOQ (Boxes)"
+  },
+  {
+   "fieldname": "section_break_route_origin",
+   "fieldtype": "Section Break",
+   "label": "Route Planning (BRD C.5)"
+  },
+  {
+   "description": "The Morbi/Bengaluru warehouse's own GPS pin -- the fixed start/end point every Route Plan's leg-distance computation measures from. Business data (client-adjustable if the depot moves), not a credential -- deliberately not a site_config.json key, same reasoning as every other field on this Single.",
+   "fieldname": "route_origin_latitude",
+   "fieldtype": "Float",
+   "label": "Route Origin Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "column_break_route_origin",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "route_origin_longitude",
+   "fieldtype": "Float",
+   "label": "Route Origin Longitude",
+   "precision": "6"
   }
  ],
  "index_web_pages_for_search": 0,
