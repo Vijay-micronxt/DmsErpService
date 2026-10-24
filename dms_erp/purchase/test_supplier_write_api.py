@@ -68,3 +68,44 @@ class TestSupplierWriteApi(FrappeTestCase):
 			supplier_api.create_supplier("SW Denied Co")
 		with self.assertRaises(frappe.PermissionError):
 			supplier_api.update_supplier("SW Update Co", {"disabled": True})
+
+	def test_supplier_phone_email_and_gstin_set_and_clear(self):
+		# Client finding 7.3 -- editable from the staff app, blank clears.
+		created = supplier_api.create_supplier(
+			"SW Contact Co", phone="9876500011", email="contact@swco.example", gstin="27aapfu0939f1zv"
+		)
+		self.assertEqual(created["phone"], "9876500011")
+		self.assertEqual(created["email"], "contact@swco.example")
+		if frappe.get_meta("Supplier").has_field("gstin"):
+			self.assertEqual(created["gstin"], "27AAPFU0939F1ZV")
+
+		cleared = supplier_api.update_supplier(created["id"], {"phone": "", "email": "", "gstin": ""})
+		self.assertFalse(cleared["phone"])
+		self.assertFalse(cleared["email"])
+		self.assertFalse(cleared["gstin"])
+
+	def test_supplier_bank_account_is_stored_as_an_erpnext_bank_account(self):
+		# Client finding 7.3 -- the supplier's bank details live in ERPNext's own Bank
+		# Account (party_type Supplier), so Payment Entries pick up the same record.
+		created = supplier_api.create_supplier(
+			"SW Bank Co", bank={"bankName": "SW Test Bank", "accountNumber": "001122334455", "ifsc": "hdfc0001234"}
+		)
+		self.assertEqual(
+			created["bank"],
+			{"bankName": "SW Test Bank", "accountNumber": "001122334455", "ifsc": "HDFC0001234", "accountName": "SW Bank Co"},
+		)
+		self.assertTrue(frappe.db.exists("Bank Account", {"party_type": "Supplier", "party": created["id"], "is_default": 1}))
+
+		updated = supplier_api.update_supplier(created["id"], {"bank": {"bankName": "SW Test Bank", "accountNumber": "999", "ifsc": ""}})
+		self.assertEqual(updated["bank"]["accountNumber"], "999")
+		self.assertFalse(updated["bank"]["ifsc"])
+		self.assertEqual(frappe.db.count("Bank Account", {"party_type": "Supplier", "party": created["id"]}), 1)
+
+		with self.assertRaises(frappe.ValidationError):
+			supplier_api.update_supplier(created["id"], {"bank": {"bankName": "SW Test Bank", "accountNumber": "1", "ifsc": "BAD"}})
+		with self.assertRaises(frappe.ValidationError):
+			supplier_api.update_supplier(created["id"], {"bank": {"bankName": "", "accountNumber": "1"}})
+
+		removed = supplier_api.update_supplier(created["id"], {"bank": None})
+		self.assertIsNone(removed["bank"])
+		self.assertFalse(frappe.db.exists("Bank Account", {"party_type": "Supplier", "party": created["id"]}))

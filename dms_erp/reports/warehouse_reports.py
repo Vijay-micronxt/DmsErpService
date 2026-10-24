@@ -13,12 +13,17 @@ import frappe
 from frappe.utils import getdate, today
 
 from dms_erp.catalog.utils import is_sellable
-from dms_erp.purchase.reorder_api import SAFETY_STOCK_BOXES, SALES_VELOCITY_WINDOW_DAYS, sales_velocity_by_item
+from dms_erp.purchase.reorder_api import SALES_VELOCITY_WINDOW_DAYS, sales_velocity_by_item
 from dms_erp.warehouse.bay_api import list_all_bays
 from dms_erp.warehouse.utils import list_stock_lots, total_stock_for_item
 
 DISPLAY_BAY_TYPE = "display"
-CLEARANCE_STOCK_MULTIPLE = 2  # currentStock beyond this many safety-stock floors is "well above"
+# The reorder engine's old flat 100-box safety floor, kept here as this report's own
+# threshold: reorder_api dropped it for a per-item target (months of sales), and the
+# import of the removed constant had stopped this whole module -- every warehouse report
+# -- from loading at all.
+CLEARANCE_STOCK_FLOOR_BOXES = 100
+CLEARANCE_STOCK_MULTIPLE = 2  # currentStock beyond this many stock floors is "well above"
 CLEARANCE_MIN_AGE_DAYS = 90
 
 
@@ -85,11 +90,11 @@ def stock_clearance_suggestions():
 			continue
 
 		stock = total_stock_for_item(item_code)
-		if stock <= SAFETY_STOCK_BOXES * CLEARANCE_STOCK_MULTIPLE:
+		if stock <= CLEARANCE_STOCK_FLOOR_BOXES * CLEARANCE_STOCK_MULTIPLE:
 			continue
 
 		recent_sales = velocity.get(item_code, 0)
-		if recent_sales >= SAFETY_STOCK_BOXES:
+		if recent_sales >= CLEARANCE_STOCK_FLOOR_BOXES:
 			continue
 
 		item_doc = frappe.get_cached_doc("Item", item_code)
@@ -101,7 +106,7 @@ def stock_clearance_suggestions():
 				"recentSalesQty": recent_sales,
 				"oldestBatchAgeDays": age_days,
 				"reason": (
-					f"{stock} boxes on hand vs. a {SAFETY_STOCK_BOXES}-box safety floor, only {recent_sales} sold in "
+					f"{stock} boxes on hand vs. a {CLEARANCE_STOCK_FLOOR_BOXES}-box safety floor, only {recent_sales} sold in "
 					f"the last {SALES_VELOCITY_WINDOW_DAYS} days, oldest batch {age_days} days old"
 				),
 			}
@@ -175,3 +180,55 @@ def display_replacement_suggestions():
 			}
 		)
 	return out
+
+
+@frappe.whitelist(methods=["GET"])
+def batch_wise_stock_report(category: str | None = None, search: str | None = None):
+	"""The BRD's "Batch-wise & top-3 batch stock" and "Fragmented quantity" reports in
+	one (Phase 1 task 4.13's "Batch-wise Stock"): per item, total on hand, how many
+	batches and locations it's split across, and its three largest batches. An item
+	in more than one location is "fragmented" -- the BRD wants that surfaced so it can
+	be consolidated. Built on list_stock_lots, the same per-batch ledger aggregate the
+	Stock screen and the dealer portal's batch lists use, so the numbers agree."""
+	by_item: dict[str, dict] = {}
+	for lot in list_stock_lots():
+		if category and lot["category"] != category:
+			continue
+		if search and search.lower() not in f"{lot['itemCode']} {lot['itemName']}".lower():
+			continue
+		row = by_item.setdefault(
+			lot["itemCode"],
+			{
+				"id": lot["itemCode"],
+				"itemCode": lot["itemCode"],
+				"itemName": lot["itemName"],
+				"category": lot["category"],
+				"piecesPerBox": lot["piecesPerBox"],
+				"totalBoxes": 0.0,
+				"_batches": {},
+				"_locations": set(),
+			},
+		)
+		row["totalBoxes"] += lot["boxes"]
+		row["_batches"][lot["batchNumber"]] = row["_batches"].get(lot["batchNumber"], 0.0) + lot["boxes"]
+		row["_locations"].add(lot["bayId"])
+
+	rows = []
+	for row in by_item.values():
+		batches = sorted(row.pop("_batches").items(), key=lambda kv: kv[1], reverse=True)
+		locations = row.pop("_locations")
+		row["batchCount"] = len(batches)
+		row["locationCount"] = len(locations)
+		row["fragmented"] = len(locations) > 1
+		row["topBatches"] = [{"batchNumber": b, "boxes": q} for b, q in batches[:3]]
+		row["topBatchesShare"] = round(sum(q for _, q in batches[:3]) / row["totalBoxes"] * 100) if row["totalBoxes"] else 0
+		rows.append(row)
+	rows.sort(key=lambda r: r["totalBoxes"], reverse=True)
+	return {
+		"rows": rows,
+		"summary": {
+			"items": len(rows),
+			"batches": sum(r["batchCount"] for r in rows),
+			"fragmentedItems": sum(1 for r in rows if r["fragmented"]),
+		},
+	}

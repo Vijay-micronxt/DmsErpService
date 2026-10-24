@@ -15,7 +15,7 @@ list_orders is paginated (`limit`/`offset`) and returns `{"items", "total",
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime, today
+from frappe.utils import add_days, flt, now_datetime, today
 
 from dms_erp.catalog.utils import (
 	item_pieces_per_box,
@@ -155,12 +155,62 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 	now = now_datetime()
 	created_note = f"Converted from {source_ref}" if source_ref else "Created directly, no source Inquiry/Quotation"
 	so.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": created_note})
-	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user})
+	duplicates = _possible_duplicate_orders(so)
+	# The flag rides on the Confirmed entry's note rather than an extra history row, so
+	# the stage history stays one row per stage.
+	confirmed_note = (
+		_("Possible duplicate of {0}: same dealer, items and quantities").format(", ".join(duplicates))
+		if duplicates
+		else None
+	)
+	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user, "note": confirmed_note})
 
 	so.insert(ignore_permissions=True)
 	clear_unrequested_default_tax(so)
 	so.submit()
-	return _serialize(so)
+	out = _serialize(so)
+	out["possibleDuplicates"] = duplicates
+	return out
+
+
+# Same window the duplicate-inquiry check uses (sales.utils.DUPLICATE_INQUIRY_WINDOW_DAYS).
+DUPLICATE_ORDER_WINDOW_DAYS = 7
+
+
+def _possible_duplicate_orders(so) -> list[str]:
+	"""BRD C.2.4: "flags duplicate customer POs (same dealer, same quantity and material,
+	different PO number) so the same order is not reserved or procured twice." Another
+	live (submitted, not cancelled) order from the same dealer in the last
+	DUPLICATE_ORDER_WINDOW_DAYS with exactly the same items and quantities, whatever its
+	PO number (a different number is the BRD's case; the same one reused is just as
+	suspect). A flag only -- noted on the order and returned to the
+	caller, never a block: a dealer genuinely re-ordering the same thing is normal."""
+	def signature(rows) -> tuple:
+		qty: dict[str, float] = {}
+		for r in rows:
+			qty[r.item_code] = qty.get(r.item_code, 0) + flt(r.qty)
+		return tuple(sorted(qty.items()))
+
+	mine = signature(so.items)
+	if not mine:
+		return []
+	since = add_days(today(), -DUPLICATE_ORDER_WINDOW_DAYS)
+	candidates = frappe.get_all(
+		"Sales Order",
+		filters={
+			"customer": so.customer,
+			"docstatus": 1,
+			"transaction_date": [">=", since],
+			"custom_fulfillment_stage": ["!=", "Cancelled"],
+		},
+		pluck="name",
+	)
+	out = []
+	for name in candidates:
+		rows = frappe.get_all("Sales Order Item", filters={"parent": name}, fields=["item_code", "qty"])
+		if signature([frappe._dict(r) for r in rows]) == mine:
+			out.append(name)
+	return out
 
 
 @frappe.whitelist(methods=["GET"])

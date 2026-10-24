@@ -196,3 +196,96 @@ def duplicate_inquiry_report(window_days: int = DUPLICATE_INQUIRY_WINDOW_DAYS):
 
 	out.sort(key=lambda r: r["count"], reverse=True)
 	return out
+
+
+@frappe.whitelist(methods=["GET"])
+def open_inquiries_report(dealer: str | None = None):
+	"""The BRD's "Open / pending inquiry" report (and Phase 1 task 4.13's "Open
+	Inquiries"): every inquiry not yet Converted / Mapped to PO / Rejected / Closed,
+	oldest first, with its age and whether its follow-up date has already passed --
+	the list a salesperson works through. dealer_inquiry_report could only filter one
+	status at a time, so "everything still open" wasn't reachable from it."""
+	today_ = getdate()
+	rows = []
+	for r in inquiry_api.list_all_inquiries(dealer=dealer):
+		if r["status"] in CLOSED_INQUIRY_STATUSES:
+			continue
+		age = (today_ - getdate(r["date"])).days if r.get("date") else None
+		follow_up = r.get("followUpDate")
+		rows.append(
+			{
+				**r,
+				"ageDays": age,
+				"followUpOverdue": bool(follow_up) and getdate(follow_up) < today_,
+			}
+		)
+	rows.sort(key=lambda r: (r["ageDays"] is None, -(r["ageDays"] or 0)))
+	by_status: dict[str, int] = {}
+	for r in rows:
+		by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+	return {
+		"rows": rows,
+		"summary": {
+			"total": len(rows),
+			"followUpOverdue": sum(1 for r in rows if r["followUpOverdue"]),
+			"olderThan7Days": sum(1 for r in rows if (r["ageDays"] or 0) > 7),
+			"byStatus": by_status,
+		},
+	}
+
+
+# Orders still before "Ready to Dispatch" -- the stage order_api.advance_order_stage
+# refuses until the advance is confirmed (BRD C.3.4's dispatch lock).
+_PRE_DISPATCH_STAGES = ("Confirmed", "Picking")
+
+
+@frappe.whitelist(methods=["GET"])
+def advance_payment_pending_report(dealer: str | None = None):
+	"""The BRD's "Advance payment / pending-before-loading" report: confirmed orders
+	that can't move to Ready to Dispatch yet because Management hasn't confirmed the
+	advance (the interim manual gate in place of the VALS banking API). Each row also
+	carries the dealer's current outstanding balance from the ledger, which is what
+	the person confirming the advance actually checks."""
+	from dms_erp.finance.ledger import party_balances
+	from dms_erp.warehouse.utils import default_company
+
+	filters = {
+		"docstatus": 1,
+		"custom_advance_confirmed": 0,
+		"custom_fulfillment_stage": ["in", list(_PRE_DISPATCH_STAGES)],
+	}
+	if dealer:
+		filters["customer"] = dealer
+	orders = frappe.get_all(
+		"Sales Order",
+		filters=filters,
+		fields=["name", "customer", "customer_name", "transaction_date", "delivery_date", "grand_total", "custom_fulfillment_stage", "po_no"],
+		order_by="transaction_date asc",
+	)
+	dealers = sorted({o.customer for o in orders})
+	balances = party_balances("Customer", dealers, default_company()) if dealers else {}
+	today_ = getdate()
+	rows = [
+		{
+			"id": o.name,
+			"orderNumber": o.name,
+			"dealerId": o.customer,
+			"dealerName": o.customer_name,
+			"orderDate": o.transaction_date,
+			"deliveryDate": o.delivery_date,
+			"ageDays": (today_ - getdate(o.transaction_date)).days if o.transaction_date else None,
+			"stage": o.custom_fulfillment_stage,
+			"customerPo": o.po_no,
+			"orderValue": o.grand_total,
+			"dealerOutstanding": balances.get(o.customer, 0.0),
+		}
+		for o in orders
+	]
+	return {
+		"rows": rows,
+		"summary": {
+			"orders": len(rows),
+			"orderValue": sum(r["orderValue"] or 0 for r in rows),
+			"dueForDelivery": sum(1 for r in rows if r["deliveryDate"] and getdate(r["deliveryDate"]) <= today_),
+		},
+	}

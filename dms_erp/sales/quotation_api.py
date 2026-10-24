@@ -39,7 +39,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, today
+from frappe.utils import add_days, flt, getdate, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import (
@@ -195,6 +195,10 @@ def _amend_with_lines(doc, lines: list[dict]) -> dict:
 	doc.cancel()
 
 	amended = frappe.copy_doc(doc)
+	# copy_doc only resets docstatus outside tests (it keeps it when frappe.flags.in_test),
+	# so under tests the copy stayed Cancelled and insert() refused it -- set it explicitly
+	# so both run the same path.
+	amended.docstatus = 0
 	amended.amended_from = original_name
 	amended.items = []
 	for item in items:
@@ -636,6 +640,16 @@ def _convert_to_order(
 		# portal (dealer_portal_api.accept_quotation) -- staff-side conversion never
 		# passes one, exactly as before.
 		so.po_no = customer_po
+	# BRD C.3.1 -- a quotation line's own delivery date carries into its order line.
+	# ERPNext's mapper only copies same-named fields, and Quotation Item keeps it as
+	# custom_delivery_date (Sales Order Item's is delivery_date), so it was silently
+	# dropped and every line got expected_dispatch instead. A date already in the past
+	# (an old quotation) isn't carried -- ERPNext refuses a line due before the order.
+	line_dates = {row.name: row.custom_delivery_date for row in qtn.items if row.custom_delivery_date}
+	for row in so.items:
+		line_date = line_dates.get(row.quotation_item)
+		if line_date and getdate(line_date) >= getdate(so.transaction_date):
+			row.delivery_date = line_date
 	if expected_dispatch:
 		so.delivery_date = expected_dispatch
 		# Only fills the gap for a line that never had its own delivery_date on

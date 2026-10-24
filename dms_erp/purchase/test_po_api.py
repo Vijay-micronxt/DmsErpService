@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
@@ -7,6 +8,10 @@ from dms_erp.purchase import po_api
 from dms_erp.purchase.setup import setup_purchase
 from dms_erp.warehouse.inward_api import add_truck
 from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+
+# Relative to today: a fixed date rotted into the past, and ERPNext then refuses the PO
+# ("Reqd by Date cannot be before Transaction Date").
+READY_BY = str(add_days(today(), 30))
 
 
 class TestPoApi(FrappeTestCase):
@@ -24,7 +29,7 @@ class TestPoApi(FrappeTestCase):
 
 	def test_create_purchase_order_is_submitted_with_one_line(self):
 		po = po_api.create_purchase_order(
-			item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date="2026-09-01", remarks="Launch batch"
+			item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date=READY_BY, remarks="Launch batch"
 		)
 		self.assertEqual(len(po["lines"]), 1)
 		self.assertEqual(po["lines"][0]["orderedQty"], 1000)
@@ -33,14 +38,14 @@ class TestPoApi(FrappeTestCase):
 
 	def test_purchase_order_line_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date=READY_BY)
 		self.assertEqual(po["lines"][0]["weightPerBoxKg"], 28)
 		self.assertEqual(po["lines"][0]["totalWeightKg"], 28000)
 
 	def test_purchase_order_line_carries_the_items_pieces_and_sqft(self):
 		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
 		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date=READY_BY)
 		self.assertEqual(po["lines"][0]["piecesPerBox"], 4)
 		self.assertEqual(po["lines"][0]["totalPieces"], 4000)
 		self.assertEqual(po["lines"][0]["sqftPerBox"], 15.5)
@@ -49,7 +54,7 @@ class TestPoApi(FrappeTestCase):
 		self.assertAlmostEqual(po["lines"][0]["totalSqm"], 1440, places=2)
 
 	def test_set_line_ready_clamps_to_ordered_qty(self):
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=500, supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=500, supplier=self.supplier, expected_ready_date=READY_BY)
 		line_id = po["lines"][0]["id"]
 
 		updated = po_api.set_line_ready(po["id"], line_id, 9999)
@@ -59,7 +64,7 @@ class TestPoApi(FrappeTestCase):
 		self.assertEqual(updated["readyQty"], 0)
 
 	def test_line_progress_reflects_linked_trucks(self):
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1000, supplier=self.supplier, expected_ready_date=READY_BY)
 		line_id = po["lines"][0]["id"]
 
 		progress = po_api.line_progress(line_id)
@@ -79,7 +84,7 @@ class TestPoApi(FrappeTestCase):
 		item = make_item("PO-DEFAULT-SUPPLIER-ITEM", "Vitrified")
 		frappe.db.set_value("Item", item, "custom_default_supplier", self.supplier)
 
-		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date=READY_BY)
 		self.assertEqual(po["supplier"], self.supplier)
 
 	def test_create_purchase_order_falls_back_to_the_series_supplier(self):
@@ -87,7 +92,7 @@ class TestPoApi(FrappeTestCase):
 		series = series_api.create_series(series_name="PO Test Series", supplier=self.supplier)
 		frappe.db.set_value("Item", item, "custom_series_ref", series["id"])
 
-		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date=READY_BY)
 		self.assertEqual(po["supplier"], self.supplier)
 
 	def test_create_purchase_order_explicit_supplier_wins_over_the_default(self):
@@ -95,21 +100,21 @@ class TestPoApi(FrappeTestCase):
 		frappe.db.set_value("Item", item, "custom_default_supplier", self.supplier)
 		other_supplier = make_supplier("PO Other Explicit Supplier")
 
-		po = po_api.create_purchase_order(item=item, ordered_qty=100, supplier=other_supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=item, ordered_qty=100, supplier=other_supplier, expected_ready_date=READY_BY)
 		self.assertEqual(po["supplier"], other_supplier)
 
 	def test_create_purchase_order_requires_a_supplier_when_none_can_be_resolved(self):
 		item = make_item("PO-NO-SUPPLIER-ITEM", "Vitrified")
 		with self.assertRaises(frappe.ValidationError):
-			po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date="2026-09-01")
+			po_api.create_purchase_order(item=item, ordered_qty=100, expected_ready_date=READY_BY)
 
 	def test_write_requires_purchase_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
-			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date=READY_BY)
 
 	def test_source_inquiry_is_optional_and_defaults_to_none(self):
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date=READY_BY)
 		self.assertIsNone(po["sourceInquiry"])
 
 	def test_list_purchase_orders_is_paginated(self):
@@ -117,7 +122,7 @@ class TestPoApi(FrappeTestCase):
 		baseline_total = before["total"]
 
 		for _ in range(3):
-			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date="2026-09-01")
+			po_api.create_purchase_order(item=self.item, ordered_qty=100, supplier=self.supplier, expected_ready_date=READY_BY)
 
 		page = po_api.list_purchase_orders(limit=2, offset=0)
 		self.assertEqual(page["total"], baseline_total + 3)

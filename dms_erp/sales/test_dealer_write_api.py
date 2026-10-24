@@ -159,6 +159,48 @@ class TestDealerWriteApi(FrappeTestCase):
 		self.assertFalse(cleared["gstin"])
 		self.assertFalse(cleared["address"])
 
+	def test_create_customer_group_works_when_the_default_group_is_a_leaf(self):
+		# Real report: Selling Settings' default Customer Group was a leaf, which ERPNext
+		# refuses as a parent, so "+ new group" on the dealer form always failed.
+		original = frappe.db.get_single_value("Selling Settings", "customer_group")
+		frappe.db.set_single_value("Selling Settings", "customer_group", GROUP)  # a leaf group
+		try:
+			created = dealer_api.create_customer_group("DW Leaf Default Child")
+			parent = frappe.db.get_value("Customer Group", created, "parent_customer_group")
+			self.assertTrue(frappe.db.get_value("Customer Group", parent, "is_group"))
+		finally:
+			frappe.db.set_single_value("Selling Settings", "customer_group", original)
+
+	def test_additional_phone_numbers_resolve_to_the_dealer_and_cannot_be_shared(self):
+		# Client requirement 8.9: several people at one dealer, each with their own phone.
+		from dms_erp.phone_utils import dealer_for_phone
+
+		dealer_api.create_dealer("DW Phones A", group=GROUP, phone="9876511111")
+		dealer_api.create_dealer("DW Phones B", group=GROUP, phone="9876522222")
+
+		updated = dealer_api.update_dealer(
+			"DW Phones A",
+			{"additionalPhones": [{"phone": "+91 98765 33333", "name": "Ravi (sales)"}, "98765 44444", "9876511111"]},
+		)
+		# Normalized, the main number isn't repeated, names kept.
+		self.assertEqual(
+			updated["additionalPhones"], [{"phone": "9876533333", "name": "Ravi (sales)"}, {"phone": "9876544444", "name": None}]
+		)
+		self.assertEqual(dealer_for_phone("919876533333"), "DW Phones A")
+		self.assertEqual(dealer_for_phone("9876511111"), "DW Phones A")
+
+		# Another dealer's main or extra number is refused.
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["9876533333"]})
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["9876511111"]})
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["12345"]})
+
+		# Removing them stops them resolving.
+		self.assertEqual(dealer_api.update_dealer("DW Phones A", {"additionalPhones": []})["additionalPhones"], [])
+		self.assertIsNone(dealer_for_phone("9876533333"))
+
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):

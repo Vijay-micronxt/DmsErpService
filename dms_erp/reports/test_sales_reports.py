@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
@@ -8,6 +9,11 @@ from dms_erp.comms import api as comms_api
 from dms_erp.reports import sales_reports
 from dms_erp.sales import dealer_api, inquiry_api, order_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+
+
+# Relative to today: a fixed date rots into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date").
+DISPATCH = str(add_days(today(), 30))
 
 
 class TestSalesReports(FrappeTestCase):
@@ -27,8 +33,8 @@ class TestSalesReports(FrappeTestCase):
 		frappe.set_user("Administrator")
 
 	def test_dealer_inquiry_report_summarizes_by_status(self):
-		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone", expected_delivery="2026-09-01")
-		i2 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=20, source="Phone", expected_delivery="2026-09-01")
+		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone", expected_delivery=DISPATCH)
+		i2 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=20, source="Phone", expected_delivery=DISPATCH)
 		inquiry_api.update_inquiry(i2["id"], {"status": "Closed"})
 
 		result = sales_reports.dealer_inquiry_report(dealer=self.dealer)
@@ -54,6 +60,9 @@ class TestSalesReports(FrappeTestCase):
 
 	def test_missed_demand_report_excludes_open_inquiries(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=15, source="Phone")
+		# The test item has no stock, so a new inquiry is auto-set to Out of Stock (genuine
+		# missed demand). Put it back to Open: that's the status this test is about.
+		inquiry_api.update_inquiry(inquiry["id"], {"status": "Open"})
 
 		result = sales_reports.missed_demand_report()
 		ids = {r["id"] for r in result["rows"]}
@@ -61,11 +70,11 @@ class TestSalesReports(FrappeTestCase):
 
 	def test_retail_vs_bulk_report_groups_by_channel(self):
 		retail_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
-		order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch="2026-09-01", inquiry=retail_inquiry["id"])
+		order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=retail_inquiry["id"])
 
 		bulk_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=800, source="Phone")
 		order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 800}], expected_dispatch="2026-09-01", inquiry=bulk_inquiry["id"], channel="Bulk"
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 800}], expected_dispatch=DISPATCH, inquiry=bulk_inquiry["id"], channel="Bulk"
 		)
 
 		result = sales_reports.retail_vs_bulk_report()
@@ -78,7 +87,7 @@ class TestSalesReports(FrappeTestCase):
 		inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=10, source="Phone")
 		order_inquiry = inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=20, source="Phone")
 		order_api.create_order(
-			dealer=activity_dealer, lines=[{"item": self.item, "qty": 20}], expected_dispatch="2026-09-01", inquiry=order_inquiry["id"]
+			dealer=activity_dealer, lines=[{"item": self.item, "qty": 20}], expected_dispatch=DISPATCH, inquiry=order_inquiry["id"]
 		)
 		comms_api.send_message(dealer=activity_dealer, text="Following up on your order")
 
@@ -96,7 +105,7 @@ class TestSalesReports(FrappeTestCase):
 		dealer_api.set_dealer_salesperson(assigned_dealer, "priya@pacific.example")
 		order_inquiry = inquiry_api.create_inquiry(dealer=assigned_dealer, item=self.item, qty=15, source="Phone")
 		order_api.create_order(
-			dealer=assigned_dealer, lines=[{"item": self.item, "qty": 15}], expected_dispatch="2026-09-01", inquiry=order_inquiry["id"]
+			dealer=assigned_dealer, lines=[{"item": self.item, "qty": 15}], expected_dispatch=DISPATCH, inquiry=order_inquiry["id"]
 		)
 
 		unassigned_dealer = make_dealer("Sales Reports Unassigned Dealer")
@@ -141,3 +150,38 @@ class TestSalesReports(FrappeTestCase):
 		result = sales_reports.duplicate_inquiry_report()
 		self.assertFalse(any(r["dealerId"] == dealer and r["productId"] == item for r in result))
 		self.assertTrue(i1)  # kept alive to document intent: only i2 was closed
+
+	def test_open_inquiries_report_lists_only_still_open_inquiries_with_age_and_overdue_follow_up(self):
+		from frappe.utils import add_days, today
+
+		open_one = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		closed = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=12, source="Phone")
+		inquiry_api.update_inquiry(closed["id"], {"status": "Closed"})
+		inquiry_api.update_inquiry(open_one["id"], {"followUpDate": add_days(today(), -1)})
+
+		result = sales_reports.open_inquiries_report(dealer=self.dealer)
+
+		ids = {r["id"] for r in result["rows"]}
+		self.assertIn(open_one["id"], ids)
+		self.assertNotIn(closed["id"], ids)
+		row = next(r for r in result["rows"] if r["id"] == open_one["id"])
+		self.assertEqual(row["ageDays"], 0)
+		self.assertTrue(row["followUpOverdue"])
+		self.assertGreaterEqual(result["summary"]["followUpOverdue"], 1)
+
+	def test_advance_payment_pending_report_lists_orders_waiting_on_their_advance(self):
+		from frappe.utils import add_days, today
+
+		order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 5}], expected_dispatch=add_days(today(), 7)
+		)
+		order_id = order["id"]
+
+		rows = sales_reports.advance_payment_pending_report(dealer=self.dealer)["rows"]
+		row = next(r for r in rows if r["id"] == order_id)
+		self.assertEqual(row["stage"], "Confirmed")
+		self.assertIn("dealerOutstanding", row)
+
+		order_api.confirm_advance_payment(order_id, True)
+		rows = sales_reports.advance_payment_pending_report(dealer=self.dealer)["rows"]
+		self.assertNotIn(order_id, {r["id"] for r in rows})

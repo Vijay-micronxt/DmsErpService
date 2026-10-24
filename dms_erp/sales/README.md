@@ -28,6 +28,12 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   check, stock-derived status, the Opportunity mirror) is skipped for one of these;
   `dealer_portal_api.convert_to_order` rejects converting one to an order outright,
   since there's no real item to build a Sales Order line from.
+- **Several phone numbers per dealer** (client requirement 8.9) — `Customer.custom_additional_phones` (child
+  table `Dealer Phone`), edited via `update_dealer`'s `additionalPhones`. `phone_utils.dealer_for_phone` checks the
+  main number first, then these, so OTP login and WhatsApp accept any of them. A number already used by another
+  active dealer is refused: one number must resolve to exactly one dealer.
+- **Customer Group create** uses the Selling Settings default group as parent only when it is itself a group
+  (its parent otherwise) — a leaf default made ERPNext refuse every new group.
 - **Dealer portal sign-in prompt** — `my_profile` returns `hasPassword` (same `__Auth`
   check as `_portal_status_for`, but for the session's own user). The portal uses it
   to offer an email + password after every OTP sign-in until one is set (Pacific's ask,

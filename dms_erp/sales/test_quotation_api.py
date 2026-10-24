@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog import dealer_catalog_api
 from dms_erp.catalog.setup import setup_catalog
@@ -7,6 +8,13 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, quotation_api
 from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+
+
+# Relative to today: fixed dates rotted into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date"). LINE_DELIVERY is a line's
+# own date, deliberately later than DISPATCH so the two can't be confused.
+DISPATCH = str(add_days(today(), 30))
+LINE_DELIVERY = str(add_days(today(), 40))
 
 
 class TestQuotationApi(FrappeTestCase):
@@ -136,7 +144,7 @@ class TestQuotationApi(FrappeTestCase):
 		)
 		self.assertEqual(quotation["channel"], "Bulk")
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 		self.assertEqual(order["channel"], "Bulk")
 
 	def test_create_quotation_rejects_invalid_channel(self):
@@ -160,7 +168,11 @@ class TestQuotationApi(FrappeTestCase):
 			frappe.db.set_value("Item", self.priced_item, "custom_bulk_qty_threshold", 0)
 
 	def test_create_quotation_rejects_item_outside_dealer_catalog(self):
+		# A dealer with no Dealer Catalog at all may quote anything (is_visible's
+		# unassigned fallback) -- give this one a catalog that just doesn't include the item.
 		other_dealer = make_dealer("Quotation Test Dealer 2")
+		dealer_catalog_api.set_product_visibility(other_dealer, self.second_item, True)
+		dealer_catalog_api.set_product_visibility(other_dealer, self.priced_item, False)
 		with self.assertRaises(frappe.PermissionError):
 			quotation_api.create_quotation(dealer=other_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 
@@ -266,7 +278,7 @@ class TestQuotationApi(FrappeTestCase):
 		# moments earlier (see sales/setup.py's own docstring for the full story).
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer,
-			lines=[{"item": self.priced_item, "qty": 100, "delivery_date": "2026-09-20"}],
+			lines=[{"item": self.priced_item, "qty": 100, "delivery_date": LINE_DELIVERY}],
 			markup_pct=10,
 		)
 
@@ -274,11 +286,11 @@ class TestQuotationApi(FrappeTestCase):
 
 		line = amended["lines"][0]
 		self.assertEqual(line["qty"], 150)
-		self.assertEqual(line["deliveryDate"], "2026-09-20")
+		self.assertEqual(str(line["deliveryDate"]), LINE_DELIVERY)
 
 	def test_edit_rejects_already_ordered_quotation(self):
 		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
-		quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 5)
@@ -298,10 +310,10 @@ class TestQuotationApi(FrappeTestCase):
 	def test_convert_to_order_creates_sales_order_and_closes_inquiry(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=30, source="Phone")
 		quotation = quotation_api.create_quotation(
-			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 30}], markup_pct=15, inquiry=inquiry["id"]
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 30}], markup_pct=15, inquiries=[inquiry["id"]]
 		)
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		self.assertEqual(order["sourceType"], "Quotation")
 		self.assertEqual(order["sourceRef"], quotation["id"])
@@ -354,15 +366,15 @@ class TestQuotationApi(FrappeTestCase):
 	def test_create_quotation_respects_a_per_line_delivery_date(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer,
-			lines=[{"item": self.priced_item, "qty": 10, "delivery_date": "2026-09-20"}],
+			lines=[{"item": self.priced_item, "qty": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
 		)
-		self.assertEqual(quotation["lines"][0]["deliveryDate"], "2026-09-20")
+		self.assertEqual(str(quotation["lines"][0]["deliveryDate"]), LINE_DELIVERY)
 
 	def test_add_quotation_line_preserves_discount_and_delivery_date_on_untouched_lines(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer,
-			lines=[{"item": self.priced_item, "qty": 100, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			lines=[{"item": self.priced_item, "qty": 100, "discount_percentage": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
 		)
 
@@ -372,32 +384,32 @@ class TestQuotationApi(FrappeTestCase):
 		# The untouched line's own discount/date must survive the reprice, not
 		# silently reset to 0/None just because a different line was added.
 		self.assertEqual(by_item[self.priced_item]["discountPercentage"], 10)
-		self.assertEqual(by_item[self.priced_item]["deliveryDate"], "2026-09-20")
+		self.assertEqual(str(by_item[self.priced_item]["deliveryDate"]), LINE_DELIVERY)
 		self.assertEqual(by_item[self.priced_item]["rate"], 504)  # round(560 * 0.9), rebuilt not stale
 
 	def test_convert_to_order_carries_discount_and_delivery_date_via_native_mapper(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer,
-			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10, "delivery_date": "2026-09-20"}],
+			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
 		)
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		line = order["lines"][0]
 		self.assertEqual(line["discountPercentage"], 10)
 		self.assertEqual(line["rate"], 504)
 		# The quotation line's own date wins over the order-level expected_dispatch.
-		self.assertEqual(line["deliveryDate"], "2026-09-20")
+		self.assertEqual(str(line["deliveryDate"]), LINE_DELIVERY)
 
 	def test_convert_to_order_only_fills_the_gap_for_lines_with_no_own_delivery_date(self):
 		quotation = quotation_api.create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
-		self.assertEqual(order["lines"][0]["deliveryDate"], "2026-09-01")
+		self.assertEqual(order["lines"][0]["deliveryDate"], DISPATCH)
 
 	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
 		company = ensure_company()
@@ -475,7 +487,7 @@ class TestQuotationApi(FrappeTestCase):
 		)
 		self.assertFalse(quotation["taxesAndCharges"])
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 		self.assertFalse(order["taxesAndCharges"])
 		self.assertEqual(order["taxes"], [])
 		self.assertEqual(order["total"], order["netTotal"])
