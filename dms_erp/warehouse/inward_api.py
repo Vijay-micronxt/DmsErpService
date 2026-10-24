@@ -66,6 +66,7 @@ def _serialize(doc) -> dict:
 		"poLineId": doc.purchase_order_item,
 		"allocationSlip": doc.allocation_slip,
 		"pickupRun": doc.pickup_run,
+		"routePlan": doc.route_plan,
 	}
 
 
@@ -118,6 +119,7 @@ def add_truck(
 	purchase_order_item: str | None = None,
 	po_reference: str | None = None,
 	pickup_run: str | None = None,
+	route_plan: str | None = None,
 	batch_no: str | None = None,
 ):
 	"""7.11 -- "batch no ... should be added while purchase of that item," not
@@ -161,6 +163,7 @@ def add_truck(
 			"purchase_order_item": purchase_order_item,
 			"po_reference": po_reference,
 			"pickup_run": pickup_run,
+			"route_plan": route_plan,
 			"batch_no": batch_no,
 		}
 	)

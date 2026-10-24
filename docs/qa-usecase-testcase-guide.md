@@ -417,15 +417,39 @@ suggested quantities) and raises real POs from it.
 | TC-PICK-03 | Advance run status | Move the run Draft → Dispatched → Completed. | Each transition is tracked and visible on the run detail. | C.5 | M3 / Wave 1 |
 | TC-PICK-04 | Create/manage a vehicle type master | Pickup Planner → manage vehicle types (truck/container tonnage tiers per BRD C.1.7's fleet table). | Vehicle types are created/listed correctly and selectable when creating a run. | C.1.7 / C.5 | M3 / Wave 1 |
 
+### Route Plan — multi-stop, multi-supplier (BRD C.5) — backend only
+
+**Where:** `dms_erp.purchase.route_plan_api` — no `pacific-tileflow` screen yet (a
+`/route-plans` UI is a follow-up round on top of this API surface, same two-phase
+pattern every other feature in this app has followed). Distinct from, and does not
+replace, Pickup Run above — Pickup Run stays for the simple single-supplier case.
+
+| ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
+|---|---|---|---|---|---|
+| TC-RTP-01 | Create a multi-stop plan across several suppliers | `create_route_plan` with 2+ `stops` (each a Supplier with GPS already set) and lines from each supplier's ready POs. | Plan created in Draft, one stop per supplier, each line's supplier matched to its stop. | C.5 | M4 |
+| TC-RTP-02 | A line's supplier with no stop on the plan is rejected | `create_route_plan`/`add_route_plan_line` with a `purchase_order_item` whose PO supplier isn't one of the plan's stops. | Rejected with a clear error naming the mismatched item. | C.5 | M4 |
+| TC-RTP-03 | A supplier with no GPS set can't be added as a stop | Add a stop for a Supplier missing `custom_latitude`/`custom_longitude`. | Rejected — GPS is a prerequisite for route optimisation. | C.1.6 / C.5 | M4 |
+| TC-RTP-04 | Optimize route picks a real stop order and totals | `optimize_route` on a Draft plan with a configured Google Maps API key and a configured route origin (`DMS Purchase Settings`). | Stops reordered per Google's optimized sequence; `totalDistanceKm`/`totalDurationMinutes` reflect the sum of real legs — both time- and distance-relevant figures are now real, not placeholders. | C.5 | M4 |
+| TC-RTP-05 | Manually resequence stops after optimizing | `resequence_route_stops` with a staff-chosen stop order different from what `optimize_route` returned. | Stops reflect the staff-chosen order; legs/totals recomputed for that fixed order (not left stale from the prior optimization). | C.5 | M4 |
+| TC-RTP-06 | Dispatch nets ready qty against both Pickup Run and Route Plan | Reserve part of a PO line's ready qty via a Draft Pickup Run, then try to book more than what's left via a Route Plan (and vice versa). | The second booking is rejected for the over-committed amount — the two booking models can't double-book the same stock. | C.5 | M4 |
+| TC-RTP-07 | Dispatch creates one Inward Truck per line | `advance_route_plan_status(..., "Dispatched")` on a Draft plan with lines across multiple suppliers. | One `Inward Truck` created per line, each tagged with this Route Plan's id; downstream gate/unloading/put-away flow is untouched. | C.5 | M4 |
+| TC-RTP-08 | Overloaded plan dispatches with a warning, not a block | Dispatch a plan whose total weight exceeds the chosen Transporter Vehicle's `capacity_tonnes`. | Dispatch still succeeds; response includes an `overloadWarning` for the planner to review before the truck leaves. | C.1.7 / C.5 | M4 |
+| TC-RTP-09 | A missing/failing Maps API key is a hard error on optimize | `optimize_route`/`resequence_route_stops` with `dms_erp_google_maps_api_key` unset or the Maps API unreachable. | Raises `routing_client.RouteOptimizationFailed` — unlike WhatsApp OTP delivery, this never degrades silently, since there's no safe default route. | C.5 | M4 |
+
 ### Known gaps — not yet built
 
-Everything BRD asks for **beyond a single-supplier run**: a multi-supplier route across
-several stops in one truck run, container-vs-truck auto-selection, Leaflet map/GPS pins,
-drag-drop stop resequencing, "Auto-Generate Route" by proximity, live vehicle tracking
-(C.5.1), a driver master, and "Share with Driver"/printable route sheet. Per BRD F.2, this
-advanced routing/tracking layer is explicitly **Wave 2** ("assisted route planning and
-truck-capacity planning") — Milestone 4. Do not test these — they don't exist yet, and
-they're not expected yet either.
+Container-vs-truck **auto**-selection (staff picks the vehicle at creation time — BRD's
+"prefer container for planned orders" guidance has no crisp formula codified yet), any
+`pacific-tileflow` UI at all for Route Plan (map/GPS pins, drag-drop resequencing, an
+"Auto-Generate Route" action, a printable/driver-shareable route sheet — the backend
+above has no frontend yet), live vehicle tracking and per-stop arrival/dwell/departure
+capture (BRD C.5.1 — there's no planning layer to track *against* until a Route Plan is
+actually dispatched against it, which this round enables but doesn't itself track), and a
+driver master (driver stays free-text on Transporter Vehicle, same as before). Per BRD
+F.2, the advanced routing/tracking UI layer is explicitly **Wave 2** ("assisted route
+planning and truck-capacity planning") — Milestone 4; the backend above closes the
+multi-stop/multi-supplier/real-distance gap that note used to describe, the UI and C.5.1
+tracking don't exist yet and aren't expected yet either.
 
 ---
 
@@ -768,9 +792,11 @@ For quick reference — do not file these as bugs, and don't spend QA time hunti
   exists).
 - **C.4.2/C.4.4** Full MOQ-hierarchy enforcement; purchase-receipt shortage/claim capture
   and supplier invoice reference at receipt time.
-- **C.5/C.5.1** Multi-supplier route planning, map/GPS, drag-drop stops, live vehicle
-  tracking, driver master, "Share with driver." Milestone 4, Wave 2 — scheduled later, not
-  simply missing.
+- **C.5/C.5.1** Multi-stop/multi-supplier route planning with real Google Maps
+  distance/time is now built (backend-only, `route_plan_api.py` — see §7). Still
+  missing: any `pacific-tileflow` UI for it (map/GPS pins, drag-drop stops), live
+  vehicle tracking, a driver master, "Share with driver." Milestone 4, Wave 2 —
+  scheduled later, not simply missing.
 - **C.11** Four of six override triggers are built (§13): credit-limit exceedance,
   discount-over-price-list, amend/cancel, and channel override. Still missing: overdue
   outstanding (needs an AR/invoicing subsystem this app doesn't have at all — not a gap to

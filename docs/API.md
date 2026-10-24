@@ -58,6 +58,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Picking](#picking)
 - [Purchase Orders](#purchase-orders)
 - [Pickup Run](#pickup-run)
+- [Route Plan](#route-plan)
 - [Purchase Requirements / Reorder Planning](#purchase-requirements-reorder-planning)
 - [Damage & Insurance Claims](#damage-insurance-claims)
 - [Unloading Payment](#unloading-payment)
@@ -2711,6 +2712,140 @@ Capacity-aware planning layer in front of supplier-ready PO lines — groups the
   "total": 6, "limit": 20, "offset": 0
 }
 ```
+
+
+---
+
+## Route Plan
+
+BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→Bengaluru corridor, distinct from Pickup Run above (which stays as-is for a simple single-supplier booking). Links to the real `Transporter`/`Transporter Vehicle` fleet (tonnage + mode), not Pickup Run's box-capacity `Vehicle Type`. Stop sequencing/leg distance/time come from `dms_erp.purchase.routing_client` (Google Maps Routes API) — see the root `README.md` for the `dms_erp_google_maps_api_key` site_config requirement, and `DMS Purchase Settings.route_origin_latitude/longitude` for the fixed depot origin every leg is measured from. Not yet built: live GPS tracking / per-stop arrival-dwell-departure capture (BRD C.5.1), any `approvals` gating, and container-vs-truck auto-selection (staff picks at creation time).
+
+#### GET `dms_erp.purchase.route_plan_api.list_route_plans`
+
+**List route plans** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | optional | Draft \| Dispatched \| Completed \| Cancelled |
+| `search` | string | optional | substring match on the Route Plan's own name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "RTP-2026-0003", "transporter": "Orient Transport Co", "transporterVehicle": "row-7",
+    "vehicleKind": "Truck", "scheduledDate": null, "status": "Draft",
+    "totalDistanceKm": 0, "totalDurationMinutes": 0, "totalWeightKg": 600,
+    "stops": [
+      { "id": "row-a1", "sequenceNo": 1, "supplier": "Orient Ceramics", "latitude": 22.8181, "longitude": 70.8328, "legDistanceKm": null, "legDurationMinutes": null },
+      { "id": "row-a2", "sequenceNo": 2, "supplier": "Moonstone Tiles", "latitude": 22.4707, "longitude": 70.0577, "legDistanceKm": null, "legDurationMinutes": null }
+    ],
+    "lines": [
+      { "supplier": "Orient Ceramics", "purchaseOrder": "PUR-ORD-2026-00014", "purchaseOrderItem": "row-9", "item": "PVT-6060", "qty": 10, "weightPerBoxKg": 20, "totalWeightKg": 200 }
+    ]
+  }],
+  "total": 3, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.purchase.route_plan_api.get_route_plan`
+
+**Get single route plan** — same response shape as one row of `list_route_plans`.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+
+
+#### POST `dms_erp.purchase.route_plan_api.create_route_plan`
+
+**Create a route plan** — Purchase/Warehouse/Management only. Needs at least one stop and one line; each line's Purchase Order Item must belong to a supplier that has a stop on this plan — rejected otherwise.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `transporter` | string | required | a `Transporter` id |
+| `transporter_vehicle` | string | required | a `Transporter Vehicle` row name (not a Link — see Pricing/Dealer docs above for the same row-name convention) |
+| `stops` | array of `{supplier}` | required | one per supplier; each Supplier needs `custom_latitude`/`custom_longitude` already set (purchase.supplier_api) |
+| `lines` | array of `{purchase_order_item, qty}` | required | same shape as Pickup Run's `lines` |
+| `scheduled_date` | date | optional | |
+
+**Response**: same shape as one row of `list_route_plans`.
+
+
+#### POST `dms_erp.purchase.route_plan_api.add_route_plan_stop`
+
+**Add a stop to a Draft plan.**
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `supplier` | string | required | rejected if this supplier already has a stop on the plan |
+
+
+#### POST `dms_erp.purchase.route_plan_api.add_route_plan_line`
+
+**Add a line to a Draft plan** — same ready-qty check `create_route_plan` runs, netting against every other Draft Pickup Run *and* Draft Route Plan reservation for that PO line.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `purchase_order_item` | string | required | |
+| `qty` | int | required | boxes |
+
+
+#### POST `dms_erp.purchase.route_plan_api.optimize_route`
+
+**Let Google choose the stop order** for a Draft plan's current stops (Routes API `optimizeWaypointOrder`), overwriting every stop's `sequenceNo`/`legDistanceKm`/`legDurationMinutes` and the plan's `totalDistanceKm`/`totalDurationMinutes`. Raises on any Maps-API failure (missing key, network error, no route found) rather than returning a degraded result — this is a synchronous staff action with no safe default to fall back to.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | must be Draft |
+
+**Response**: same shape as one row of `list_route_plans`, with stops reordered and legs/totals filled in.
+
+
+#### POST `dms_erp.purchase.route_plan_api.resequence_route_stops`
+
+**Manually reorder stops** after `optimize_route` — recomputes legs for the now-fixed order (the Directions API, not re-optimized) so totals never go stale after a hand edit.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | must be Draft |
+| `stop_order` | array of string | required | every existing stop's `id`, in the staff-chosen order — must list each stop exactly once |
+
+**Response**: same shape as `optimize_route`'s. Note: resequencing rebuilds the stops child table, so every stop's `id` changes again on this call — don't hold onto a stop `id` across an optimize/resequence pair.
+
+
+#### POST `dms_erp.purchase.route_plan_api.advance_route_plan_status`
+
+**Advance a route plan's status** — Purchase/Warehouse/Management only. `Draft → Dispatched | Cancelled`, `Dispatched → Completed`. On `Dispatched`: re-validates every line's ready qty (something may have moved since Draft), creates one `Inward Truck` per line (tagged with this plan's id, same flow Pickup Run's dispatch already uses), and — if the plan's total weight exceeds the chosen vehicle's `capacity_tonnes` — returns an `overloadWarning` string rather than blocking (BRD asks for an overload *warning*, not prevention).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `next_status` | string | required | |
+
+**Response**: same shape as one row of `list_route_plans`, plus `overloadWarning` (string, only present when over capacity).
 
 
 ---
