@@ -12,6 +12,11 @@ from dms_erp.warehouse.setup import setup_warehouse
 from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
 
 
+# Relative to today: a fixed date rots into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date").
+DISPATCH = str(add_days(today(), 30))
+
+
 class TestWarehouseReports(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -88,7 +93,7 @@ class TestWarehouseReports(FrappeTestCase):
 		pricing_api.ensure_price_record(fast_item, self.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=fast_item, final_price=360, reason="Launch")
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=fast_item, qty=150, source="Phone")
-		order_api.create_order(dealer=dealer, lines=[{"item": fast_item, "qty": 150}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+		order_api.create_order(dealer=dealer, lines=[{"item": fast_item, "qty": 150}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
 
 		result = warehouse_reports.display_replacement_suggestions()
 		row = next(r for r in result if r["currentDisplayItem"] == slow_item)
@@ -106,7 +111,27 @@ class TestWarehouseReports(FrappeTestCase):
 			item=selling_item, batch_no="WREPORT-DISPLAY-B2", total_qty=10, lines=[{"bay": "WREPORT-DISPLAY-02", "qty": 10}], supplier=self.supplier
 		)
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=selling_item, qty=5, source="Phone")
-		order_api.create_order(dealer=dealer, lines=[{"item": selling_item, "qty": 5}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+		order_api.create_order(dealer=dealer, lines=[{"item": selling_item, "qty": 5}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
 
 		result = warehouse_reports.display_replacement_suggestions()
 		self.assertFalse(any(r["currentDisplayItem"] == selling_item for r in result))
+
+	def test_batch_wise_stock_report_totals_batches_locations_and_top_three(self):
+		# Own bays, so this doesn't add to WREPORT-A-01 that the occupancy test counts.
+		make_bay("WREPORT-B-01", categories=["Vitrified"])
+		make_bay("WREPORT-B-02", categories=["Vitrified"])
+		item = make_item("WREPORT-BATCHWISE-ITEM", "Vitrified")
+		for batch, qty, bay in (("WRB-1", 40, "WREPORT-B-01"), ("WRB-2", 25, "WREPORT-B-02"), ("WRB-3", 10, "WREPORT-B-01"), ("WRB-4", 5, "WREPORT-B-02")):
+			allocation_api.create_allocation(
+				item=item, batch_no=batch, total_qty=qty, lines=[{"bay": bay, "qty": qty}], supplier=self.supplier
+			)
+
+		result = warehouse_reports.batch_wise_stock_report(search="WREPORT-BATCHWISE")
+		row = next(r for r in result["rows"] if r["itemCode"] == item)
+
+		self.assertEqual(row["totalBoxes"], 80)
+		self.assertEqual(row["batchCount"], 4)
+		self.assertEqual(row["locationCount"], 2)
+		self.assertTrue(row["fragmented"])
+		self.assertEqual([b["batchNumber"] for b in row["topBatches"]], ["WRB-1", "WRB-2", "WRB-3"])
+		self.assertEqual(row["topBatchesShare"], 94)  # 75 of 80 boxes

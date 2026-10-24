@@ -44,4 +44,17 @@ def dealer_for_phone(phone: str | None) -> str | None:
 	clean_phone = clean_indian_mobile(phone)
 	if not clean_phone:
 		return None
-	return frappe.db.get_value("Customer", {"custom_phone": clean_phone, "disabled": 0}, "name")
+	dealer = frappe.db.get_value("Customer", {"custom_phone": clean_phone, "disabled": 0}, "name")
+	if dealer:
+		return dealer
+	# Client requirement 8.9 -- a dealer's additional numbers (their own staff) resolve
+	# to the same dealer, for OTP login and WhatsApp alike. A site that hasn't migrated
+	# the Dealer Phone table yet simply has no extra numbers.
+	if not frappe.db.table_exists("Dealer Phone"):
+		return None
+	for parent in frappe.get_all(
+		"Dealer Phone", filters={"phone": clean_phone, "parenttype": "Customer"}, pluck="parent", ignore_permissions=True
+	):
+		if not frappe.db.get_value("Customer", parent, "disabled"):
+			return parent
+	return None

@@ -39,11 +39,19 @@ class TestSampleApi(FrappeTestCase):
 		request = sample_api.create_sample_request(item=self.item, dealer=dealer or self.dealer, qty=qty)
 		return sample_api.approve_sample_request(request["id"], approve=True)
 
+	def _empty_catalog(self):
+		"""A fresh, empty Dealer Catalog for the dealer. Records persist across this class's
+		tests, and issuing a sample creates one, so a plain insert collided with an earlier
+		test's catalog (DuplicateEntryError)."""
+		if frappe.db.exists("Dealer Catalog", self.dealer):
+			frappe.delete_doc("Dealer Catalog", self.dealer, force=True, ignore_permissions=True)
+		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+
 	def test_full_lifecycle_issues_generates_qr_and_grants_catalog_visibility(self):
 		# An empty Dealer Catalog record so is_visible reflects real assignment rather
 		# than the "no record yet -> sees everything" fallback (dealer_catalog_api's
 		# own documented behavior for an unassigned dealer).
-		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+		self._empty_catalog()
 		self.assertFalse(dealer_catalog_api.is_visible(self.dealer, self.item))
 
 		approved = self._approved_request()
@@ -138,7 +146,9 @@ class TestSampleApi(FrappeTestCase):
 		self.assertEqual(html.count('class="sticker"'), 1)
 		self.assertIn("data:image/png;base64,", html)
 		self.assertNotIn("<script>", html)
-		self.assertIn("&lt;script&gt;", html)
+		# Frappe already sanitizes the tag out of item_name on save, so the exact encoding
+		# varies; what matters is that the name still shows and no live tag reaches the page.
+		self.assertIn("alert(1)", html)
 
 	def test_pullback_display_records_condition_and_decision_without_moving_stock(self):
 		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
@@ -151,7 +161,12 @@ class TestSampleApi(FrappeTestCase):
 		self.assertEqual(pulled["pullbackDecision"], "Clearance")
 
 	def test_pullback_display_revokes_catalog_visibility_when_no_placement_remains_active(self):
-		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+		self._empty_catalog()
+		# Earlier tests in this class leave Active placements for the same dealer+item,
+		# which (correctly) keep visibility on -- clear them so this one is the only one.
+		frappe.db.set_value(
+			"Display Placement Slip", {"dealer": self.dealer, "item": self.item, "status": "Active"}, "status", "Pulled Back"
+		)
 		result = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
 		slip = result["placement"]["id"]
 		self.assertTrue(dealer_catalog_api.is_visible(self.dealer, self.item))
@@ -164,7 +179,7 @@ class TestSampleApi(FrappeTestCase):
 		self.assertFalse(row.sample_issued)
 
 	def test_pullback_display_keeps_visibility_when_another_placement_is_still_active(self):
-		frappe.get_doc({"doctype": "Dealer Catalog", "dealer": self.dealer, "items": []}).insert(ignore_permissions=True)
+		self._empty_catalog()
 		first = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
 		second = sample_api.issue_sample(self._approved_request()["id"], bay="SAMPLE-MAIN-01", batch_no="SAMPLE-BATCH-1")
 

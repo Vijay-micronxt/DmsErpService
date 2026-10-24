@@ -136,6 +136,39 @@ class TestPricingApi(FrappeTestCase):
 		# "Dealer" list rather than returning no price for a dealer who has a tag set.
 		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 500)
 
+	def test_save_cost_inputs_starts_a_record_for_an_item_without_one(self):
+		# Tally-migrated items have live prices but no proposal; the pricing screen
+		# must be able to start one rather than 404.
+		item = make_item("PRICE-UPSERT", "Vitrified")
+		if frappe.db.exists("Item Price Proposal", item):
+			frappe.delete_doc("Item Price Proposal", item, force=True, ignore_permissions=True)
+
+		record = pricing_api.save_cost_inputs(item=item, supplier=self.supplier, purchase_cost=300, freight=20, margin_pct=10)
+
+		self.assertEqual(record["productId"], item)
+		self.assertEqual(record["status"], "Pending")
+		self.assertEqual(record["purchaseCost"], 300)
+		self.assertEqual(record["freight"], 20)
+		self.assertTrue(record["effectiveDate"])
+
+
+	def test_landing_cost_includes_loading_and_insurance_pct(self):
+		# BRD C.7.1: Basic + Freight + Loading + Insurance (% of basic) + Other landed costs.
+		item = make_item("PRICE-BUILDUP", "Vitrified")
+		record = pricing_api.save_cost_inputs(
+			item=item, supplier=self.supplier, purchase_cost=300, freight=20, handling=5, other_costs=4,
+			margin_pct=10, loading=15, insurance_pct=2,
+		)
+		self.assertEqual(record["loading"], 15)
+		self.assertEqual(record["insurancePct"], 2)
+		self.assertEqual(record["insuranceAmount"], 6)  # 2% of 300
+		self.assertEqual(record["landingCost"], 350)  # 300 + 20 + 15 + 6 + 5 + 4
+		self.assertEqual(record["suggestedPrice"], 385)  # 350 x 1.10
+
+		# An older client that doesn't send the new fields leaves them as they were.
+		again = pricing_api.save_cost_inputs(item=item, supplier=self.supplier, purchase_cost=300, margin_pct=10)
+		self.assertEqual(again["loading"], 15)
+		self.assertEqual(again["insurancePct"], 2)
 
 class TestSuggestPriceFromHistory(FrappeTestCase):
 	"""ISS-2026-00623 -- Purchase Invoice/Sales Invoice history is real, migration-only

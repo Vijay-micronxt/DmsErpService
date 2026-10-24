@@ -28,7 +28,7 @@ carry pre-configured price_list_rates.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import now_datetime, nowdate
 
 from dms_erp.pagination import clamp
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER, DEALER_CLASSIFICATION_STANDARD
@@ -48,6 +48,10 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 		"supplier": doc.supplier,
 		"purchaseCost": doc.purchase_cost,
 		"freight": doc.freight,
+		# BRD C.7.1 cost build-up: loading and insurance % (of purchase cost).
+		"loading": doc.get("loading") or 0,
+		"insurancePct": doc.get("insurance_pct") or 0,
+		"insuranceAmount": doc.insurance_amount(),
 		"handling": doc.handling,
 		"otherCosts": doc.other_costs,
 		"marginPct": doc.margin_pct,
@@ -285,15 +289,28 @@ def save_cost_inputs(
 	margin_pct: float = 0,
 	effective_date=None,
 	remarks: str | None = None,
+	loading: float | None = None,
+	insurance_pct: float | None = None,
 ):
 	_assert_can_manage_pricing()
 
+	# Upsert, not update-only: every Tally-migrated item (all of them, on a migrated
+	# site) has live Item Prices but no proposal, because proposals were only ever
+	# seeded by create_product. Without this the pricing screen had no way to start
+	# a landing-cost/margin record for any existing item.
+	if not frappe.db.exists("Item Price Proposal", item):
+		ensure_price_record(item, supplier, purchase_cost, margin_pct, effective_date or nowdate(), remarks)
 	doc = frappe.get_doc("Item Price Proposal", item)
 	doc.supplier = supplier
 	doc.purchase_cost = purchase_cost
 	doc.freight = freight
 	doc.handling = handling
 	doc.other_costs = other_costs
+	# None = "not sent" (an older client): leave the stored value alone.
+	if loading is not None:
+		doc.loading = loading
+	if insurance_pct is not None:
+		doc.insurance_pct = insurance_pct
 	doc.margin_pct = margin_pct
 	if effective_date:
 		doc.effective_date = effective_date

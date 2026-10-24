@@ -541,11 +541,27 @@ def list_my_orders(stage: str | None = None, limit: int = 20, offset: int = 0):
 		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
 	)
 	return {
-		"items": [_serialize_order(frappe.get_doc("Sales Order", name)) for name in names],
+		"items": [_dealer_order(frappe.get_doc("Sales Order", name)) for name in names],
 		"total": total,
 		"limit": limit,
 		"offset": offset,
 	}
+
+
+# Internal to Pacific, never shown to a dealer: the retail/bulk channel (an internal
+# classification, already kept off the dealer's quotation), the staff owner's and every
+# stage-changer's user/email, the advance-payment sign-off and the reservation-review flags.
+_INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "reservation")
+
+
+def _dealer_order(doc) -> dict:
+	"""order_api's staff serialization with Pacific-internal fields removed -- the
+	portal used to receive the staff shape as-is, including staff email addresses."""
+	order = _serialize_order(doc)
+	for key in _INTERNAL_ORDER_KEYS:
+		order.pop(key, None)
+	order["history"] = [{k: v for k, v in event.items() if k != "by"} for event in order.get("history") or []]
+	return order
 
 
 @frappe.whitelist(methods=["GET"])
@@ -554,7 +570,7 @@ def get_my_order(order: str) -> dict:
 	doc = frappe.get_doc("Sales Order", order)
 	if doc.customer != dealer:
 		frappe.throw(_("Order {0} does not belong to you.").format(order), frappe.PermissionError)
-	return _serialize_order(doc)
+	return _dealer_order(doc)
 
 
 # MOM 07-Oct-2026 §3.4/#11, refined by ISS-2026-00634: "Dealers can cancel an order
@@ -806,7 +822,7 @@ def cancel_my_order(order: str, note: str | None = None) -> dict:
 			{"stage": "Cancelled", "at": now_datetime(), "by": frappe.session.user, "note": note or "Cancelled by dealer"},
 		)
 		doc.save(ignore_permissions=True)
-		return {"cancelled": True, "approvalRequired": False, "order": _serialize_order(doc)}
+		return {"cancelled": True, "approvalRequired": False, "order": _dealer_order(doc)}
 
 	result = gate_authorized_action(
 		trigger_type="Amend Or Cancel Submitted Document",
@@ -857,6 +873,16 @@ def my_profile() -> dict:
 		"phone": doc.custom_phone,
 		"email": doc.custom_email,
 		"classification": doc.custom_dealer_classification,
+		# The portal prompts after every OTP login until this is true, so the dealer
+		# can sign in with email + password instead of waiting on an OTP each time.
+		# Read off the session user (the account that would log in with it), the same
+		# __Auth check sales.dealer_api._portal_status_for uses for staff.
+		"hasPassword": bool(
+			frappe.db.sql(
+				"select 1 from `__Auth` where doctype='User' and fieldname='password' and name=%s",
+				(frappe.session.user,),
+			)
+		),
 	}
 
 

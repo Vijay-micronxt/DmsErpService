@@ -28,6 +28,17 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   check, stock-derived status, the Opportunity mirror) is skipped for one of these;
   `dealer_portal_api.convert_to_order` rejects converting one to an order outright,
   since there's no real item to build a Sales Order line from.
+- **Several phone numbers per dealer** (client requirement 8.9) — `Customer.custom_additional_phones` (child
+  table `Dealer Phone`), edited via `update_dealer`'s `additionalPhones`. `phone_utils.dealer_for_phone` checks the
+  main number first, then these, so OTP login and WhatsApp accept any of them. A number already used by another
+  active dealer is refused: one number must resolve to exactly one dealer.
+- **Customer Group create** uses the Selling Settings default group as parent only when it is itself a group
+  (its parent otherwise) — a leaf default made ERPNext refuse every new group.
+- **Dealer portal sign-in prompt** — `my_profile` returns `hasPassword` (same `__Auth`
+  check as `_portal_status_for`, but for the session's own user). The portal uses it
+  to offer an email + password after every OTP sign-in until one is set (Pacific's ask,
+  Oct 2026), via the existing `update_my_email` and `auth.dealer_api.set_my_password`;
+  `auth.dealer_api.login_with_password` is the sign-in side.
 - **Dealer portal: enquiry → quotation → order** (`dealer_portal_api.py`, client issues
   of Oct 2026) — a dealer no longer turns an enquiry straight into an order. They
   enquire (several items at once via `raise_inquiries`: one Inquiry per item, all
@@ -116,7 +127,15 @@ Pick Tasks; everyone reads.
   field to `Customer`), but no module ever exposed a list/get read endpoint for it.
   `list_dealers`/`get_dealer` add that: no new doctype or field, just the read
   surface over `Customer` that every other endpoint already assumed existed
-  upstream.
+  upstream. `update_dealer` only touches the credit-limit table when the value
+  really changes, and treats 0 as "no dealer-level limit" (removes the row): ERPNext's
+  `Customer.validate_credit_limit_on_change` re-checks every row against current
+  outstanding whenever the table differs from what's saved, and the edit form used to
+  send the limit on every save — so a dealer with dues and no limit got a fresh ₹0 row
+  and *any* edit failed with "New credit limit is less than current outstanding".
+  0-means-none is how `credit_limit.get_credit_limit` already reads it. An empty
+  string for `phone`/`email`/`gstin`/`address` clears the field (an omitted key leaves
+  it as is).
 - **Inquiry → Purchase Requirement** (`inquiry_api.convert_to_purchase_requirement`,
   Phase 12) — closes the one Inquiry status nothing ever set: "Mapped to PO". It's a
   thin wrapper over `purchase.po_api.create_purchase_order` (which still enforces its
@@ -150,3 +169,27 @@ Pick Tasks; everyone reads.
   auto-cancel; releasing the stock stays a person's call. Both dates are stored on
   the order and never cleared, so each happens once; `order_api` returns the state
   as `reservation`.
+- **ERP -> Tally sync — DISABLED, in development** (see `hooks.py`: hooks commented out,
+  no custom fields on migrate, agent endpoints refuse until `TALLY_SYNC_ENABLED`).
+  (`tally_sync.py`, client request Oct 2026 -- not in the BRD,
+  which scopes only a one-time migration). Tally stays Pacific's live books on an
+  office PC the cloud can't reach, and Tally can't push, so it is pull-based: the
+  agent in `tools/tally_sync_agent` (on the Tally PC) asks `get_pending_invoices` for
+  submitted Sales Invoices ticked "Sync to Tally", posts each to Tally's XML port and
+  calls `report_sync_result`. All mapping lives here, not in the agent: ledger = ERP
+  account minus the company suffix, godown = warehouse name ("X (Main)" is Tally's
+  parent godown X), batch = `tally_batch_name` / label without the " - <item>"
+  suffix, qty in Tally's own "N Box M peices" text. Pacific's Sales voucher type
+  numbers itself (PI/NNNNN/26-27), so the ERP invoice number goes in the voucher's
+  Reference -- the agent's duplicate check matches on that, and Tally's real number
+  is saved back on the invoice. Invoices that already carry a Tally voucher no/GUID
+  came from Tally and are never sent back (the loop guard for the future Tally -> ERP
+  direction). Not built yet: cancel/amend after sync only leaves a note (cancel the
+  voucher in Tally by hand); credit notes are skipped; IRN stays with the ERP.
+  Paisa gaps are booked the way ERPNext's own GL books them: a line-level discount
+  drift goes onto the last line, a "Discount on Grand Total" gap goes to Round Off
+  (ERPNext posts e.g. Round Off 0.13 = 0.12 rounding + 0.01 gap). A non-batch item is
+  sent without a batch and Tally files it under its own "Primary Batch". The sync
+  fields are only ever written straight to the DB, so a save/cancel from a stale open
+  copy would overwrite them -- `_sync_state` restores them from the copy Frappe loaded
+  just before the save.

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -123,6 +125,81 @@ class TestDealerWriteApi(FrappeTestCase):
 		self.assertTrue(flagged["outOfStation"])
 		unflagged = dealer_api.update_dealer("DW Station Toggle Co", {"outOfStation": False})
 		self.assertFalse(unflagged["outOfStation"])
+
+	def test_editing_a_dealer_with_dues_and_no_limit_does_not_trip_the_credit_check(self):
+		# Real report: the edit form always sent creditLimit 0, which appended a fresh
+		# Rs.0 limit row, and ERPNext rejected the whole save because outstanding > 0 --
+		# so even a phone-number change failed for any dealer with dues.
+		dealer_api.create_dealer("DW Dues Co", group=GROUP)
+		with patch("erpnext.selling.doctype.customer.customer.get_customer_outstanding", return_value=50000):
+			updated = dealer_api.update_dealer("DW Dues Co", {"address": "1 Dues Street", "creditLimit": 0})
+		self.assertEqual(updated["address"], "1 Dues Street")
+		self.assertEqual(updated["creditLimit"], 0)
+		self.assertFalse(frappe.get_all("Customer Credit Limit", filters={"parent": "DW Dues Co"}))
+
+	def test_credit_limit_unchanged_is_a_no_op_and_zero_removes_it(self):
+		dealer_api.create_dealer("DW Limit Co", group=GROUP, credit_limit=90000)
+		with patch("erpnext.selling.doctype.customer.customer.get_customer_outstanding", return_value=120000):
+			# Unchanged limit below today's dues: untouched, so the edit still saves.
+			self.assertEqual(dealer_api.update_dealer("DW Limit Co", {"address": "x", "creditLimit": 90000})["creditLimit"], 90000)
+			# A real lowering below dues is still refused by ERPNext, as it should be.
+			with self.assertRaises(frappe.ValidationError):
+				dealer_api.update_dealer("DW Limit Co", {"creditLimit": 1000})
+			# 0 = no dealer-level limit: the row goes, nothing left to re-check.
+			self.assertEqual(dealer_api.update_dealer("DW Limit Co", {"creditLimit": 0})["creditLimit"], 0)
+		self.assertFalse(frappe.get_all("Customer Credit Limit", filters={"parent": "DW Limit Co"}))
+
+	def test_update_dealer_clears_phone_email_gstin_and_address(self):
+		dealer_api.create_dealer(
+			"DW Clear Co", group=GROUP, phone="9876501234", email="dwclear@example.com", gstin="24aaaaa0000a1z5", address="Somewhere"
+		)
+		cleared = dealer_api.update_dealer("DW Clear Co", {"phone": "", "email": "", "gstin": "", "address": ""})
+		self.assertFalse(cleared["phone"])
+		self.assertFalse(cleared["email"])
+		self.assertFalse(cleared["gstin"])
+		self.assertFalse(cleared["address"])
+
+	def test_create_customer_group_works_when_the_default_group_is_a_leaf(self):
+		# Real report: Selling Settings' default Customer Group was a leaf, which ERPNext
+		# refuses as a parent, so "+ new group" on the dealer form always failed.
+		original = frappe.db.get_single_value("Selling Settings", "customer_group")
+		frappe.db.set_single_value("Selling Settings", "customer_group", GROUP)  # a leaf group
+		try:
+			created = dealer_api.create_customer_group("DW Leaf Default Child")
+			parent = frappe.db.get_value("Customer Group", created, "parent_customer_group")
+			self.assertTrue(frappe.db.get_value("Customer Group", parent, "is_group"))
+		finally:
+			frappe.db.set_single_value("Selling Settings", "customer_group", original)
+
+	def test_additional_phone_numbers_resolve_to_the_dealer_and_cannot_be_shared(self):
+		# Client requirement 8.9: several people at one dealer, each with their own phone.
+		from dms_erp.phone_utils import dealer_for_phone
+
+		dealer_api.create_dealer("DW Phones A", group=GROUP, phone="9876511111")
+		dealer_api.create_dealer("DW Phones B", group=GROUP, phone="9876522222")
+
+		updated = dealer_api.update_dealer(
+			"DW Phones A",
+			{"additionalPhones": [{"phone": "+91 98765 33333", "name": "Ravi (sales)"}, "98765 44444", "9876511111"]},
+		)
+		# Normalized, the main number isn't repeated, names kept.
+		self.assertEqual(
+			updated["additionalPhones"], [{"phone": "9876533333", "name": "Ravi (sales)"}, {"phone": "9876544444", "name": None}]
+		)
+		self.assertEqual(dealer_for_phone("919876533333"), "DW Phones A")
+		self.assertEqual(dealer_for_phone("9876511111"), "DW Phones A")
+
+		# Another dealer's main or extra number is refused.
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["9876533333"]})
+		with self.assertRaises(frappe.DuplicateEntryError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["9876511111"]})
+		with self.assertRaises(frappe.ValidationError):
+			dealer_api.update_dealer("DW Phones B", {"additionalPhones": ["12345"]})
+
+		# Removing them stops them resolving.
+		self.assertEqual(dealer_api.update_dealer("DW Phones A", {"additionalPhones": []})["additionalPhones"], [])
+		self.assertIsNone(dealer_for_phone("9876533333"))
 
 	def test_write_requires_sales_or_management_role(self):
 		frappe.set_user("Guest")

@@ -225,17 +225,27 @@ everyone can read.
 | Method | Notes |
 |---|---|
 | `dms_erp.catalog.api.list_products` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer` param filters to that dealer's catalog (BRD §6.4); optional `search`/`category`/`status`/`supplier` (supplier resolved via Item Price Proposal, not a field on Item itself) |
+| `dms_erp.catalog.api.list_all_products_bulk` | every product in one response (same shape as `get_product`), unpaginated; optional `search`/`category`/`status`/`supplier`. What the staff app's shared product store loads from |
+| `dms_erp.catalog.api.get_item_prices` | `item`; every selling Price List rate for the item (`[{priceList, rate, currency, uom, validFrom}]`), view-only |
 | `dms_erp.catalog.api.get_product` | `item` (Item Code) |
+| `dms_erp.catalog.api.list_item_group_names` | every leaf category name, unpaginated |
+| `dms_erp.catalog.api.create_item_group` | POST, write-restricted; `name` — a new leaf category |
 | `dms_erp.catalog.api.create_product` | write-restricted; also seeds a Pending `Item Price Proposal` |
 | `dms_erp.catalog.api.update_product` | write-restricted; `patch` is a partial `Product`-shaped dict |
 | `dms_erp.catalog.api.list_item_groups` | paginated; optional `search`; leaf `Item Group` categories only |
 | `dms_erp.catalog.dealer_catalog_api.catalog_for` | item codes visible to a dealer; full catalog if unassigned |
+| `dms_erp.catalog.dealer_catalog_api.list_catalog_assignments` | `{dealer: [item codes]}` for every dealer that has a Dealer Catalog; a dealer not in the map sees the full catalog |
 | `dms_erp.catalog.dealer_catalog_api.is_visible` | single dealer+item check |
 | `dms_erp.catalog.dealer_catalog_api.set_product_visibility` | write-restricted |
 | `dms_erp.catalog.dealer_catalog_api.set_category_visibility` | write-restricted; bulk by Item Group |
 | `dms_erp.catalog.dealer_catalog_api.category_coverage` | `{total, visible}` for a dealer + Item Group |
+| `dms_erp.notifications_api.list_my_notifications` | the signed-in user's own Notification Log (`{items, unread}`), for the staff app's header bell |
+| `dms_erp.notifications_api.mark_notifications_read` | POST; `ids` (omit = all of the user's own); returns `{unread}` |
+| `dms_erp.print_api.render_quotation_html` / `render_sales_order_html` / `render_purchase_order_html` | `quotation` / `order` / `purchase_order`; printable HTML built from the saved document (staff roles) |
+| `dms_erp.reports.sales_reports.open_inquiries_report` / `advance_payment_pending_report` | optional `dealer` |
+| `dms_erp.reports.warehouse_reports.batch_wise_stock_report` | optional `category`, `search` |
 | `dms_erp.pricing.api.list_price_records` / `get_price_record` | landing cost + suggested price computed on the fly, never stored; `list_price_records` is paginated (`limit`/`offset`, `{items, total}`) |
-| `dms_erp.pricing.api.save_cost_inputs` | write-restricted |
+| `dms_erp.pricing.api.save_cost_inputs` | write-restricted; creates the proposal if the item has none yet |
 | `dms_erp.pricing.api.approve_price` | write-restricted; publishes to the native `Item Price` (Dealer price list) and appends an audit-trail row; `approved_by` is always the authenticated caller, never client-supplied |
 
 Product responses match the frontend's `Product` shape (camelCase) field-for-field,

@@ -26,10 +26,13 @@ that couldn't be delivered anyway. Resolving email -> dealer -> the one portal U
 must stay unique across dealers once it's used as a login key this way -- see
 sales.dealer_api._assert_email_available, the one guard that makes this safe.
 
-All three of request_otp/verify_otp/login_with_password return the same generic
-response/error regardless of whether the phone or email is actually registered --
-a dealer login surface is the one place in this app an unauthenticated caller can
-probe at all, so it must not leak which phone numbers or emails exist.
+verify_otp and login_with_password return the same generic error whether or not the
+phone or email is registered. request_otp used to as well, but a dealer typing a
+number that isn't on their record then sat on "enter the code we sent" waiting for a
+WhatsApp that would never come -- so, at Pacific's request (Oct 2026), it now says
+plainly when a number isn't registered. That trades away hiding which numbers are
+dealers' (anyone can now test a number against this endpoint), which Pacific chose
+over silent failed logins; the rate-limiting gap below matters more because of it.
 
 Not built here: rate-limiting request_otp/login_with_password beyond the one-per-
 cooldown-window check on OTP resend below. A dedicated per-identifier/per-IP
@@ -90,35 +93,38 @@ def request_otp(phone: str):
 		frappe.throw(_("phone is required"), frappe.ValidationError)
 
 	dealer = dealer_for_phone(phone)
-	if dealer:
-		now = now_datetime()
-		recent = frappe.db.get_value(
-			"Dealer Login OTP",
-			{"dealer": dealer, "consumed_at": ["is", "not set"], "issued_at": [">", add_to_date(now, seconds=-OTP_RESEND_COOLDOWN_SECONDS)]},
-			"name",
+	if not dealer:
+		frappe.throw(
+			_("This number isn't registered with Pacific. Please check the number, or contact Pacific to get access."),
+			frappe.DoesNotExistError,
 		)
-		if not recent:
-			code = "".join(secrets.choice("0123456789") for _ in range(OTP_LENGTH))
-			frappe.get_doc(
-				{
-					"doctype": "Dealer Login OTP",
-					"dealer": dealer,
-					"issued_at": now,
-					"expires_at": add_to_date(now, minutes=OTP_TTL_MINUTES),
-					"otp_hash": hash_token(code),
-				}
-			).insert(ignore_permissions=True)
-			# The real send -- failure here (unconfigured site, whats91 outage, an
-			# invalid phone) is logged inside send_otp_template and never raises, so
-			# it can't change this endpoint's response shape (see module docstring).
-			send_otp_template(phone, code)
-			_send_message(
-				dealer,
-				_("Your Pacific Inc verification code is {0}. It expires in {1} minutes.").format(code, OTP_TTL_MINUTES),
-			)
+	now = now_datetime()
+	recent = frappe.db.get_value(
+		"Dealer Login OTP",
+		{"dealer": dealer, "consumed_at": ["is", "not set"], "issued_at": [">", add_to_date(now, seconds=-OTP_RESEND_COOLDOWN_SECONDS)]},
+		"name",
+	)
+	if not recent:
+		code = "".join(secrets.choice("0123456789") for _ in range(OTP_LENGTH))
+		frappe.get_doc(
+			{
+				"doctype": "Dealer Login OTP",
+				"dealer": dealer,
+				"issued_at": now,
+				"expires_at": add_to_date(now, minutes=OTP_TTL_MINUTES),
+				"otp_hash": hash_token(code),
+			}
+		).insert(ignore_permissions=True)
+		# The real send -- failure here (unconfigured site, whats91 outage, an
+		# invalid phone) is logged inside send_otp_template and never raises, so
+		# it can't change this endpoint's response shape (see module docstring).
+		send_otp_template(phone, code)
+		_send_message(
+			dealer,
+			_("Your Pacific Inc verification code is {0}. It expires in {1} minutes.").format(code, OTP_TTL_MINUTES),
+		)
 
-	# Same response whether or not the phone matched, and whether or not a new code
-	# was actually sent (cooldown) -- never reveals which phone numbers are registered.
+	# Same response whether or not a new code was actually sent (cooldown).
 	return {"success": True}
 
 

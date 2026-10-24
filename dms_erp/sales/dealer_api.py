@@ -51,6 +51,7 @@ just ignored for pricing as long as the tag is set.
 
 import frappe
 from frappe import _
+from frappe.utils import flt
 
 from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
@@ -77,6 +78,23 @@ def list_customer_groups(search: str | None = None):
 	return names
 
 
+def _default_parent_customer_group() -> str | None:
+	"""Selling Settings' default Customer Group is usually a *leaf* (it's the group a new
+	customer lands in), and ERPNext refuses a leaf as a parent -- so using it as-is made
+	"create group" fail on any site whose default is a leaf (a real report from the TAS
+	site). Use it only when it is itself a group; otherwise its parent; otherwise the root."""
+	default = frappe.db.get_single_value("Selling Settings", "customer_group")
+	if default:
+		is_group, parent = frappe.db.get_value("Customer Group", default, ["is_group", "parent_customer_group"]) or (0, None)
+		if is_group:
+			return default
+		if parent:
+			return parent
+	return frappe.db.get_value("Customer Group", {"is_group": 1, "parent_customer_group": ["is", "not set"]}, "name") or frappe.db.get_value(
+		"Customer Group", {"is_group": 1}, "name"
+	)
+
+
 @frappe.whitelist(methods=["POST"])
 def create_customer_group(name: str, parent: str | None = None):
 	"""Creates a new leaf Customer Group so staff aren't blocked waiting on a
@@ -91,9 +109,7 @@ def create_customer_group(name: str, parent: str | None = None):
 	if frappe.db.exists("Customer Group", name):
 		frappe.throw(_("Customer Group {0} already exists.").format(name), frappe.DuplicateEntryError)
 
-	parent = parent or frappe.db.get_single_value("Selling Settings", "customer_group") or frappe.db.get_value(
-		"Customer Group", {"is_group": 1, "parent_customer_group": ["is", "not set"]}, "name"
-	)
+	parent = parent or _default_parent_customer_group()
 	doc = frappe.get_doc(
 		{
 			"doctype": "Customer Group",
@@ -142,6 +158,7 @@ def _serialize(
 	outstanding: float = 0,
 	portal_status: dict | None = None,
 	price_list: str | None = None,
+	additional_phones: list | None = None,
 ) -> dict:
 	portal_status = portal_status or _NO_PORTAL_ACCOUNT
 	return {
@@ -161,6 +178,9 @@ def _serialize(
 		"salesperson": salesperson,
 		# BRD C.13 — the dealer portal's login identifier (see auth.dealer_api).
 		"phone": phone,
+		# Client requirement 8.9 -- more numbers for the same dealer; each works for OTP
+		# login and WhatsApp exactly like `phone`.
+		"additionalPhones": additional_phones or [],
 		# BRD C.13.1 — "price (if enabled for that dealer)". Gates price in the
 		# dealer portal only (sales.dealer_portal_api); staff screens are unaffected.
 		"priceVisible": bool(price_visible),
@@ -242,6 +262,52 @@ def _portal_status_for(customer_names: list[str]) -> dict[str, dict]:
 	return status
 
 
+def _additional_phones_for(customer_names: list[str]) -> dict[str, list[dict]]:
+	if not customer_names or not frappe.db.table_exists("Dealer Phone"):
+		return {}
+	out: dict[str, list[dict]] = {}
+	for r in frappe.get_all(
+		"Dealer Phone",
+		filters={"parent": ["in", customer_names], "parenttype": "Customer"},
+		fields=["parent", "phone", "contact_name"],
+		order_by="idx asc",
+		ignore_permissions=True,
+	):
+		out.setdefault(r.parent, []).append({"phone": r.phone, "name": r.contact_name})
+	return out
+
+
+def _set_additional_phones(doc, phones) -> None:
+	"""Replaces the dealer's extra numbers. Each is normalized like the main phone, and
+	a number already used by another active dealer (as their main or extra number) is
+	refused: OTP login and WhatsApp resolve a number to exactly one dealer, so a shared
+	number would let one dealer's staff sign in as the other."""
+	rows, seen = [], {doc.get("custom_phone")}
+	# A dealer being created has no name yet; "!=" against NULL would match nothing.
+	self_name = doc.name or "__new_dealer__"
+	for entry in phones or []:
+		raw = entry.get("phone") if isinstance(entry, dict) else entry
+		if not raw or not str(raw).strip():
+			continue
+		phone = _clean_phone_or_throw(str(raw))
+		if phone in seen:
+			continue
+		seen.add(phone)
+		owner = frappe.db.get_value("Customer", {"custom_phone": phone, "disabled": 0, "name": ["!=", self_name]}, "name")
+		if not owner:
+			for parent in frappe.get_all(
+				"Dealer Phone", filters={"phone": phone, "parenttype": "Customer", "parent": ["!=", self_name]}, pluck="parent"
+			):
+				if not frappe.db.get_value("Customer", parent, "disabled"):
+					owner = parent
+					break
+		if owner:
+			frappe.throw(_("{0} is already registered to another dealer ({1}).").format(phone, owner), frappe.DuplicateEntryError)
+		name = (entry.get("name") or "").strip() if isinstance(entry, dict) else ""
+		rows.append({"phone": phone, "contact_name": name or None})
+	doc.set("custom_additional_phones", rows)
+
+
 def _credit_limits_for(customer_names: list[str], company: str) -> dict[str, float]:
 	if not customer_names:
 		return {}
@@ -284,6 +350,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 	credit_limits = _credit_limits_for([r.name for r in rows], company)
 	outstanding = party_balances("Customer", [r.name for r in rows], company)
 	portal_status = _portal_status_for([r.name for r in rows])
+	extra_phones = _additional_phones_for([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -304,6 +371,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			outstanding.get(r.name, 0),
 			portal_status.get(r.name),
 			r.default_price_list,
+			extra_phones.get(r.name),
 		)
 		for r in rows
 	]
@@ -333,6 +401,7 @@ def get_dealer(dealer: str):
 		party_balances("Customer", [doc.name], company).get(doc.name, 0),
 		_portal_status_for([doc.name]).get(doc.name),
 		doc.default_price_list,
+		[{"phone": r.phone, "name": r.contact_name} for r in doc.get("custom_additional_phones") or []],
 	)
 
 
@@ -381,12 +450,27 @@ def _assert_email_available(email: str, exclude: str | None = None):
 
 
 def _set_credit_limit(doc, credit_limit: float | None):
+	"""Leaves the table untouched when nothing actually changes, and treats 0 as "no
+	dealer-level limit" (removes the row) rather than a literal ₹0 limit. Both matter
+	because ERPNext's Customer.validate_credit_limit_on_change re-checks every row
+	against current outstanding whenever the table differs from what's saved, and
+	throws if a limit is below it: the dealer edit form always sent creditLimit, so a
+	dealer with no limit row (0 in the form) and real dues got a fresh ₹0 row appended
+	on *any* edit -- a phone-number change failed with "New credit limit is less than
+	current outstanding". 0-means-none is what sales.credit_limit.get_credit_limit
+	already reads it as (falls through to Customer Group / Company), so no behaviour
+	changes for the credit gate."""
 	company = default_company()
+	credit_limit = flt(credit_limit)
 	row = next((r for r in doc.get("credit_limits") or [] if r.company == company), None)
-	if row:
-		row.credit_limit = credit_limit or 0
+	if (flt(row.credit_limit) if row else 0) == credit_limit:
+		return
+	if not credit_limit:
+		doc.remove(row)
+	elif row:
+		row.credit_limit = credit_limit
 	else:
-		doc.append("credit_limits", {"company": company, "credit_limit": credit_limit or 0})
+		doc.append("credit_limits", {"company": company, "credit_limit": credit_limit})
 
 
 @frappe.whitelist(methods=["POST"])
@@ -404,6 +488,7 @@ def create_dealer(
 	gstin: str | None = None,
 	address: str | None = None,
 	price_list: str | None = None,
+	additional_phones: list | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -450,6 +535,8 @@ def create_dealer(
 		values["default_price_list"] = price_list
 
 	doc = frappe.get_doc(values)
+	if additional_phones:
+		_set_additional_phones(doc, additional_phones)
 	if credit_limit is not None:
 		_set_credit_limit(doc, credit_limit)
 	doc.insert(ignore_permissions=True)
@@ -510,5 +597,7 @@ def update_dealer(dealer: str, patch: dict):
 			_set_credit_limit(doc, value)
 		elif key == "disabled":
 			doc.disabled = 1 if value else 0
+		elif key == "additionalPhones":
+			_set_additional_phones(doc, value)
 	doc.save(ignore_permissions=True)
 	return get_dealer(doc.name)

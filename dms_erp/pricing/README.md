@@ -20,6 +20,16 @@ Once approved, the live price is published to the standard ERPNext `Item Price` 
 the "Dealer" selling Price List) — everything downstream reads the native object, not
 a custom field.
 
+Landing cost follows BRD C.7.1: purchase cost + freight + loading + insurance (`insurance_pct` of the purchase cost)
++ handling + other costs (`ItemPriceProposal.landing_cost`). `save_cost_inputs` leaves `loading`/`insurance_pct`
+unchanged when a caller doesn't send them.
+
+`save_cost_inputs` creates the proposal if the item has none yet. Proposals were only
+ever seeded by `catalog.api.create_product`, so every Tally-migrated item (all of them,
+on a migrated site) has live Item Prices but no proposal — and the pricing screen,
+which now lists every item rather than only those with a proposal, had no way to start
+one. The read side for those items' real rates is `catalog.api.get_item_prices`.
+
 `suggest_price_from_history` (ISS-2026-00623) — a purchase-cost + margin %
 *suggestion* for a new Item Price Proposal, derived from that item's own
 historical Purchase Invoice/Sales Invoice lines (Tally migration; this app posts

@@ -39,7 +39,13 @@ def _assert_can_manage_pickup_runs():
 
 
 def _serialize_vehicle_type(doc) -> dict:
-	return {"id": doc.name, "name": doc.vehicle_type_name, "capacityBoxes": doc.capacity_boxes}
+	return {
+		"id": doc.name,
+		"name": doc.vehicle_type_name,
+		"capacityBoxes": doc.capacity_boxes or None,
+		"capacityTonnes": doc.get("capacity_tonnes") or None,
+		"mode": doc.get("mode") or None,
+	}
 
 
 def _serialize_line(row) -> dict:
@@ -140,13 +146,37 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 		total_boxes += qty
 		enriched.append({"purchase_order": po_item.parent, "purchase_order_item": po_item_name, "item": po_item.item_code, "qty": qty})
 
-	if total_boxes > vt.capacity_boxes:
+	if vt.capacity_boxes and total_boxes > vt.capacity_boxes:
 		frappe.throw(
 			_("{0} has only {1} boxes of capacity — this run totals {2} boxes.").format(vt.vehicle_type_name, vt.capacity_boxes, total_boxes),
 			frappe.ValidationError,
 		)
+	_check_weight_capacity(vt, enriched)
 
 	return total_boxes, enriched
+
+
+def _check_weight_capacity(vt, lines: list[dict]) -> None:
+	"""BRD C.1.7 / C.5: vehicle capacity is in tonnes and drives the overload check. Only
+	checked when every line's item has a weight per box -- with any weight unknown the
+	run's real weight can't be told, and blocking on a guess would be worse than not
+	checking."""
+	capacity_tonnes = vt.get("capacity_tonnes")
+	if not capacity_tonnes:
+		return
+	total_kg = 0.0
+	for line in lines:
+		weight = item_weight_per_box_kg(line["item"])
+		if not weight:
+			return
+		total_kg += weight * line["qty"]
+	if total_kg > capacity_tonnes * 1000:
+		frappe.throw(
+			_("{0} carries {1} t — this run weighs about {2} t.").format(
+				vt.vehicle_type_name, f"{capacity_tonnes:g}", f"{total_kg / 1000:,.2f}"
+			),
+			frappe.ValidationError,
+		)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -166,10 +196,22 @@ def list_vehicle_types(search: str | None = None, limit: int = 20, offset: int =
 
 
 @frappe.whitelist(methods=["POST"])
-def create_vehicle_type(name: str, capacity_boxes: int):
+def create_vehicle_type(
+	name: str, capacity_boxes: int | None = None, capacity_tonnes: float | None = None, mode: str | None = None
+):
 	_assert_can_manage_pickup_runs()
+	if not capacity_boxes and not capacity_tonnes:
+		frappe.throw(_("Give a capacity in boxes or in tonnes."), frappe.ValidationError)
 
-	doc = frappe.get_doc({"doctype": "Vehicle Type", "vehicle_type_name": name, "capacity_boxes": capacity_boxes})
+	doc = frappe.get_doc(
+		{
+			"doctype": "Vehicle Type",
+			"vehicle_type_name": name,
+			"capacity_boxes": capacity_boxes or 0,
+			"capacity_tonnes": capacity_tonnes or 0,
+			"mode": mode or "",
+		}
+	)
 	doc.insert(ignore_permissions=True)
 	return _serialize_vehicle_type(doc)
 

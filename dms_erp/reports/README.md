@@ -74,3 +74,15 @@ same source instead of two copies of the same SQL:
   `reports` depends on how it's computed.
 
 All 20 BRD reports now have an endpoint.
+
+Added for Phase 1 task 4.13 / BRD C.12.2: `open_inquiries_report`, `advance_payment_pending_report`
+(sales_reports) and `batch_wise_stock_report` (warehouse_reports, which also covers "fragmented
+quantity"). The batch report reuses `warehouse.utils.list_stock_lots`, the same per-batch ledger
+aggregate as the Stock screen and the dealer portal, so the numbers agree; it sums only positive
+batches, like those screens, so an item with a negative batch can show slightly more than its Bin
+total.
+
+`warehouse_reports` keeps its own `CLEARANCE_STOCK_FLOOR_BOXES` (100, the reorder engine's old flat
+safety floor). It used to import `reorder_api.SAFETY_STOCK_BOXES`, which was removed when the
+reorder engine moved to a per-item months-of-sales target — that broken import stopped every
+warehouse report from loading.

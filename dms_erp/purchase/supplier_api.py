@@ -16,10 +16,83 @@ identification) and the material-ready contact (vendor enquiry/follow-up).
 group, country, GPS, address, contact, disabled.
 """
 
+import re
+
 import frappe
 from frappe import _
 
 SUPPLIER_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
+
+
+_IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
+
+
+def _supplier_banks(suppliers: list[str]) -> dict[str, dict]:
+	"""Client finding 7.3 -- each supplier's own (non-company) default Bank Account, in
+	ERPNext's native Bank Account doctype so Payment Entries see the same record."""
+	if not suppliers:
+		return {}
+	out = {}
+	for r in frappe.get_all(
+		"Bank Account",
+		filters={"party_type": "Supplier", "party": ["in", suppliers], "is_company_account": 0, "disabled": 0},
+		fields=["name", "party", "bank", "bank_account_no", "branch_code", "account_name", "is_default"],
+		order_by="is_default desc, creation asc",
+	):
+		out.setdefault(
+			r.party,
+			{"bankName": r.bank, "accountNumber": r.bank_account_no, "ifsc": r.branch_code, "accountName": r.account_name},
+		)
+	return out
+
+
+def _set_supplier_bank(supplier: str, bank: dict | None) -> None:
+	"""Upserts the supplier's default Bank Account; an empty/None `bank` removes it.
+	Only the record this app manages (the supplier's default, non-company account) is
+	touched -- any other bank accounts set up in Desk are left alone."""
+	existing = frappe.db.get_value(
+		"Bank Account",
+		{"party_type": "Supplier", "party": supplier, "is_company_account": 0, "is_default": 1},
+		"name",
+	)
+	bank = bank or {}
+	bank_name = (bank.get("bankName") or "").strip()
+	account_no = (bank.get("accountNumber") or "").strip()
+	ifsc = (bank.get("ifsc") or "").strip().upper()
+	if not (bank_name or account_no or ifsc):
+		if existing:
+			frappe.delete_doc("Bank Account", existing, ignore_permissions=True)
+		return
+	if not bank_name or not account_no:
+		frappe.throw(_("Enter both the bank name and the account number."), frappe.ValidationError)
+	if ifsc and not _IFSC_RE.match(ifsc):
+		frappe.throw(_("{0} isn't a valid IFSC code (11 characters, like HDFC0001234).").format(ifsc), frappe.ValidationError)
+	if not frappe.db.exists("Bank", bank_name):
+		frappe.get_doc({"doctype": "Bank", "bank_name": bank_name}).insert(ignore_permissions=True)
+
+	values = {
+		"bank": bank_name,
+		"bank_account_no": account_no,
+		"branch_code": ifsc or None,
+		"party_type": "Supplier",
+		"party": supplier,
+		"is_company_account": 0,
+		"is_default": 1,
+	}
+	if existing:
+		doc = frappe.get_doc("Bank Account", existing)
+		doc.update(values)
+		doc.save(ignore_permissions=True)
+	else:
+		supplier_name = frappe.db.get_value("Supplier", supplier, "supplier_name") or supplier
+		frappe.get_doc({"doctype": "Bank Account", "account_name": (bank.get("accountName") or supplier_name).strip(), **values}).insert(
+			ignore_permissions=True
+		)
+
+
+def _gstin_field() -> str | None:
+	"""india_compliance adds Supplier.gstin; a site without that app has no GSTIN field."""
+	return "gstin" if frappe.get_meta("Supplier").has_field("gstin") else None
 
 
 def _assert_can_manage_suppliers():
@@ -40,7 +113,16 @@ def _serialize(
 	contact_person: str | None = None,
 	moq: int = 0,
 	production_moq: int = 0,
+	gstin: str | None = None,
+	phone: str | None = None,
+	email: str | None = None,
+	bank: dict | None = None,
 ) -> dict:
+	# Unset Float fields read back as 0.0, which the staff app showed as "GPS 0, 0" for
+	# every supplier without a location -- 0,0 (open sea off West Africa) is never a real
+	# factory, so treat it as "not captured".
+	if not latitude and not longitude:
+		latitude = longitude = None
 	return {
 		"id": name,
 		"name": supplier_name,
@@ -58,6 +140,13 @@ def _serialize(
 		# BRD C.4.2 -- this vendor's own floor, between the Item's and the company default.
 		"moq": moq or 0,
 		"productionMoq": production_moq or 0,
+		# Client finding 7.3. GSTIN lives on india_compliance's own Supplier.gstin field
+		# (validated by that app), so it's None on a site without india_compliance.
+		"gstin": gstin,
+		"phone": phone,
+		"email": email,
+		# {bankName, accountNumber, ifsc, accountName} or None -- see _supplier_banks.
+		"bank": bank,
 	}
 
 
@@ -82,9 +171,13 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			"custom_contact_person",
 			"custom_moq",
 			"custom_production_moq",
+			"custom_phone",
+			"custom_email",
+			*([_gstin_field()] if _gstin_field() else []),
 		],
 		order_by="supplier_name asc",
 	)
+	banks = _supplier_banks([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -99,6 +192,10 @@ def list_suppliers(search: str | None = None, disabled: bool = False):
 			r.custom_contact_person,
 			r.custom_moq,
 			r.custom_production_moq,
+			r.get("gstin"),
+			r.custom_phone,
+			r.custom_email,
+			banks.get(r.name),
 		)
 		for r in rows
 	]
@@ -120,6 +217,10 @@ def get_supplier(supplier: str):
 		doc.custom_contact_person,
 		doc.custom_moq,
 		doc.custom_production_moq,
+		doc.get("gstin"),
+		doc.get("custom_phone"),
+		doc.get("custom_email"),
+		_supplier_banks([doc.name]).get(doc.name),
 	)
 
 
@@ -146,6 +247,10 @@ def create_supplier(
 	contact_person: str | None = None,
 	moq: int = 0,
 	production_moq: int = 0,
+	gstin: str | None = None,
+	phone: str | None = None,
+	email: str | None = None,
+	bank: dict | None = None,
 ):
 	"""BRD MD-02 — create a supplier (a native Supplier). `group` falls back to the site's
 	Buying Settings default when omitted."""
@@ -177,16 +282,26 @@ def create_supplier(
 		values["custom_moq"] = moq
 	if production_moq:
 		values["custom_production_moq"] = production_moq
+	if gstin and _gstin_field():
+		values["gstin"] = gstin.strip().upper()
+	if phone:
+		values["custom_phone"] = phone.strip()
+	if email:
+		values["custom_email"] = email.strip()
 
 	doc = frappe.get_doc(values)
 	doc.insert(ignore_permissions=True)
+	if bank:
+		_set_supplier_bank(doc.name, frappe.parse_json(bank) if isinstance(bank, str) else bank)
 	return get_supplier(doc.name)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_supplier(supplier: str, patch: dict):
 	"""Patch keys: name, group, country, latitude, longitude, disabled, insuranceHolder,
-	address, contactPerson."""
+	address, contactPerson, moq, productionMoq, gstin, phone, email, bank. An empty string
+	clears gstin / phone / email (an omitted key leaves it as is); `bank` is
+	{bankName, accountNumber, ifsc} and null/empty removes the supplier's bank account."""
 	_assert_can_manage_suppliers()
 
 	field_map = {
@@ -218,5 +333,13 @@ def update_supplier(supplier: str, patch: dict):
 			doc.set(field_map[key], value)
 		elif key == "disabled":
 			doc.disabled = 1 if value else 0
+		elif key == "gstin" and _gstin_field():
+			doc.set("gstin", value.strip().upper() if value else None)
+		elif key == "phone":
+			doc.set("custom_phone", value.strip() if value else None)
+		elif key == "email":
+			doc.set("custom_email", value.strip() if value else None)
 	doc.save(ignore_permissions=True)
+	if "bank" in patch:
+		_set_supplier_bank(doc.name, patch["bank"])
 	return get_supplier(doc.name)

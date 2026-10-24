@@ -383,7 +383,15 @@ class TestProducts(FrappeTestCase):
 		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, "bhai kal wale rate wapas bhej do"))
 		self.assertIsNone(catalog_api.resolve_item_mention(self.dealer, ""))
 
+	def _drop_items_named(self, *names):
+		"""Items persist across this class's tests, and several of them create an item with
+		the same name ("Royal Glassy", "Nordic Oak Glossy"). The resolver then sees a real
+		tie between the two copies, which is not what any one of these tests is about."""
+		for code in frappe.get_all("Item", filters={"item_name": ["in", names]}, pluck="name"):
+			frappe.delete_doc("Item", code, force=True, ignore_permissions=True)
+
 	def test_resolve_item_by_name_tolerates_a_minor_typo(self):
+		self._drop_items_named("Royal Glassy")
 		catalog_api.create_product(
 			code="PROD-TEST-N",
 			name="Royal Glassy",
@@ -404,6 +412,7 @@ class TestProducts(FrappeTestCase):
 			self.assertEqual(result["item"]["id"], "PROD-TEST-N")
 
 	def test_resolve_item_by_name_finds_the_name_inside_a_hindi_sentence(self):
+		self._drop_items_named("Royal Glassy")
 		catalog_api.create_product(
 			code="PROD-TEST-HI",
 			name="Royal Glassy",
@@ -575,6 +584,7 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(outside["item"]["id"], "PROD-TEST-OUTSIDE")
 
 	def test_resolve_item_by_name_asks_to_confirm_when_two_items_are_a_close_tie(self):
+		self._drop_items_named("Nordic Oak Glossy", "Nordic Oak Matte")
 		# BRD C.2.1's own example: "one finish or sub-type mistaken for another" --
 		# two items from the same family, a query naming only the shared part must
 		# never silently guess which one was meant.
@@ -611,6 +621,7 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(candidate_ids, {"PROD-TEST-GLOSSY", "PROD-TEST-MATTE"})
 
 	def test_resolve_item_by_name_asks_to_confirm_on_a_low_confidence_single_match(self):
+		self._drop_items_named("Nordic Oak Glossy", "Nordic Oak Matte")
 		# Only one plausible item exists, but the match is a "mismatch" per BRD
 		# C.2.1's own wording (below the confidence bar) -- still not confident
 		# enough to answer directly, even with no competing candidate.
@@ -635,6 +646,7 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual([c["id"] for c in result["candidates"]], ["PROD-TEST-LOWCONF"])
 
 	def test_resolve_item_by_name_returns_none_when_even_the_best_guess_is_too_weak(self):
+		self._drop_items_named("Nordic Oak Glossy", "Nordic Oak Matte")
 		catalog_api.create_product(
 			code="PROD-TEST-TOOFAR",
 			name="Nordic Oak Glossy",
@@ -844,7 +856,17 @@ class TestProducts(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			catalog_api.update_product("PROD-TEST-A", {"seriesRef": "No Such Series"})
 
-	def _fake_upload(self, filename=b"fake-image-bytes", name="swatch.jpg"):
+	def _fake_upload(self, filename=None, name="swatch.jpg"):
+		if filename is None:
+			# A real (1x1) JPEG: File.save_file decodes .jpg uploads to strip EXIF when
+			# that System Setting is on, and fake bytes aren't a decodable image.
+			import io
+
+			from PIL import Image
+
+			buf = io.BytesIO()
+			Image.new("RGB", (1, 1)).save(buf, format="JPEG")
+			filename = buf.getvalue()
 		fake_file = MagicMock()
 		fake_file.filename = name
 		fake_file.stream.read.return_value = filename
@@ -862,8 +884,11 @@ class TestProducts(FrappeTestCase):
 			series_ref=self.series,
 		)
 
-		with patch.object(frappe.local, "request") as mock_request:
+		with patch.object(frappe.local, "request", create=True) as mock_request:
 			mock_request.files = {"file": self._fake_upload()}
+			# Falsy host: frappe.utils.get_url() otherwise builds the file URL from the
+			# mock's auto-created .host MagicMock, which File's path check then rejects.
+			mock_request.host = None
 			result = catalog_api.upload_product_image(
 				item="PROD-TEST-IMG-1", image_type="Application", is_primary="true"
 			)
@@ -885,7 +910,7 @@ class TestProducts(FrappeTestCase):
 			series_ref=self.series,
 		)
 
-		with patch.object(frappe.local, "request") as mock_request:
+		with patch.object(frappe.local, "request", create=True) as mock_request:
 			mock_request.files = {"file": self._fake_upload()}
 			with self.assertRaises(frappe.ValidationError):
 				catalog_api.upload_product_image(item="PROD-TEST-IMG-1", image_type="Bogus")
@@ -902,7 +927,7 @@ class TestProducts(FrappeTestCase):
 			series_ref=self.series,
 		)
 
-		with patch.object(frappe.local, "request") as mock_request:
+		with patch.object(frappe.local, "request", create=True) as mock_request:
 			mock_request.files = {}
 			with self.assertRaises(frappe.ValidationError):
 				catalog_api.upload_product_image(item="PROD-TEST-IMG-1")
@@ -944,3 +969,74 @@ class TestProducts(FrappeTestCase):
 			catalog_api.upload_product_image(item="PROD-TEST-IMG-1")
 		with self.assertRaises(frappe.PermissionError):
 			catalog_api.remove_product_image(item="PROD-TEST-IMG-1", image="/files/a.jpg")
+
+	def _make_bulk_test_items(self):
+		for code in ("PROD-TEST-C", "PROD-TEST-D"):
+			catalog_api.create_product(
+				code=code,
+				name=f"Bulk Test {code}",
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+				pieces_per_box=4,
+			)
+		catalog_api.update_product(
+			"PROD-TEST-C",
+			{
+				"altItemId": "PROD-TEST-D",
+				"dealerCodes": [{"dealer": self.dealer, "customer_item_code": "BULK-1", "sample_issued": True}],
+			},
+		)
+		pricing_api.approve_price(item="PROD-TEST-C", final_price=500, reason="Launch")
+
+	def test_bulk_serializer_matches_one_by_one(self):
+		# list_all_products_bulk feeds the same Product type every staff screen reads,
+		# so it must be key-for-key what _serialize/get_product returns -- including
+		# the two-way alternative seen from the other side, and child tables.
+		self._make_bulk_test_items()
+		codes = ["PROD-TEST-C", "PROD-TEST-D"]
+
+		bulk = catalog_api._serialize_many(codes)
+
+		self.assertEqual(bulk, [catalog_api.get_product(code) for code in codes])
+		self.assertEqual(bulk[0]["altItemId"], "PROD-TEST-D")
+		self.assertEqual(bulk[1]["altItemId"], "PROD-TEST-C")
+		self.assertEqual(bulk[0]["dealerPrice"], 500)
+		self.assertEqual(bulk[0]["dealerCodes"][0]["customerItemCode"], "BULK-1")
+
+	def test_list_all_products_bulk_returns_every_match_unpaginated(self):
+		self._make_bulk_test_items()
+		result = catalog_api.list_all_products_bulk(search="Bulk Test PROD-TEST")
+		self.assertEqual([p["code"] for p in result], ["PROD-TEST-C", "PROD-TEST-D"])
+
+	def test_get_item_prices_lists_every_selling_price_list(self):
+		self._make_bulk_test_items()
+		pricing_api.set_dealer_tier_price("PROD-TEST-C", "Master Dealer", 450)
+
+		prices = {p["priceList"]: p["rate"] for p in catalog_api.get_item_prices("PROD-TEST-C")}
+
+		self.assertEqual(prices["Dealer"], 500)
+		self.assertEqual(prices["Master Dealer"], 450)
+		self.assertEqual(catalog_api.get_item_prices("PROD-TEST-D"), [])
+
+	def test_list_item_group_names_returns_every_leaf_category_unpaginated(self):
+		names = catalog_api.list_item_group_names()
+		self.assertEqual(len(names), frappe.db.count("Item Group", {"is_group": 0}))
+		self.assertNotIn("All Item Groups", names)
+
+	def test_create_item_group_adds_a_leaf_category_and_refuses_duplicates(self):
+		name = "Product Test New Category"
+		if frappe.db.exists("Item Group", name):
+			frappe.delete_doc("Item Group", name, force=True, ignore_permissions=True)
+		created = catalog_api.create_item_group(name)
+		self.assertEqual(created, name)
+		self.assertFalse(frappe.db.get_value("Item Group", name, "is_group"))
+		self.assertIn(name, catalog_api.list_item_group_names())
+		with self.assertRaises(frappe.DuplicateEntryError):
+			catalog_api.create_item_group(name)
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			catalog_api.create_item_group("Product Test Denied Category")

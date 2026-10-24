@@ -83,6 +83,9 @@ CUSTOM_FIELDS = {
 			"in_standard_filter": 1,
 			"insert_after": "dms_fulfillment_section",
 			"allow_on_submit": 1,
+			# Moved only through order_api.advance_order_stage, which applies the cancel
+			# approval (BRD C.11) and the advance gate (C.3.4); editable in Desk it skipped both.
+			"read_only": 1,
 		},
 		{
 			"fieldname": "custom_vehicle",
@@ -132,6 +135,9 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Check",
 			"label": "Advance Payment Confirmed",
 			"default": "0",
+			# Set only by order_api.confirm_advance_payment (Management only); editable in
+			# Desk it let anyone open the dispatch gate (BRD C.3.4).
+			"read_only": 1,
 			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
 			"insert_after": "custom_order_channel",
 		},
@@ -217,6 +223,16 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.13 — the dealer portal's login identifier and OTP delivery target (see auth.dealer_api). Not used elsewhere in the app.",
 			"insert_after": "custom_salesperson",
 		},
+		# Client requirement 8.9 -- several people at one dealer enquire from their own
+		# phones. Every number here works for OTP login and WhatsApp exactly like
+		# custom_phone (phone_utils.dealer_for_phone checks both).
+		{
+			"fieldname": "custom_additional_phones",
+			"fieldtype": "Table",
+			"label": "Additional Phone Numbers",
+			"options": "Dealer Phone",
+			"insert_after": "custom_phone",
+		},
 		{
 			"fieldname": "custom_price_visible",
 			"fieldtype": "Check",
@@ -273,6 +289,67 @@ CUSTOM_FIELDS = {
 			"in_standard_filter": 1,
 			"description": "MOM §3.7 -- no activity in DMS Sales Settings.dealer_inactivity_days (90 by default). A flag only: nothing is blocked or disabled by it, and it clears itself the next day the dealer is active again.",
 			"insert_after": "custom_last_activity_on",
+		},
+	],
+}
+
+
+# ERP -> Tally sync (see sales/tally_sync.py). Everything but the opt-in tick is written
+# only by the sync itself, hence read-only + allow_on_submit. NOT created on migrate
+# while the sync is disabled (see hooks.py) -- deliberately kept out of CUSTOM_FIELDS so
+# a live site gets no Tally fields at all until it's switched on.
+TALLY_SYNC_CUSTOM_FIELDS = {
+	"Sales Invoice": [
+		{
+			"fieldname": "sync_to_tally",
+			"fieldtype": "Check",
+			"label": "Sync to Tally",
+			"default": "0",
+			"allow_on_submit": 1,
+			"description": "Send this invoice to Tally as a Sales voucher once it is submitted (re-tick after a failure to retry).",
+			"insert_after": "due_date",
+		},
+		{
+			"fieldname": "tally_sync_status",
+			"fieldtype": "Select",
+			"label": "Tally Sync Status",
+			"options": "\nPending\nSynced\nFailed\nSkipped",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"in_standard_filter": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.sync_to_tally || doc.tally_sync_status",
+			"insert_after": "sync_to_tally",
+		},
+		{
+			"fieldname": "tally_synced_voucher_no",
+			"fieldtype": "Data",
+			"label": "Tally Voucher (synced)",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_synced_voucher_no",
+			"insert_after": "tally_sync_status",
+		},
+		{
+			"fieldname": "tally_synced_on",
+			"fieldtype": "Datetime",
+			"label": "Synced to Tally On",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_synced_on",
+			"insert_after": "tally_synced_voucher_no",
+		},
+		{
+			"fieldname": "tally_sync_error",
+			"fieldtype": "Small Text",
+			"label": "Tally Sync Message",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "eval:doc.tally_sync_error",
+			"insert_after": "tally_synced_on",
 		},
 	],
 }
