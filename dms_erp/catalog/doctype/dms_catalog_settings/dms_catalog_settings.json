@@ -1,0 +1,62 @@
+{
+ "actions": [],
+ "creation": "2026-10-25 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "status_labels"
+ ],
+ "fields": [
+  {
+   "description": "BRD C.10.5 asks for 4 client-specific display labels (e.g. Pacific's own \"PDC\"/\"Against Order\" wording) over this app's real, unchanged 5-state internal lifecycle (dms_erp.catalog.utils.DISCONTINUATION_STATUSES) -- remapping the states themselves needs Pacific's sign-off and is out of scope (see withdrawal_api.py's module docstring). This app is white-labeled: a different client's own preferred wording for each status is config, not code -- hardcoding \"PDC\" (short for \"Pacific-discontinued\") into shared code would bake this one client's name into every deployment. A status left blank or with no row here displays as its own raw internal value -- see catalog.utils.status_label.",
+   "fieldname": "status_labels",
+   "fieldtype": "Table",
+   "label": "Discontinuation Status Labels",
+   "options": "DMS Catalog Status Label"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Catalog",
+ "name": "DMS Catalog Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Purchase",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

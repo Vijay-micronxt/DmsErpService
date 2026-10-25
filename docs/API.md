@@ -507,7 +507,7 @@ Thin layer over native Supplier — every other module already treats a supplier
 
 ## Products / Item Master
 
-Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are both real, enforced downstream (reorder engine, quotation gate) — not display labels.
+Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are both real, enforced downstream (reorder engine, quotation gate) — not display labels. `status` is that internal value; `statusLabel` is its BRD C.10.5 display label, white-labeled per-deployment via `DMS Catalog Settings` (see `get_status_label_map` below) and falling back to the raw `status` value when unconfigured.
 
 #### GET `dms_erp.catalog.api.list_products`
 
@@ -535,7 +535,7 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
     "seriesRef": "Marbella", "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
     "category": "Vitrified", "swatch": "#D8C7A8",
     "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
-    "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
+    "dealerPrice": 560, "status": "Active", "statusLabel": "Active", "isReorderable": true, "isSellable": true,
     "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
     "leadTimeDays": 21, "altItemId": null,
     "dealerCodes": [{"dealer": "Anand Tiles", "customerItemCode": "AT-PVT-6060", "sampleIssued": true}],
@@ -640,9 +640,20 @@ its name and parent worth a second call for.
 (same shape as get_product)
 ```
 
-> status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back.
+> status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back. These are the real internal values `patch.status` is validated against — `statusLabel` (BRD C.10.5's display label) is never a settable key.
 
 > `dealerCodes` / `images` replace the entire child table each call (same convention as Pickup Run's `lines`), with rows shaped `{dealer, customer_item_code, sample_issued}` / `{image, image_type, is_primary}` — not the camelCase `_serialize` output shape.
+
+
+#### GET `dms_erp.catalog.api.get_status_label_map`
+
+**BRD C.10.5's configured display label for each real status** — for screens needing the whole set (filter dropdowns, the item edit form) rather than one resolved label already riding on a loaded product (`statusLabel` on `get_product`/`list_all_products_bulk`/`list_products` already covers that case). White-labeled per-deployment via the `DMS Catalog Settings` Single (Desk-only, no frontend settings screen); a status with no configured row falls back to its own raw internal value.
+
+**Response**
+
+```json
+{ "Active": "Active", "Partially Discontinued": "PDC", "Factory Discontinued": "Against Order", "Display Removal Pending": "Display Removal Pending", "Pulled Back": "Pulled Back" }
+```
 
 
 #### POST `dms_erp.catalog.api.upload_product_image`
@@ -2881,6 +2892,7 @@ _No parameters._
 
 > ⚠️ Factory Discontinued / Display Removal Pending / Pulled Back items still appear in this array (suggestedQty 0, nonReorderable true) rather than being filtered out entirely
 > openPurchaseOrderQty already nets out of suggestedQty, so an item fully covered by an open PO naturally drops to 0 without a separate "covered" flag
+> A non-reorderable item with missed demand gets a `"<label> — demand exists but not reorderable"` reason — `<label>` is the item's BRD C.10.5 display label (`catalog.utils.status_label`, white-labeled per `DMS Catalog Settings`), not its raw internal status value
 
 
 #### POST `dms_erp.sales.inquiry_api.convert_to_purchase_requirement` · **PARTIAL**

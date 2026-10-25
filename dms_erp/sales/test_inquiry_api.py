@@ -178,6 +178,22 @@ class TestInquiryApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=5, source="Phone")
 
+	def test_create_inquiry_rejection_uses_the_configured_white_label_wording(self):
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Pulled Back", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		try:
+			item = make_item("INQ-PULLED-LABELLED", "Vitrified")
+			frappe.db.set_value("Item", item, "custom_discontinuation_status", "Pulled Back")
+
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=5, source="Phone")
+			self.assertIn("PDC", str(ctx.exception))
+		finally:
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
+
 	def test_create_inquiry_accepts_a_custom_style_request_with_no_item(self):
 		# ISS-2026-00636 / MOM 3.6 -- a design not in the item master at all.
 		inquiry = inquiry_api.create_inquiry(

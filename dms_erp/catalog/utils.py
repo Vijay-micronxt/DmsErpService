@@ -36,6 +36,22 @@ def is_sellable(status: str) -> bool:
 	return status not in _NOT_SELLABLE
 
 
+def status_label(status: str) -> str:
+	"""BRD C.10.5's client-facing label (e.g. Pacific's "PDC") for an internal
+	discontinuation status -- white-labeled via DMS Catalog Settings, never the
+	value is_reorderable/is_sellable/withdrawal_api match on or anything stores.
+	No configured row (including every status on a fresh site) falls back to the
+	raw internal value -- unconfigured is a no-op, not a Pacific-branded default."""
+	rows = frappe.get_all(
+		"DMS Catalog Status Label",
+		filters={"parent": "DMS Catalog Settings", "status": status},
+		fields=["label"],
+		order_by="idx desc",
+		limit=1,
+	)
+	return (rows[0].label if rows else None) or status
+
+
 def item_weight_per_box_kg(item_code: str) -> float | None:
 	"""BRD C.1.3: an item's standard weight — the fallback every transaction
 	document uses before a real batch (with its own possibly-different

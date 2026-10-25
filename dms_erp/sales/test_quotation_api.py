@@ -190,6 +190,21 @@ class TestQuotationApi(FrappeTestCase):
 		finally:
 			frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Active")
 
+	def test_create_quotation_rejection_uses_the_configured_white_label_wording(self):
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Pulled Back", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Pulled Back")
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+			self.assertIn("PDC", str(ctx.exception))
+		finally:
+			frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Active")
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
+
 	def test_create_quotation_from_inquiry_marks_it_quoted(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=50, source="Phone")
 		created = quotation_api.create_quotation(
