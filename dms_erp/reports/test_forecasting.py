@@ -6,7 +6,13 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.reports import forecasting
 from dms_erp.sales import inquiry_api, order_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestForecasting(FrappeTestCase):
@@ -18,6 +24,7 @@ class TestForecasting(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Forecasting Test Supplier")
 		cls.dealer = make_dealer("Forecasting Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -28,7 +35,14 @@ class TestForecasting(FrappeTestCase):
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=120, source="Phone")
-		order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 120}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 120}],
+			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+		)
 
 		result = forecasting.demand_forecast(weeks_ahead=4)
 		row = next(r for r in result if r["productId"] == item)
@@ -47,7 +61,13 @@ class TestForecasting(FrappeTestCase):
 
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=900, source="Phone")
 		order_api.create_order(
-			dealer=self.dealer, lines=[{"item": item, "qty": 900}], expected_dispatch="2026-09-01", inquiry=inquiry["id"], channel="Bulk"
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 900}],
+			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+			channel="Bulk",
 		)
 
 		result = forecasting.demand_forecast()

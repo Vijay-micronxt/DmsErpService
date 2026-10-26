@@ -8,7 +8,13 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 SERIES = "Withdrawal Test Series"
 
@@ -22,6 +28,7 @@ class TestWithdrawalApi(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Withdrawal Test Supplier")
 		cls.dealer = make_dealer("Withdrawal Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -44,7 +51,12 @@ class TestWithdrawalApi(FrappeTestCase):
 	def _delivered_sale(self, item, qty, days_ago):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=qty, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=today(), inquiry=inquiry["id"]
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": qty}],
+			expected_dispatch=today(),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
 		)
 		order_api.confirm_advance_payment(order["id"])
 		for stage in ("Picking", "Ready to Dispatch", "Dispatched", "Delivered"):

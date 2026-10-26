@@ -7,7 +7,14 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, quotation_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.sales.dealer_address_api import create_dealer_address
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 # Relative to today: fixed dates rotted into the past, and ERPNext then refuses the order
@@ -26,6 +33,7 @@ class TestQuotationApi(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Quotation Test Supplier")
 		cls.dealer = make_dealer("Quotation Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 		cls.priced_item = make_item("QTN-PRICED", "Vitrified")
 		pricing_api.ensure_price_record(cls.priced_item, cls.supplier, 400, 25, "2026-08-01")
@@ -44,24 +52,36 @@ class TestQuotationApi(FrappeTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
+	def _create_quotation(self, dealer=None, **kwargs):
+		"""BRD C.3.3 made customer_address/shipping_address_name mandatory on
+		create_quotation -- every test below that isn't specifically exercising
+		that validation goes through here instead of calling create_quotation
+		directly, so a real Billing + Shipping Address is always on file for
+		whichever dealer is quoting."""
+		dealer = dealer or self.dealer
+		billing, shipping = make_dealer_addresses(dealer)
+		kwargs.setdefault("customer_address", billing)
+		kwargs.setdefault("shipping_address_name", shipping)
+		return quotation_api.create_quotation(dealer=dealer, **kwargs)
+
 	def test_create_quotation_exposes_created_at_timestamp(self):
 		# Quotation.transaction_date is a plain Date field (no time-of-day) --
 		# createdAt is the actual creation Datetime, for tables that need to show
 		# time alongside date.
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)
 		self.assertIsNotNone(quotation["createdAt"])
 
 	def test_create_quotation_applies_markup_to_approved_price(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12
 		)
 		self.assertEqual(quotation["lines"][0]["rate"], 560)  # round(500 * 1.12)
 		self.assertEqual(quotation["channel"], "Retail")  # default
 
 	def test_create_quotation_stores_delivery_pincode(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12, delivery_pincode="560001"
 		)
 		self.assertEqual(quotation["deliveryPincode"], "560001")
@@ -123,14 +143,14 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_quotation_line_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_weight_per_box_kg", 28)
-		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
+		quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
 		self.assertEqual(quotation["lines"][0]["weightPerBoxKg"], 28)
 		self.assertEqual(quotation["lines"][0]["totalWeightKg"], 280)
 
 	def test_quotation_line_carries_the_items_pieces_and_sqft(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_pieces_per_box", 4)
 		frappe.db.set_value("Item", self.priced_item, "custom_sqft_per_box", 15.5)
-		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
+		quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12)
 		self.assertEqual(quotation["lines"][0]["piecesPerBox"], 4)
 		self.assertEqual(quotation["lines"][0]["totalPieces"], 40)
 		self.assertEqual(quotation["lines"][0]["sqftPerBox"], 15.5)
@@ -139,7 +159,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertAlmostEqual(quotation["lines"][0]["totalSqm"], 14.4, places=2)
 
 	def test_create_quotation_accepts_bulk_channel_and_carries_into_order(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 500}], markup_pct=8, channel="Bulk"
 		)
 		self.assertEqual(quotation["channel"], "Bulk")
@@ -149,20 +169,20 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_rejects_invalid_channel(self):
 		with self.assertRaises(frappe.ValidationError):
-			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10, channel="Wholesale")
+			self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10, channel="Wholesale")
 
 	def test_create_quotation_auto_classifies_bulk_from_the_dealers_type(self):
 		bulk_dealer = make_dealer("Quotation Bulk-Type Dealer")
 		dealer_catalog_api.set_product_visibility(bulk_dealer, self.priced_item, True)
 		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Bulk")
 
-		quotation = quotation_api.create_quotation(dealer=bulk_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		quotation = self._create_quotation(dealer=bulk_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 		self.assertEqual(quotation["channel"], "Bulk")
 
 	def test_create_quotation_auto_classifies_bulk_from_the_items_series_threshold(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_bulk_qty_threshold", 50)
 		try:
-			quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=10)
+			quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=10)
 			self.assertEqual(quotation["channel"], "Bulk")
 		finally:
 			frappe.db.set_value("Item", self.priced_item, "custom_bulk_qty_threshold", 0)
@@ -174,11 +194,11 @@ class TestQuotationApi(FrappeTestCase):
 		dealer_catalog_api.set_product_visibility(other_dealer, self.second_item, True)
 		dealer_catalog_api.set_product_visibility(other_dealer, self.priced_item, False)
 		with self.assertRaises(frappe.PermissionError):
-			quotation_api.create_quotation(dealer=other_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+			self._create_quotation(dealer=other_dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 
 	def test_create_quotation_rejects_unpriced_item(self):
 		with self.assertRaises(frappe.ValidationError):
-			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.unpriced_item, "qty": 10}], markup_pct=10)
+			self._create_quotation(dealer=self.dealer, lines=[{"item": self.unpriced_item, "qty": 10}], markup_pct=10)
 
 	def test_create_quotation_rejects_pulled_back_item_even_when_still_visible(self):
 		frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Pulled Back")
@@ -186,7 +206,7 @@ class TestQuotationApi(FrappeTestCase):
 			# Still assigned/visible — set_product_visibility isn't retroactively cleaned up.
 			self.assertTrue(dealer_catalog_api.is_visible(self.dealer, self.priced_item))
 			with self.assertRaises(frappe.ValidationError):
-				quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+				self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 		finally:
 			frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Active")
 
@@ -197,7 +217,7 @@ class TestQuotationApi(FrappeTestCase):
 		frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Pulled Back")
 		try:
 			with self.assertRaises(frappe.ValidationError) as ctx:
-				quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+				self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 			self.assertIn("PDC", str(ctx.exception))
 		finally:
 			frappe.db.set_value("Item", self.priced_item, "custom_discontinuation_status", "Active")
@@ -207,7 +227,7 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_from_inquiry_marks_it_quoted(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=50, source="Phone")
-		created = quotation_api.create_quotation(
+		created = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 50}], markup_pct=10, inquiries=[inquiry["id"]]
 		)
 		updated = inquiry_api.get_inquiry(inquiry["id"])
@@ -217,7 +237,7 @@ class TestQuotationApi(FrappeTestCase):
 	def test_create_quotation_merges_two_inquiries_from_the_same_dealer(self):
 		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
 		i2 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.second_item, qty=15, source="Phone")
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
 			markup_pct=10,
@@ -234,7 +254,7 @@ class TestQuotationApi(FrappeTestCase):
 		i1 = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=20, source="Phone")
 		i2 = inquiry_api.create_inquiry(dealer=other_dealer, item=self.second_item, qty=15, source="Phone")
 		with self.assertRaises(frappe.ValidationError):
-			quotation_api.create_quotation(
+			self._create_quotation(
 				dealer=self.dealer,
 				lines=[{"item": self.priced_item, "qty": 20}, {"item": self.second_item, "qty": 15}],
 				markup_pct=10,
@@ -242,7 +262,7 @@ class TestQuotationApi(FrappeTestCase):
 			)
 
 	def test_add_quotation_line_amends_and_reprices_every_line(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 100}], markup_pct=12
 		)
 
@@ -256,7 +276,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value("Quotation", quotation["id"], "docstatus"), 2)
 
 	def test_remove_quotation_line_drops_it_and_rejects_last_line(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 100}, {"item": self.second_item, "qty": 20}],
 			markup_pct=10,
@@ -270,7 +290,7 @@ class TestQuotationApi(FrappeTestCase):
 			quotation_api.remove_quotation_line(amended["id"], self.priced_item)
 
 	def test_update_quotation_line_qty_changes_only_that_line(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 100}, {"item": self.second_item, "qty": 20}],
 			markup_pct=10,
@@ -291,7 +311,7 @@ class TestQuotationApi(FrappeTestCase):
 		# production the moment a dealer tried to change a line's quantity, even
 		# though the quotation with that delivery date had been created successfully
 		# moments earlier (see sales/setup.py's own docstring for the full story).
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 100, "delivery_date": LINE_DELIVERY}],
 			markup_pct=10,
@@ -304,27 +324,27 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(str(line["deliveryDate"]), LINE_DELIVERY)
 
 	def test_edit_rejects_already_ordered_quotation(self):
-		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 		quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 5)
 
 	def test_update_quotation_status_marks_lost(self):
-		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 
 		updated = quotation_api.update_quotation_status(quotation["id"], "Lost", detailed_reason="Dealer chose a competitor")
 		self.assertEqual(updated["status"], "Lost")
 
 	def test_update_quotation_status_rejects_other_statuses(self):
-		quotation = quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
+		quotation = self._create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10)
 
 		with self.assertRaises(frappe.ValidationError):
 			quotation_api.update_quotation_status(quotation["id"], "Open")
 
 	def test_convert_to_order_creates_sales_order_and_closes_inquiry(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=30, source="Phone")
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 30}], markup_pct=15, inquiries=[inquiry["id"]]
 		)
 
@@ -344,7 +364,7 @@ class TestQuotationApi(FrappeTestCase):
 		dealer = make_dealer("Quotation Pagination Dealer")
 		dealer_catalog_api.set_product_visibility(dealer, self.priced_item, True)
 		created = [
-			quotation_api.create_quotation(dealer=dealer, lines=[{"item": self.priced_item, "qty": 5}], markup_pct=10)
+			self._create_quotation(dealer=dealer, lines=[{"item": self.priced_item, "qty": 5}], markup_pct=10)
 			for _ in range(3)
 		]
 
@@ -360,7 +380,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(found["items"][0]["id"], created[0]["id"])
 
 	def test_create_quotation_applies_line_level_discount(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
 			markup_pct=12,
@@ -372,14 +392,14 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_rejects_an_out_of_range_discount(self):
 		with self.assertRaises(frappe.ValidationError):
-			quotation_api.create_quotation(
+			self._create_quotation(
 				dealer=self.dealer,
 				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": -5}],
 				markup_pct=12,
 			)
 
 	def test_create_quotation_respects_a_per_line_delivery_date(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
@@ -387,7 +407,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(str(quotation["lines"][0]["deliveryDate"]), LINE_DELIVERY)
 
 	def test_add_quotation_line_preserves_discount_and_delivery_date_on_untouched_lines(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 100, "discount_percentage": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
@@ -403,7 +423,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(by_item[self.priced_item]["rate"], 504)  # round(560 * 0.9), rebuilt not stale
 
 	def test_convert_to_order_carries_discount_and_delivery_date_via_native_mapper(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10, "delivery_date": LINE_DELIVERY}],
 			markup_pct=12,
@@ -418,7 +438,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(str(line["deliveryDate"]), LINE_DELIVERY)
 
 	def test_convert_to_order_only_fills_the_gap_for_lines_with_no_own_delivery_date(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)
 
@@ -460,7 +480,7 @@ class TestQuotationApi(FrappeTestCase):
 
 	def test_create_quotation_applies_a_tax_template_and_lets_erpnext_compute_the_total(self):
 		template_name = self._make_tax_template("A", rate=18)
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=0, taxes_and_charges=template_name
 		)
 		self.assertEqual(quotation["taxesAndCharges"], template_name)
@@ -470,7 +490,7 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(quotation["total"], 5900)
 
 	def test_create_quotation_without_a_tax_template_stays_untaxed(self):
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
 		)
 		self.assertFalse(quotation["taxesAndCharges"])
@@ -483,7 +503,7 @@ class TestQuotationApi(FrappeTestCase):
 		Item Tax Template") would otherwise silently apply it to any new quotation
 		whose taxes table is still empty -- regardless of what the caller asked for."""
 		self._make_tax_template("Default", rate=18, is_default=True)
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
 		)
 		self.assertFalse(quotation["taxesAndCharges"])
@@ -497,7 +517,7 @@ class TestQuotationApi(FrappeTestCase):
 		verbatim, and the resulting Sales Order's own insert() is just as exposed to
 		the company's default-template auto-population as a directly-created order."""
 		self._make_tax_template("Default Convert", rate=18, is_default=True)
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=10
 		)
 		self.assertFalse(quotation["taxesAndCharges"])
@@ -506,3 +526,54 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertFalse(order["taxesAndCharges"])
 		self.assertEqual(order["taxes"], [])
 		self.assertEqual(order["total"], order["netTotal"])
+
+	# -- BRD C.3.3: bill-to/ship-to mandatory addresses --
+
+	def test_create_quotation_rejects_a_missing_address(self):
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10}],
+				markup_pct=10,
+				customer_address="",
+				shipping_address_name=self.shipping_address,
+			)
+
+	def test_create_quotation_rejects_an_address_not_on_file_for_the_dealer(self):
+		other_dealer = make_dealer("Quotation Foreign Address Dealer")
+		other_billing, _ = make_dealer_addresses(other_dealer)
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10}],
+				markup_pct=10,
+				customer_address=other_billing,
+				shipping_address_name=self.shipping_address,
+			)
+
+	def test_convert_to_order_carries_the_quotations_addresses_with_no_extra_glue(self):
+		# customer_address/shipping_address_name are identically-named native fields
+		# on both Quotation and Sales Order, so ERPNext's own make_sales_order field
+		# mapper must carry them forward with no glue code in _convert_to_order.
+		other_shipping = create_dealer_address(
+			dealer=self.dealer,
+			address_type="Shipping",
+			address_line1="Quotation Test Alt Shipping St",
+			city="Test City",
+			state="Gujarat",
+			pincode="360003",
+		)["id"]
+		quotation = self._create_quotation(
+			dealer=self.dealer,
+			lines=[{"item": self.priced_item, "qty": 10}],
+			markup_pct=10,
+			customer_address=self.billing_address,
+			shipping_address_name=other_shipping,
+		)
+		self.assertEqual(quotation["lines"][0]["itemCode"], self.priced_item)
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
+
+		order_doc = frappe.get_doc("Sales Order", order["id"])
+		self.assertEqual(order_doc.customer_address, self.billing_address)
+		self.assertEqual(order_doc.shipping_address_name, other_shipping)

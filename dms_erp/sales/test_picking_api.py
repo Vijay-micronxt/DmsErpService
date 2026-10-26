@@ -7,7 +7,14 @@ from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_bay,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestPickingApi(FrappeTestCase):
@@ -20,6 +27,7 @@ class TestPickingApi(FrappeTestCase):
 		setup_warehouse()
 		cls.supplier = make_supplier("Picking Test Supplier")
 		cls.dealer = make_dealer("Picking Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.item = make_item("PICK-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
@@ -31,7 +39,12 @@ class TestPickingApi(FrappeTestCase):
 	def _make_order_in_picking(self, qty):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": qty}],
+			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
 		)
 		order_api.advance_order_stage(order["id"], "Picking")
 		return order
@@ -76,6 +89,8 @@ class TestPickingApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": item, "qty": 5} for item in items],
 			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			inquiry=inquiry["id"],
 		)
 		order_api.advance_order_stage(order["id"], "Picking")

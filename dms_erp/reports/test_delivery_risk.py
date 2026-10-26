@@ -13,6 +13,7 @@ from dms_erp.sales.setup import setup_sales
 from dms_erp.warehouse.test_fixtures import (
 	ensure_company,
 	make_dealer,
+	make_dealer_addresses,
 	make_item,
 	make_supplier,
 )
@@ -39,7 +40,9 @@ class TestDeliveryRiskReport(FrappeTestCase):
 		cls.supplier_a = make_supplier("Delivery Risk Report Supplier A")
 		cls.supplier_b = make_supplier("Delivery Risk Report Supplier B")
 		cls.dealer_a = make_dealer("Delivery Risk Report Dealer A")
+		cls.billing_a, cls.shipping_a = make_dealer_addresses(cls.dealer_a)
 		cls.dealer_b = make_dealer("Delivery Risk Report Dealer B")
+		cls.billing_b, cls.shipping_b = make_dealer_addresses(cls.dealer_b)
 
 	def setUp(self):
 		frappe.db.set_single_value("DMS Purchase Settings", "po_delay_grace_days", 0)
@@ -59,7 +62,14 @@ class TestDeliveryRiskReport(FrappeTestCase):
 		"""One already-overdue PO and one open order due tomorrow (inside the
 		configured ETA buffer) -- always produces an at-risk row."""
 		po_api.create_purchase_order(item=item, ordered_qty=qty + 10, expected_ready_date=add_days(today(), -10), supplier=supplier)
-		return order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=add_days(today(), 1))["id"]
+		billing, shipping = make_dealer_addresses(dealer)
+		return order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": item, "qty": qty}],
+			expected_dispatch=add_days(today(), 1),
+			customer_address=billing,
+			shipping_address_name=shipping,
+		)["id"]
 
 	def test_filters_by_item_customer_and_supplier(self):
 		item_a = self._item("A", self.supplier_a)
@@ -103,9 +113,13 @@ class TestDeliveryRiskReport(FrappeTestCase):
 		on-track item still gets a row, just never counted in the at-risk rollups."""
 		item = self._item("ONTRACK", self.supplier_a)
 		po_api.create_purchase_order(item=item, ordered_qty=50, expected_ready_date=add_days(today(), 10), supplier=self.supplier_a)
-		order = order_api.create_order(dealer=self.dealer_a, lines=[{"item": item, "qty": 20}], expected_dispatch=add_days(today(), 1))[
-			"id"
-		]
+		order = order_api.create_order(
+			dealer=self.dealer_a,
+			lines=[{"item": item, "qty": 20}],
+			expected_dispatch=add_days(today(), 1),
+			customer_address=self.billing_a,
+			shipping_address_name=self.shipping_a,
+		)["id"]
 
 		result = delivery_risk_report.delivery_risk_window(item=item)
 		row = next(r for r in result["rows"] if r["salesOrder"] == order)

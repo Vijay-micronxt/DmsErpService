@@ -12,6 +12,7 @@ from dms_erp.sales import order_api, quotation_api
 from dms_erp.warehouse.test_fixtures import (
 	ensure_company,
 	make_dealer,
+	make_dealer_addresses,
 	make_item,
 	make_supplier,
 )
@@ -27,6 +28,7 @@ class TestPrintApi(FrappeTestCase):
 		setup_purchase()
 		cls.supplier = make_supplier("Print Test Supplier")
 		cls.dealer = make_dealer("Print Test Dealer & Sons")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.item = make_item("PRINT-TEST-ITEM", "Vitrified")
 		frappe.db.set_value("Item", cls.item, "custom_weight_per_box_kg", 25)
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, add_days(today(), -1))
@@ -40,6 +42,8 @@ class TestPrintApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 4, "discount_percentage": 10}],
 			markup_pct=0,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			freight=200,
 		)
 		quotation = q["quotation"]["id"] if "quotation" in q else q["id"]
@@ -62,6 +66,8 @@ class TestPrintApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 2}],
 			expected_dispatch=add_days(today(), 7),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			customer_po="DEALER-PO-77",
 		)
 

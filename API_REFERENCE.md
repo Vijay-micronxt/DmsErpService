@@ -352,6 +352,13 @@ POST /api/method/dms_erp.purchase.po_api.create_purchase_order
 { "message": { "id": "PUR-ORD-2026-00001", "supplier": "ABC Ceramics",
   "lines": [ { "itemCode": "WT-3030", "orderedQty": 200.0, "receivedQty": 0 } ] } }
 ```
+> BRD C.3.3 — optional `drop_ship_sales_order` (a submitted, address-bearing Sales
+> Order) marks this PO as shipping straight to that order's own customer; it
+> snapshots the Sales Order's `customer_address`/`shipping_address_name` onto the
+> PO's own read-only `customerBillingAddress`/`customerShippingAddress`, and the PO
+> is then excluded from `reorder_api`/`list_materials_ready_for_pickup`'s
+> available-supply math (it still appears in `list_pending_po_lines`, flagged
+> `dropShip: true`).
 
 **`po_api.list_purchase_orders`** — GET — ⬜
 **`po_api.get_purchase_order`** — GET — ⬜
@@ -399,11 +406,18 @@ POST /api/method/dms_erp.sales.inquiry_api.update_inquiry
 **`quotation_api.create_quotation`** — POST — ✅
 ```json
 POST /api/method/dms_erp.sales.quotation_api.create_quotation
-{ "dealer": "Sharma Tiles", "lines": [ { "item": "WT-3030", "qty": 50 } ], "markup_pct": 15, "inquiry": "INQ-2026-00001" }
+{ "dealer": "Sharma Tiles", "lines": [ { "item": "WT-3030", "qty": 50 } ], "markup_pct": 15, "inquiry": "INQ-2026-00001",
+  "customer_address": "Sharma Tiles-Billing", "shipping_address_name": "Sharma Tiles-Shipping" }
 ```
 ```json
 { "message": { "id": "SAL-QTN-2026-00001", "lines": [ { "itemCode": "WT-3030", "qty": 50.0, "rate": 575.0 } ], "total": 28750.0 } }
 ```
+> BRD C.3.3 — `customer_address`/`shipping_address_name` are now **required**,
+> unqualified ("mandatory" with no interstate/site-delivery carve-out), and must
+> each be a real Address already on file for `dealer` (see
+> `dealer_address_api.create_dealer_address` below) — otherwise rejected. Carried
+> forward onto the Sales Order by `convert_to_order` automatically (both doctypes'
+> native field of the same name), no extra glue needed.
 
 **`quotation_api.convert_to_order`** — POST — ✅
 ```json
@@ -433,12 +447,31 @@ Valid flow: `Confirmed → Picking → Ready to Dispatch → Dispatched → Deli
 ```
 
 **`order_api.list_orders`** — GET — ⬜
-**`order_api.get_order`** — GET — ⬜
+**`order_api.get_order`** — GET — ⬜ (BRD C.3.3: response now also includes `customerAddress`, `shippingAddressName`, `isSiteDelivery`, the tri-state `isInterstate`, the tri-state `ewayBillLikely`, and `dropShipPurchaseOrders`)
 **`order_api.create_order`** — POST — ⬜ (direct Inquiry→Order, no markup)
 ```json
 POST /api/method/dms_erp.sales.order_api.create_order
-{ "dealer": "Sharma Tiles", "lines": [ { "item": "WT-3030", "qty": 50 } ], "expected_dispatch": "2026-09-10", "inquiry": "INQ-2026-00001" }
+{ "dealer": "Sharma Tiles", "lines": [ { "item": "WT-3030", "qty": 50 } ], "expected_dispatch": "2026-09-10", "inquiry": "INQ-2026-00001",
+  "customer_address": "Sharma Tiles-Billing", "shipping_address_name": "Sharma Tiles-Shipping" }
 ```
+> BRD C.3.3 — `customer_address`/`shipping_address_name` are now **required** here
+> too, same rule and same rejection as `create_quotation` above. `dms_erp` makes no
+> GSP/NIC call and generates no e-Way Bill itself — `ewayBillLikely` is read-only
+> staff guidance; actual generation is `india_compliance`'s own already-configured
+> module (see root `README.md`).
+
+**`dealer_address_api.create_dealer_address`** — POST — ⬜
+```json
+POST /api/method/dms_erp.sales.dealer_address_api.create_dealer_address
+{ "dealer": "Sharma Tiles", "address_type": "Billing", "address_line1": "12 Industrial Estate",
+  "city": "Morbi", "state": "Gujarat", "pincode": "363641", "is_primary": true }
+```
+Valid `address_type`: `Billing`, `Shipping` only (this BRD clause's own scope).
+```json
+{ "message": { "id": "Sharma Tiles-Billing-1", "addressType": "Billing", "city": "Morbi", "state": "Gujarat", "isPrimary": true } }
+```
+**`dealer_address_api.list_dealer_addresses`** — GET `?dealer=` — ⬜
+**`dealer_address_api.update_dealer_address`** — POST — ⬜
 
 **`picking_api.list_pick_tasks`** — GET, optional `?order=` — ⬜
 ```

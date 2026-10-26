@@ -15,6 +15,38 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
   line-level read helpers factored out of `dashboard.purchase_dashboard`'s inline
   SQL — shared by that dashboard tile and the `reports` module's Purchase Pickup
   Plan/PO Pending reports instead of existing as duplicated queries.
+- **Drop-ship** (BRD C.3.3) — a PO that ships straight from the supplier to the end
+  customer, never into this app's own warehouse stock. Three Custom Fields on
+  `Purchase Order` (`purchase/setup.py`): `custom_drop_ship_sales_order` (Link →
+  Sales Order, one-directional — the reverse view is `order_api._serialize`'s
+  computed `dropShipPurchaseOrders` list, not a stored field on Sales Order), and
+  `custom_customer_billing_address`/`custom_customer_shipping_address` (Link →
+  Address, read-only) — a one-time snapshot of that Sales Order's own addresses at
+  PO-creation time, same "snapshot not live link" convention Route Plan Stop
+  already uses for a Supplier's GPS, so a later edit to the Sales Order's address
+  never silently rewrites an already-placed drop-ship PO.
+  `po_api.create_purchase_order(..., drop_ship_sales_order=...)` (`po_api.py:152-166`
+  for the validation, `:180-182` for the snapshot write) requires the named Sales
+  Order to be submitted with both addresses already set — no item/qty
+  cross-check against it, same house convention as `vendor_enquiry`/
+  `reorder_plan`, since a drop-ship arrangement can legitimately have a
+  different pack breakdown.
+
+  A drop-ship PO's material is never real warehouse-bound supply, so every query
+  that treats "open PO qty" as available/bookable stock excludes it:
+  `reorder_api._grouped_open_purchase_orders` (`reorder_api.py:108`, covering both
+  `reorder_suggestions()` and `reorder_plan_api.py`) and
+  `po_api.list_materials_ready_for_pickup` (`po_api.py:370`).
+  `po_api.list_pending_po_lines` (`po_api.py:269`) is the one deliberate
+  exception — a drop-ship PO is still a real thing Purchase needs to follow up
+  on with the supplier, so it stays in that list with a `dropShip: true` flag
+  instead of silently vanishing from a report that still needs it. Defense in
+  depth at the actual booking chokepoints, since someone can still pass a
+  drop-ship PO line's name directly: `pickup_run_api.py:124-140`,
+  `route_plan_api.py:131-146` and `warehouse/inward_api.add_truck`
+  (`inward_api.py:151-159`) all refuse a line whose parent PO has
+  `custom_drop_ship_sales_order` set.
+
 - **Reorder-suggestion engine** (`reorder_api.py`) — fully real as of Phase 10.
   `currentStock` and the safety-stock/non-reorderable logic were real from Phase 4
   (Phase 3's live Bin aggregate); `missedDemandQty`, `pendingInquiryQty` and

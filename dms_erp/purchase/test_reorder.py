@@ -21,6 +21,7 @@ from dms_erp.warehouse.test_fixtures import (
 	ensure_company,
 	make_bay,
 	make_dealer,
+	make_dealer_addresses,
 	make_item,
 	make_supplier,
 )
@@ -57,6 +58,7 @@ class TestReorder(FrappeTestCase):
 		setup_purchase()
 		cls.supplier = make_supplier("Reorder Test Supplier")
 		cls.dealer = make_dealer("Reorder Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.purchase_user = _make_role_user("reorder.purchase.tester@pacific.test", "DMS Purchase")
 		# The MOQ tests set this per test; start from "no MOQ" whatever the site has.
 		frappe.db.set_single_value("DMS Purchase Settings", "default_moq", 0)
@@ -87,7 +89,14 @@ class TestReorder(FrappeTestCase):
 		"""A submitted Sales Order straight from staff -- no inquiry, so the sale doesn't
 		also count as pending/missed inquiry demand."""
 		kwargs = {"channel": channel} if channel else {}
-		return order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=DISPATCH, **kwargs)
+		return order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": qty}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			**kwargs,
+		)
 
 	def _missed_demand(self, item, qty):
 		"""An inquiry on a zero-stock item, which create_inquiry auto-sets to Out of Stock."""
@@ -222,6 +231,28 @@ class TestReorder(FrappeTestCase):
 		self.assertEqual(after["openPurchaseOrders"], [{"po": po["id"], "pendingQty": 25}])
 		self.assertEqual(after["suggestedQty"], 0)
 		self.assertTrue(any("already on order" in r for r in after["reasons"]))
+
+	def test_drop_ship_purchase_order_qty_is_excluded_from_open_po_netting(self):
+		# BRD C.3.3 -- a drop-ship PO's material ships straight to the end customer and
+		# never lands in this app's own warehouse stock, so unlike the plain-PO case
+		# above, it must NOT net out missed demand.
+		item = make_item("REORDER-DROPSHIP", "Vitrified")
+		self._missed_demand(item, 25)
+
+		before = self._suggestion_for(item)
+		self.assertEqual(before["suggestedQty"], 25)
+
+		so_item = make_item("REORDER-DROPSHIP-SO-ITEM", "Vitrified")
+		self._price(so_item)
+		so = self._sell(so_item, 5)
+
+		po_api.create_purchase_order(
+			item=item, ordered_qty=25, supplier=self.supplier, expected_ready_date=DISPATCH, drop_ship_sales_order=so["id"]
+		)
+
+		after = self._suggestion_for(item)
+		self.assertEqual(after["openPurchaseOrderQty"], 0)
+		self.assertEqual(after["suggestedQty"], 25)
 
 	def test_suggested_qty_rounds_up_to_the_next_5(self):
 		# BRD C.4.1: round UP to the nearest 5. A raw need of 102 (missed demand, zero

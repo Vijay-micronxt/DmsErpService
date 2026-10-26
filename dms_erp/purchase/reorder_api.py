@@ -96,13 +96,16 @@ def sales_velocity_by_item() -> dict[str, float]:
 def _grouped_open_purchase_orders() -> dict[str, list[dict]]:
 	"""Per item, every submitted PO line not yet fully received — docstatus=1 already
 	excludes Cancelled; Completed/Closed are excluded explicitly since those are done,
-	not open."""
+	not open. BRD C.3.3 -- a drop-ship PO's material ships straight to the end
+	customer and never lands in this app's own warehouse stock, so it is never
+	real reorder-reducing supply and must be excluded here too."""
 	rows = frappe.db.sql(
 		"""
 		select poi.item_code as item, po.name as po, (poi.qty - coalesce(poi.received_qty, 0)) as pending_qty
 		from `tabPurchase Order Item` poi
 		inner join `tabPurchase Order` po on po.name = poi.parent
 		where po.docstatus = 1 and po.status not in ('Completed', 'Closed')
+			and ifnull(po.custom_drop_ship_sales_order, '') = ''
 		""",
 		as_dict=True,
 	)
