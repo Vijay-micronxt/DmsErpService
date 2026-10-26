@@ -6,7 +6,15 @@
  "field_order": [
   "target_stock_months",
   "default_moq",
-  "default_production_moq"
+  "default_production_moq",
+  "section_break_route_origin",
+  "route_origin_latitude",
+  "column_break_route_origin",
+  "route_origin_longitude",
+  "section_break_delivery_risk",
+  "po_delay_grace_days",
+  "column_break_delivery_risk",
+  "delivery_risk_eta_buffer_days"
  ],
  "fields": [
   {
@@ -29,12 +37,57 @@
    "fieldname": "default_production_moq",
    "fieldtype": "Int",
    "label": "Default Production MOQ (Boxes)"
+  },
+  {
+   "fieldname": "section_break_route_origin",
+   "fieldtype": "Section Break",
+   "label": "Route Planning (BRD C.5)"
+  },
+  {
+   "description": "The Morbi/Bengaluru warehouse's own GPS pin -- the fixed start/end point every Route Plan's leg-distance computation measures from. Business data (client-adjustable if the depot moves), not a credential -- deliberately not a site_config.json key, same reasoning as every other field on this Single.",
+   "fieldname": "route_origin_latitude",
+   "fieldtype": "Float",
+   "label": "Route Origin Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "column_break_route_origin",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "route_origin_longitude",
+   "fieldtype": "Float",
+   "label": "Route Origin Longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "section_break_delivery_risk",
+   "fieldtype": "Section Break",
+   "label": "Delivery Risk (BRD C.3.2)"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.3.2 -- a Purchase Order line counts as supplier-delayed once it's this many days past its own schedule_date, not the day after. 0 by default (overdue the day after schedule_date) -- there's no BRD-given number for this, so it isn't guessed; a client who wants a short grace window before treating a slip as a real delay sets it here, white-labeled per deployment like every other threshold on this Single.",
+   "fieldname": "po_delay_grace_days",
+   "fieldtype": "Int",
+   "label": "PO Delay Grace Period (Days)"
+  },
+  {
+   "fieldname": "column_break_delivery_risk",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.3.2 -- a Sales Order line only flags as at-risk once its own delivery_date is this many days away (or already past), even if the supply covering it is already delayed -- this app has no revised/projected ETA field to say a delay is resolved before then, so it only flags once the risk is actually imminent rather than guessing. 0 by default (flags once the delivery date itself has arrived); no BRD-given number exists for this either.",
+   "fieldname": "delivery_risk_eta_buffer_days",
+   "fieldtype": "Int",
+   "label": "Delivery Risk ETA Buffer (Days)"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-18 00:00:00.000000",
+ "modified": "2026-10-26 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Purchase",
  "name": "DMS Purchase Settings",

@@ -35,6 +35,25 @@ catalog visibility. Implemented.
   that, and it was also checked item-by-item against all 4,340 migrated items. Note
   `get_all` skips `Document`'s numeric casting, so numeric columns are cast the same
   way a loaded doc would be.
+- **White-labeled discontinuation status labels** (`DMS Catalog Settings` /
+  `DMS Catalog Status Label`, `catalog.utils.status_label`) — BRD C.10.5 wants 4
+  client-specific display labels (Pacific's own wording: "PDC"/"Against Order")
+  over the real, unchanged 5-state internal lifecycle above. "PDC" literally
+  stands for "Pacific-discontinued" — this app is white-labeled across clients
+  (`CLAUDE.md`), so that wording is config, not code. Every status's *internal*
+  value (what `is_reorderable`/`is_sellable`/`withdrawal_api`/filters all match
+  on) is untouched; only the *displayed* label is configurable, via a per-status
+  row on the new `DMS Catalog Settings` Single. Unconfigured — including on
+  every fresh site — is a no-op: `status_label()` falls back to the raw internal
+  value, never a blank or a Pacific-branded default. `_serialize`/
+  `_serialize_many` carry the resolved label as `statusLabel` alongside the raw
+  `status`; `sales.inquiry_api`/`quotation_api`'s quoting-rejection message,
+  `purchase.reorder_api`'s reorder-suggestion reasons, and
+  `reports.warehouse_reports`'s display-replacement reasons all route their
+  status-naming text through the same resolver instead of embedding the raw
+  value. `get_status_label_map` is the read endpoint for screens that need the
+  whole set (filter dropdowns, the item edit form) rather than one resolved
+  label already riding on a loaded product.
 - **All price lists for an item** (`get_item_prices`) — every *selling* Price List
   rate the item has, view-only, for the item page and pricing screen. The three tier
   rows (`pricing.api.get_dealer_tier_prices`) hid the Tally-migrated lists, including

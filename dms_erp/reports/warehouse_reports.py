@@ -12,7 +12,7 @@ thresholds can be corrected without touching the logic around them.
 import frappe
 from frappe.utils import getdate, today
 
-from dms_erp.catalog.utils import is_sellable
+from dms_erp.catalog.utils import is_sellable, status_label
 from dms_erp.purchase.reorder_api import SALES_VELOCITY_WINDOW_DAYS, sales_velocity_by_item
 from dms_erp.warehouse.bay_api import list_all_bays
 from dms_erp.warehouse.utils import list_stock_lots, total_stock_for_item
@@ -160,7 +160,7 @@ def display_replacement_suggestions():
 
 		reasons = []
 		if is_discontinuing:
-			reasons.append(f"status is {status}")
+			reasons.append(f"status is {status_label(status)}")
 		if is_slow:
 			reasons.append(f"no Retail sales in the last {SALES_VELOCITY_WINDOW_DAYS} days")
 

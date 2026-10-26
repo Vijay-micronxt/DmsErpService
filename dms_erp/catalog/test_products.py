@@ -279,6 +279,74 @@ class TestProducts(FrappeTestCase):
 		self.assertFalse(updated["isReorderable"])
 		self.assertFalse(updated["isSellable"])
 
+	def test_status_label_is_the_raw_status_when_unconfigured(self):
+		"""BRD C.10.5: a fresh site with no DMS Catalog Settings configured is a
+		no-op -- statusLabel must equal the real internal status, never a blank or
+		a fabricated Pacific-specific string, in both the single-item and bulk
+		serialization paths."""
+		catalog_api.create_product(
+			code="PROD-TEST-A",
+			name="Test Marble Look",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		updated = catalog_api.update_product("PROD-TEST-A", {"status": "Partially Discontinued"})
+		self.assertEqual(updated["statusLabel"], "Partially Discontinued")
+
+		bulk = catalog_api.list_all_products_bulk()
+		row = next(p for p in bulk if p["code"] == "PROD-TEST-A")
+		self.assertEqual(row["statusLabel"], "Partially Discontinued")
+
+	def test_status_label_uses_the_configured_white_label_wording(self):
+		"""White-label config: a client's own wording (e.g. Pacific's BRD C.10.5
+		"PDC") overrides the raw internal status in both _serialize and
+		_serialize_many, while the internal "status" value itself -- what
+		isReorderable/isSellable/filters actually match on -- stays unchanged."""
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Partially Discontinued", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		try:
+			catalog_api.create_product(
+				code="PROD-TEST-A",
+				name="Test Marble Look",
+				category="Vitrified",
+				supplier=self.supplier,
+				purchase_cost=400,
+				margin_pct=25,
+				effective_date="2026-08-01",
+				series_ref=self.series,
+			)
+			updated = catalog_api.update_product("PROD-TEST-A", {"status": "Partially Discontinued"})
+			self.assertEqual(updated["status"], "Partially Discontinued")
+			self.assertEqual(updated["statusLabel"], "PDC")
+
+			bulk = catalog_api.list_all_products_bulk()
+			row = next(p for p in bulk if p["code"] == "PROD-TEST-A")
+			self.assertEqual(row["status"], "Partially Discontinued")
+			self.assertEqual(row["statusLabel"], "PDC")
+		finally:
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
+
+	def test_get_status_label_map_covers_every_real_status(self):
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Partially Discontinued", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		try:
+			label_map = catalog_api.get_status_label_map()
+			self.assertEqual(label_map["Partially Discontinued"], "PDC")
+			self.assertEqual(label_map["Active"], "Active")  # unconfigured -- raw value, no-op
+			self.assertEqual(set(label_map), {"Active", "Partially Discontinued", "Factory Discontinued", "Display Removal Pending", "Pulled Back"})
+		finally:
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
+
 	def test_approved_price_flows_into_product_listing(self):
 		catalog_api.create_product(
 			code="PROD-TEST-A",

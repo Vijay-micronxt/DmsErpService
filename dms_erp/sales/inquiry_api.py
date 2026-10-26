@@ -57,6 +57,7 @@ from dms_erp.catalog.utils import (
 	item_sqft_per_box,
 	item_sqm_per_box,
 	item_weight_per_box_kg,
+	status_label,
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
@@ -264,7 +265,7 @@ def _create_inquiry(
 	if item:
 		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
 		if not is_sellable(status):
-			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
+			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status_label(status)), frappe.ValidationError)
 
 		# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
 		duplicates = find_open_duplicate_inquiries(dealer, item)

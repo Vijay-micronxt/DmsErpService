@@ -37,7 +37,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, today
 
-from dms_erp.catalog.utils import is_reorderable
+from dms_erp.catalog.utils import is_reorderable, status_label
 
 SALES_VELOCITY_WINDOW_DAYS = 180
 DEFAULT_TARGET_STOCK_MONTHS = 3
@@ -263,7 +263,7 @@ def _suggestion_for(
 		elif suggested_qty > 0:
 			urgency = "Watch"
 	if non_reorderable and missed_demand_qty > 0:
-		reasons.append(f"{status} — demand exists but not reorderable")
+		reasons.append(f"{status_label(status)} — demand exists but not reorderable")
 
 	return {
 		"productId": item.name,

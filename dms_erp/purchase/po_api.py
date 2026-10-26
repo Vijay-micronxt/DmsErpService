@@ -260,32 +260,42 @@ def list_pending_po_lines() -> list[dict]:
 	return out
 
 
-def remaining_ready_qty_for_line(po_item: str, ready_qty: float | None = None, exclude_pickup_run: str | None = None) -> float:
+def remaining_ready_qty_for_line(
+	po_item: str,
+	ready_qty: float | None = None,
+	exclude_pickup_run: str | None = None,
+	exclude_route_plan: str | None = None,
+) -> float:
 	"""How many boxes of this PO line's supplier-confirmed-ready qty are still
-	available to book onto a truck. Nets out two things: boxes already booked
+	available to book onto a truck. Nets out three things: boxes already booked
 	onto an Inward Truck (this covers both a directly-booked truck and one
-	created by dispatching a Pickup Run, since dispatch creates real Inward
-	Truck rows), and boxes reserved by any other still-open (Draft) Pickup Run
-	line for this same PO line — a Draft run has no Inward Truck yet, so
-	without this second check two draft runs could both claim the same ready
-	stock. A Dispatched/Completed/Cancelled Pickup Run's own lines are never
-	counted here (Dispatched is already covered via its Inward Trucks;
-	Completed/Cancelled reserve nothing). `exclude_pickup_run` lets a run
-	re-validate its own edited lines without double-counting its own
-	not-yet-saved reservation.
+	created by dispatching a Pickup Run or Route Plan, since dispatch creates
+	real Inward Truck rows either way), boxes reserved by any other still-open
+	(Draft) Pickup Run line for this same PO line, and boxes reserved by any
+	other still-open (Draft) Route Plan line for it — two booking models exist
+	(Pickup Run for a simple single-supplier run, Route Plan for BRD C.5's
+	multi-stop routing) and a Draft row in either has no Inward Truck yet, so
+	without both checks a Draft Pickup Run and a Draft Route Plan could both
+	claim the same ready stock, or two drafts of the same model could. A
+	Dispatched/Completed/Cancelled run or plan's own lines are never counted
+	here (Dispatched is already covered via its Inward Trucks;
+	Completed/Cancelled reserve nothing). `exclude_pickup_run`/
+	`exclude_route_plan` let a run/plan re-validate its own edited lines
+	without double-counting its own not-yet-saved reservation.
 
-	When `ready_qty` isn't supplied (the pickup_run_api validation path, not
-	the read-only listing below which always passes it in), this locks the
-	Purchase Order Item row (`for_update=True`) for the rest of the caller's
-	transaction -- without it, two concurrent requests booking the same line
-	can both read the same booked/reserved sums before either commits its own
-	reservation, and both pass validation, over-booking the line."""
+	When `ready_qty` isn't supplied (the pickup_run_api/route_plan_api
+	validation path, not the read-only listing below which always passes it
+	in), this locks the Purchase Order Item row (`for_update=True`) for the
+	rest of the caller's transaction -- without it, two concurrent requests
+	booking the same line can both read the same booked/reserved sums before
+	either commits its own reservation, and both pass validation,
+	over-booking the line."""
 	if ready_qty is None:
 		ready_qty = frappe.db.get_value("Purchase Order Item", po_item, "custom_ready_qty", for_update=True) or 0
 
 	booked = frappe.db.sql("select coalesce(sum(boxes), 0) from `tabInward Truck` where purchase_order_item=%s", (po_item,))[0][0]
 
-	reserved = frappe.db.sql(
+	reserved_pickup_run = frappe.db.sql(
 		"""
 		select coalesce(sum(pri.qty), 0)
 		from `tabPickup Run Item` pri
@@ -295,7 +305,17 @@ def remaining_ready_qty_for_line(po_item: str, ready_qty: float | None = None, e
 		(po_item, exclude_pickup_run or ""),
 	)[0][0]
 
-	return ready_qty - booked - reserved
+	reserved_route_plan = frappe.db.sql(
+		"""
+		select coalesce(sum(rpi.qty), 0)
+		from `tabRoute Plan Item` rpi
+		inner join `tabRoute Plan` rp on rp.name = rpi.parent
+		where rpi.purchase_order_item = %s and rp.status = 'Draft' and rp.name != %s
+		""",
+		(po_item, exclude_route_plan or ""),
+	)[0][0]
+
+	return ready_qty - booked - reserved_pickup_run - reserved_route_plan
 
 
 def list_materials_ready_for_pickup() -> list[dict]:

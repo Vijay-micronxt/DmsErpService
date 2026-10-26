@@ -375,6 +375,10 @@ Inquiry workflow it says is in scope), Wave 1.*
 | TC-SO-12c | Dispatched orders leave the timeline | Move a flagged or reminded order to Dispatched. | No more reminders/flags; its reservation state reads Closed and the badge disappears. 21/20 days come from DMS Sales Settings (Reservation Window / Reservation Reminder Day), not code. | C.3.1 | M2 / Wave 1 |
 | TC-SO-12d | Find an order by its Sales Invoice number (ISS-2026-00630) | Raise a Sales Invoice on a dispatched order, then type the invoice number into the Orders search. | That order is found. (Invoices imported from Tally have no order link, so they're found from Invoices, not Orders.) | C.12 | M2 / Wave 1 |
 | TC-SO-12e | Print a sales order | Orders → open one → Print. | Printable page with order no., date, delivery date, the dealer's PO number, lines with weight, taxes and grand total. | C.3.1 / 8.3 | M2 / Wave 1 |
+| TC-SO-12f | A delayed supplier PO threatens an order's own delivery date (BRD C.3.2) | Raise a PO past its own expected-ready date for an item on an open order due soon, then run `sales.delivery_risk.review_delivery_risk`. | That order line is flagged at-risk once; its salesperson (Management if none) is notified, naming the item and delivery date. Running the job again doesn't re-notify the same line. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12g | A delay on stock already covering an order doesn't flag it | Same delayed PO as TC-SO-12f, but the order's own delivery date is still far out. | The line is not flagged — a delay alone isn't enough; it must actually threaten that order's own date. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12h | Two orders for the same item, only enough on-track supply for the first | Raise one on-track PO sized to exactly cover an earlier order and one delayed PO as the only remaining supply, with a later order for the rest. | The earlier order is unaffected; the later order is the one flagged at-risk — it's the delayed supply specifically, not a shortage in general, that puts it at risk. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12i | Delivery risk window report, groupable by customer/item/supplier | Open the forecasting/stock window (`reports.delivery_risk.delivery_risk_window`) with each of `customer=`, `item=` and `supplier=` in turn. | Each filter narrows to that axis correctly; every open order line shows its stock-in-hand/in-transit/factory-dispatch coverage, not just the at-risk ones; the summary rollups count only at-risk lines per axis. | C.3.2 | M2 / Wave 1 |
 
 ### 5.3 Orders created directly by the dealer (WhatsApp / Dealer Portal)
 
@@ -385,8 +389,6 @@ Inquiry workflow it says is in scope), Wave 1.*
 
 ### Known gaps — not yet built
 
-- **C.3.2** Supplier vs customer timeline comparison / delay-impact escalation, and the
-  stock-in-hand/in-transit/factory-dispatch forecasting window — not built.
 - **C.3.3** Bill-to/Ship-to validation, drop-ship (Sales Order linked to a PO shipping
   direct to the customer), and automatic e-Way Bill generation — **confirmed not built at
   all** (no `drop_ship`/`bill_to`/`ship_to`/`eway` references anywhere in `sales/*.py`).
@@ -409,7 +411,7 @@ suggested quantities) and raises real POs from it.
 |---|---|---|---|---|---|
 | TC-PUR-01 | Reorder suggestion appears for a genuinely short item | Have an item with zero/low stock and real open retail demand (missed-demand inquiries + pending inquiries). | Item surfaces as Critical/urgent on `/requirements` with a computed suggested quantity, stock, missed demand, pending inquiries, and reason breakdown all shown. | C.4.1 | M2 / Wave 1 |
 | TC-PUR-02 | Bulk/project demand excluded | Log a large Bulk-dealer order for an item. | This demand does **not** inflate that item's reorder suggestion — retail/sub-dealer channel only, per C.4.3. | C.4.1 / C.4.3 | M2 / Wave 1 |
-| TC-PUR-03 | Discontinued items excluded | An item with real missed demand but status Factory Discontinued or Pulled Back. | Excluded from reorder suggestions, with the reason stated as the actual status, not a generic "N/A". | C.4.1 / C.10.5 | M2 / Wave 1 |
+| TC-PUR-03 | Discontinued items excluded | An item with real missed demand but status Factory Discontinued or Pulled Back. | Excluded from reorder suggestions, with the reason stated as the item's configured status label (or its raw status name if unconfigured) — never a generic "N/A". | C.4.1 / C.10.5 | M2 / Wave 1 |
 | TC-PUR-04 | Raise PO from a suggestion | On `/requirements`, click "Raise PO" for a suggested item. | A real Purchase Order is created, supplier/quantity prefilled from the suggestion, remarks auto-composed from the reason breakdown. | C.4.1 | M2 / Wave 1 |
 | TC-PUR-05 | PO line progress tracking | Open a PO's detail (`/purchase-orders/$id`). | Ordered/ready/planned/received quantities shown per line, ready-qty editable inline. | C.4.4 | M2 / Wave 1 |
 | TC-PUR-06 | Plan Inward from a PO | On a PO line with quantity still to plan, click "Plan Inward". | A real Inward Truck is created, linked back to the PO/line, appears immediately in `/inward`. | C.4.4 | M3 / Wave 1 |
@@ -441,15 +443,41 @@ suggested quantities) and raises real POs from it.
 | TC-PICK-05 | BRD fleet is loaded | After deploying and migrating, open Pickup Planner → New → Vehicle type. | The 11 BRD vehicle types are listed with tonnes and mode (e.g. "Truck 43.5 T (43.5 t · Road)", "Container 28 T (Ship + Road)"). Running migrate again doesn't duplicate them. | C.1.7 | M3 / Wave 1 |
 | TC-PICK-06 | Overload check by weight | Plan a run on a tonnage vehicle with items whose weight per box is set, first under, then over the vehicle's tonnes. | Under capacity saves. Over capacity is refused with "… carries N t — this run weighs about M t". If any item has no weight set, the weight check is skipped rather than guessed. | C.1.7 / C.5 | M3 / Wave 1 |
 
+### Route Plan — multi-stop, multi-supplier (BRD C.5) — backend only
+
+**Where:** `dms_erp.purchase.route_plan_api` — no `pacific-tileflow` screen yet (a
+`/route-plans` UI is a follow-up round on top of this API surface, same two-phase
+pattern every other feature in this app has followed). Distinct from, and does not
+replace, Pickup Run above — Pickup Run stays for the simple single-supplier case.
+
+| ID | Scenario | Steps | Expected Result | BRD Ref | Milestone / Wave |
+|---|---|---|---|---|---|
+| TC-RTP-01 | Create a multi-stop plan across several suppliers | `create_route_plan` with 2+ `stops` (each a Supplier with GPS already set) and lines from each supplier's ready POs. | Plan created in Draft, one stop per supplier, each line's supplier matched to its stop. | C.5 | M4 |
+| TC-RTP-02 | A line's supplier with no stop on the plan is rejected | `create_route_plan`/`add_route_plan_line` with a `purchase_order_item` whose PO supplier isn't one of the plan's stops. | Rejected with a clear error naming the mismatched item. | C.5 | M4 |
+| TC-RTP-03 | A supplier with no GPS set can't be added as a stop | Add a stop for a Supplier missing `custom_latitude`/`custom_longitude`. | Rejected — GPS is a prerequisite for route optimisation. | C.1.6 / C.5 | M4 |
+| TC-RTP-04 | Optimize route picks a real stop order and totals | `optimize_route` on a Draft plan with a configured Google Maps API key and a configured route origin (`DMS Purchase Settings`). | Stops reordered per Google's optimized sequence; `totalDistanceKm`/`totalDurationMinutes` reflect the sum of real legs — both time- and distance-relevant figures are now real, not placeholders. | C.5 | M4 |
+| TC-RTP-05 | Manually resequence stops after optimizing | `resequence_route_stops` with a staff-chosen stop order different from what `optimize_route` returned. | Stops reflect the staff-chosen order; legs/totals recomputed for that fixed order (not left stale from the prior optimization). | C.5 | M4 |
+| TC-RTP-06 | Dispatch nets ready qty against both Pickup Run and Route Plan | Reserve part of a PO line's ready qty via a Draft Pickup Run, then try to book more than what's left via a Route Plan (and vice versa). | The second booking is rejected for the over-committed amount — the two booking models can't double-book the same stock. | C.5 | M4 |
+| TC-RTP-07 | Dispatch creates one Inward Truck per line | `advance_route_plan_status(..., "Dispatched")` on a Draft plan with lines across multiple suppliers. | One `Inward Truck` created per line, each tagged with this Route Plan's id; downstream gate/unloading/put-away flow is untouched. | C.5 | M4 |
+| TC-RTP-08 | Overloaded plan dispatches with a warning, not a block | Dispatch a plan whose total weight exceeds the chosen Transporter Vehicle's `capacity_tonnes`. | Dispatch still succeeds; response includes an `overloadWarning` for the planner to review before the truck leaves. | C.1.7 / C.5 | M4 |
+| TC-RTP-09 | A missing/failing Maps API key is a hard error on optimize | `optimize_route`/`resequence_route_stops` with `dms_erp_google_maps_api_key` unset or the Maps API unreachable. | Raises `routing_client.RouteOptimizationFailed` — unlike WhatsApp OTP delivery, this never degrades silently, since there's no safe default route. | C.5 | M4 |
+| TC-RTP-10 | Real road-path geometry is stored, not just distance/time | Call `optimize_route` on a Draft plan with a configured Maps key. | `routePolyline` on the response is Google's encoded-polyline string for the actual road path (not null); `resequence_route_stops` refreshes it to match the staff-chosen order. Before the first optimize, `routePolyline` is `null` — never a fabricated or straight-line placeholder. | C.5 | M4 |
+| TC-RTP-11 | pacific-tileflow: map toggles between straight-line and real road path | On the Route Plan detail page's map, use the straight-line/road-path toggle after optimizing a route. | "Road path" draws the decoded `routePolyline` (follows real roads); "Straight line" draws a direct line stop-to-stop. "Road path" is disabled (or clearly unavailable) when `routePolyline` is null — e.g. a plan never optimized, or demo mode (no live Maps call to make). | C.5 | M4 |
+
 ### Known gaps — not yet built
 
-Everything BRD asks for **beyond a single-supplier run**: a multi-supplier route across
-several stops in one truck run, container-vs-truck auto-selection, Leaflet map/GPS pins,
-drag-drop stop resequencing, "Auto-Generate Route" by proximity, live vehicle tracking
-(C.5.1), a driver master, and "Share with Driver"/printable route sheet. Per BRD F.2, this
-advanced routing/tracking layer is explicitly **Wave 2** ("assisted route planning and
-truck-capacity planning") — Milestone 4. Do not test these — they don't exist yet, and
-they're not expected yet either.
+Container-vs-truck **auto**-selection (staff picks the vehicle at creation time — BRD's
+"prefer container for planned orders" guidance has no crisp formula codified yet), any
+`pacific-tileflow` UI at all for Route Plan (map/GPS pins, drag-drop resequencing, an
+"Auto-Generate Route" action, a printable/driver-shareable route sheet — the backend
+above has no frontend yet), live vehicle tracking and per-stop arrival/dwell/departure
+capture (BRD C.5.1 — there's no planning layer to track *against* until a Route Plan is
+actually dispatched against it, which this round enables but doesn't itself track), and a
+driver master (driver stays free-text on Transporter Vehicle, same as before). Per BRD
+F.2, the advanced routing/tracking UI layer is explicitly **Wave 2** ("assisted route
+planning and truck-capacity planning") — Milestone 4; the backend above closes the
+multi-stop/multi-supplier/real-distance gap that note used to describe, the UI and C.5.1
+tracking don't exist yet and aren't expected yet either.
 
 ---
 
@@ -616,6 +644,7 @@ also be reachable from the Products/item detail panel.
 | TC-SMP-08 | Top Dealer identification | Check top-dealer logic against 6 months of retail sales, bulk/project excluded. | Correct dealers surface as "top" for sample/display planning. | C.10.4 | M3 / Wave 1 |
 | TC-SMP-09 | Product withdrawal automation reaches display removal | Let an item's display duration/store-count/annual-sales thresholds breach per its Series' configured criteria. | The daily `evaluate_product_withdrawals` job advances its lifecycle status and auto-triggers the removal + put-up list and pullback, without manual action. | C.10.5 | M3 / Wave 1 |
 | TC-SMP-10 | Print sticker for an already-issued sample | Reprint a sticker for a sample issued earlier (not just at issue time). | Sticker regenerates identically (same QR/code), doesn't create a duplicate/conflicting record. | C.6.4 / C.10.1 | M3 / Wave 1 |
+| TC-SMP-11 | White-labeled status labels, configured vs. unconfigured | In Desk, configure a label (e.g. "PDC") for a status in `DMS Catalog Settings`, then check every screen showing that status: Products list/detail/filter, dealer catalog, Purchase Requirements reorder suggestions, a quotation/inquiry rejection for that item. Then clear the configured label and repeat. | Every screen shows the configured label while it's set; with it cleared, every screen falls back to the status's own raw internal name (e.g. "Partially Discontinued") — never blank, never a hardcoded brand-specific string like "PDC" baked into the app itself. | C.10.5 | M3 / Wave 1 |
 
 ---
 
@@ -832,17 +861,17 @@ For quick reference — do not file these as bugs, and don't spend QA time hunti
 - **C.2.6** Proactive WhatsApp follow-up reminders (dealer or staff CRM) — genuinely new
   capability, deliberately blocked on confirming whats91's real template/button-reply API.
   Milestone 3, Wave 1 (not built, not a Wave-2 deferral).
-- **C.3.2** Supplier-vs-customer timeline/delay-impact comparison and the
-  stock-in-hand/in-transit/factory-dispatch forecasting window.
 - **C.3.3** Bill-to/Ship-to validation, drop-ship, and automatic e-Way Bill generation —
   confirmed absent from the codebase entirely, not merely untested.
 - **C.3.4** The real India Banking / VALS API integration (only an interim manual gate
   exists).
 - **C.4.2/C.4.4** Full MOQ-hierarchy enforcement; purchase-receipt shortage/claim capture
   and supplier invoice reference at receipt time.
-- **C.5/C.5.1** Multi-supplier route planning, map/GPS, drag-drop stops, live vehicle
-  tracking, driver master, "Share with driver." Milestone 4, Wave 2 — scheduled later, not
-  simply missing.
+- **C.5/C.5.1** Multi-stop/multi-supplier route planning with real Google Maps
+  distance/time is now built (backend-only, `route_plan_api.py` — see §7). Still
+  missing: any `pacific-tileflow` UI for it (map/GPS pins, drag-drop stops), live
+  vehicle tracking, a driver master, "Share with driver." Milestone 4, Wave 2 —
+  scheduled later, not simply missing.
 - **C.11** Four of six override triggers are built (§13): credit-limit exceedance,
   discount-over-price-list, amend/cancel, and channel override. Still missing: overdue
   outstanding (needs an AR/invoicing subsystem this app doesn't have at all — not a gap to

@@ -65,9 +65,8 @@ instead of a `0` stub, now that Warehouse exists.
   per-company credit-limit child table to resolve — nothing else to net out.
 - **Transporter & Vehicle Master** (`transporter_api.py`, new doctypes
   `Transporter` / `Transporter Vehicle`) — masters the Morbi→Bengaluru
-  full-load fleet (BRD C.1.7) for future pickup/route planning; that planning
-  module itself isn't built yet, this just gives it something clean to link
-  to. ERPNext's own transporter concept (a checkbox on Supplier) doesn't model
+  full-load fleet (BRD C.1.7), now consumed by `Route Plan` below. ERPNext's
+  own transporter concept (a checkbox on Supplier) doesn't model
   vehicle-type capacity, so a real custom master is required — same reasoning
   as `Vehicle Type`, whose permission pattern (`DMS Purchase` full CRUD,
   `DMS Warehouse`/`DMS Management` read-only) this follows, since both are
@@ -83,6 +82,56 @@ instead of a `0` stub, now that Warehouse exists.
   Driver master — none exists anywhere in this app, and BRD explicitly notes
   a driver is "assigned on a pickup plan", not permanently tied to a
   vehicle.
+
+- **Route Plan** (`route_plan_api.py`, new doctypes `Route Plan` / `Route
+  Plan Stop` / `Route Plan Item`) — BRD C.5's actual multi-stop, multi-supplier
+  pickup route planning, which `Pickup Run` (above) deliberately never was
+  and still isn't: `Pickup Run` stays exactly as-is for a simple
+  single-supplier booking, this is the separate module for routing several
+  suppliers' ready PO lines onto one truck/container run. Links to the real
+  `Transporter`/`Transporter Vehicle` fleet (tonnage + mode), not Pickup
+  Run's `Vehicle Type` (box capacity only — a different, disconnected
+  concept despite both being "vehicle" masters). Each stop snapshots its
+  Supplier's GPS (`custom_latitude`/`custom_longitude`, BRD C.1.6) at the
+  time it's added, never a live read, so correcting a Supplier's pin later
+  never silently rewrites a dispatched plan's own historical route.
+
+  Stop sequencing and leg distance/time come from `routing_client.py`
+  (Google Maps Routes API) in two modes: `optimize_route` lets Google choose
+  the order (`optimizeWaypointOrder`); `resequence_route_stops` instead
+  measures a staff-chosen fixed order (the Directions API) after a manual
+  drag-reorder, so totals are never left stale after a hand edit. The
+  route's fixed depot origin lives on `DMS Purchase Settings.
+  route_origin_latitude/longitude` — business data (the warehouse's own GPS
+  pin), not a credential, unlike the Google Maps API key itself
+  (`dms_erp_google_maps_api_key`, see the root `README.md`).
+
+  Both calls also store `route_polyline` — Google's encoded-polyline string
+  for the real road path, not just the straight line between stop points.
+  `dms_erp` treats it as opaque (never decodes it; that's the frontend map's
+  job) and it's `null` until the route has been optimized at least once.
+  Re-running optimize/resequence always overwrites it with the freshly
+  measured geometry, same as the distance/duration totals.
+
+  `po_api.remaining_ready_qty_for_line` nets a PO line's remaining
+  ready-for-pickup qty against Draft reservations from **both** booking
+  models now (`exclude_pickup_run`/`exclude_route_plan`), so a line can't be
+  double-booked across Pickup Run and Route Plan, or between two plans of
+  either kind. Dispatching a Route Plan creates one `Inward Truck` per line
+  exactly like Pickup Run's dispatch does, tagged via Inward Truck's new
+  `route_plan` field; an overloaded plan (total weight over the chosen
+  vehicle's `capacity_tonnes`) is flagged as a warning in the dispatch
+  response, not blocked — BRD asks for "overload warnings", not prevention.
+
+  Explicitly not built here (a later round): live GPS tracking of a
+  dispatched truck, per-stop arrival/dwell/departure capture (BRD C.5.1 —
+  there's no planning layer to track *against* until this one exists), any
+  `approvals` gating (BRD C.11 trigger #5 is a plausible future fit for
+  cancelling a Dispatched plan, not assumed here), any link to
+  `sales.freight_cost_api`'s own independent freight-estimate tracking, and
+  container-vs-truck auto-selection (staff picks at creation time — BRD's
+  "prefer container for planned orders" guidance has no crisp formula to
+  codify yet).
 
 - **BRD fleet + weight-based capacity** (Phase 1 task 1.7, BRD C.1.7) — `setup.seed_brd_fleet` (run by
   `bench migrate`) adds the 11 confirmed Morbi → Bengaluru vehicle types with tonnes and mode; it never changes

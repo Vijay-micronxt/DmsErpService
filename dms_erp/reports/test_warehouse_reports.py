@@ -2,6 +2,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, today
 
+from dms_erp.catalog import api as catalog_api
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
@@ -115,6 +116,30 @@ class TestWarehouseReports(FrappeTestCase):
 
 		result = warehouse_reports.display_replacement_suggestions()
 		self.assertFalse(any(r["currentDisplayItem"] == selling_item for r in result))
+
+	def test_display_replacement_reason_uses_the_configured_white_label_wording(self):
+		"""The discontinuation-status half of the "reason" sentence must be
+		white-labeled per DMS Catalog Settings (e.g. Pacific's "PDC"), not the raw
+		internal status value, same as reorder_api's own reasons text."""
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Partially Discontinued", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		try:
+			make_bay("WREPORT-DISPLAY-03", bay_type="display", categories=["Outdoor / Parking"])
+			item = make_item("WREPORT-DISPLAY-LABELLED", "Outdoor / Parking")
+			catalog_api.update_product(item, {"status": "Partially Discontinued"})
+			allocation_api.create_allocation(
+				item=item, batch_no="WREPORT-DISPLAY-B3", total_qty=10, lines=[{"bay": "WREPORT-DISPLAY-03", "qty": 10}], supplier=self.supplier
+			)
+
+			result = warehouse_reports.display_replacement_suggestions()
+			row = next(r for r in result if r["currentDisplayItem"] == item)
+			self.assertIn("status is PDC", row["reason"])
+			self.assertNotIn("Partially Discontinued", row["reason"])
+		finally:
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
 
 	def test_batch_wise_stock_report_totals_batches_locations_and_top_three(self):
 		# Own bays, so this doesn't add to WREPORT-A-01 that the occupancy test counts.

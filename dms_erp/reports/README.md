@@ -72,8 +72,17 @@ same source instead of two copies of the same SQL:
   that reason, so a caller can't mistake this for more than it is. Swap the
   method in this one file once a real methodology is confirmed; nothing else in
   `reports` depends on how it's computed.
+- **`delivery_risk.py`** (BRD C.3.2) — the forecasting/stock window: per order and
+  item, stock-in-hand/in-transit/factory-dispatch status and an at-risk flag,
+  filterable by customer/item/supplier. Own module rather than folded into
+  `purchase_reports.py`/`sales_reports.py` since its data genuinely spans both.
+  Reads through `sales.delivery_risk.at_risk_sales_order_lines` — the same
+  function the daily escalation job uses, so the report and the flag agree.
+  Like `forecasting.py`, this is explicit about being a live model (a FIFO match,
+  since nothing in the real process reserves incoming PO stock to a specific
+  outgoing order), not a recorded allocation.
 
-All 20 BRD reports now have an endpoint.
+All 21 BRD reports now have an endpoint.
 
 Added for Phase 1 task 4.13 / BRD C.12.2: `open_inquiries_report`, `advance_payment_pending_report`
 (sales_reports) and `batch_wise_stock_report` (warehouse_reports, which also covers "fragmented

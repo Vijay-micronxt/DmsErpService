@@ -143,6 +143,28 @@ class TestReorder(FrappeTestCase):
 		self.assertEqual(suggestion["suggestedQty"], 0)
 		self.assertEqual(suggestion["urgency"], "Healthy")
 
+	def test_non_reorderable_reason_uses_the_configured_white_label_wording(self):
+		"""BRD C.10.5 / TC-PUR-03: the reason must never be a generic "N/A" -- it's
+		the item's status, but white-labeled per DMS Catalog Settings rather than
+		the raw internal value (e.g. Pacific's own "PDC" wording), same as every
+		other place that surfaces this status in a sentence."""
+		settings = frappe.get_single("DMS Catalog Settings")
+		settings.append("status_labels", {"status": "Pulled Back", "label": "PDC"})
+		settings.save(ignore_permissions=True)
+		try:
+			item = make_item("REORDER-PULLED-LABELLED", "Vitrified")
+			catalog_api.update_product(item, {"status": "Pulled Back"})
+			self._missed_demand(item, 15)
+
+			suggestion = self._suggestion_for(item)
+			self.assertTrue(suggestion["nonReorderable"])
+			self.assertTrue(any("PDC — demand exists but not reorderable" in r for r in suggestion["reasons"]))
+			self.assertFalse(any("Pulled Back —" in r for r in suggestion["reasons"]))
+		finally:
+			settings = frappe.get_single("DMS Catalog Settings")
+			settings.status_labels = []
+			settings.save(ignore_permissions=True)
+
 	def test_pending_and_missed_inquiry_qty_are_real(self):
 		item = make_item("REORDER-INQUIRY", "Vitrified")
 

@@ -142,6 +142,18 @@ POST /api/method/dms_erp.catalog.api.update_product
 { "item": "WT-3030", "patch": { "custom_finish": "Glossy" } }
 ```
 
+**`get_status_label_map`** — GET — ⬜ — BRD C.10.5's configured display label
+(`DMS Catalog Settings`) for each of the 5 real discontinuation statuses, for
+screens needing the whole set (filter dropdowns, the item edit form) rather
+than one resolved label already on a loaded product (`get_product`/
+`list_all_products_bulk` carry it as `statusLabel`).
+```
+GET /api/method/dms_erp.catalog.api.get_status_label_map
+```
+```json
+{ "message": { "Active": "Active", "Partially Discontinued": "PDC", "Factory Discontinued": "Against Order", "Display Removal Pending": "Display Removal Pending", "Pulled Back": "Pulled Back" } }
+```
+
 **`dealer_catalog_api.is_visible`** — GET — ⬜
 ```
 GET /api/method/dms_erp.catalog.dealer_catalog_api.is_visible?dealer=Sharma Tiles&item=WT-3030
@@ -606,6 +618,7 @@ GET /api/method/dms_erp.dashboard.api.purchase_dashboard
 | `catalog_reports.product_movement_report` | optional `order` ("slow"/"fast") |
 | `catalog_reports.product_activity_report` | optional `item` |
 | `forecasting.demand_forecast` | optional `weeks_ahead` (default 4) — always returns `"low"` confidence by design |
+| `delivery_risk.delivery_risk_window` | optional `customer`, `item`, `supplier` — BRD C.3.2 forecasting/stock window, live FIFO model |
 
 ---
 

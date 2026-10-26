@@ -48,6 +48,7 @@ from dms_erp.catalog.utils import (
 	item_sqft_per_box,
 	item_sqm_per_box,
 	item_weight_per_box_kg,
+	status_label,
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
@@ -132,7 +133,7 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 			frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
 		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
 		if not is_sellable(status):
-			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status), frappe.ValidationError)
+			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(item, status_label(status)), frappe.ValidationError)
 		dealer_price = get_price_for_dealer(item, dealer)
 		if dealer_price is None:
 			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)

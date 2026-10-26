@@ -58,6 +58,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Picking](#picking)
 - [Purchase Orders](#purchase-orders)
 - [Pickup Run](#pickup-run)
+- [Route Plan](#route-plan)
 - [Purchase Requirements / Reorder Planning](#purchase-requirements-reorder-planning)
 - [Damage & Insurance Claims](#damage-insurance-claims)
 - [Unloading Payment](#unloading-payment)
@@ -69,6 +70,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Reports — Finance](#reports-finance)
 - [Reports — Catalog](#reports-catalog)
 - [Reports — Forecasting](#reports-forecasting)
+- [Reports — Delivery Risk](#reports-delivery-risk)
 
 ---
 
@@ -506,7 +508,7 @@ Thin layer over native Supplier — every other module already treats a supplier
 
 ## Products / Item Master
 
-Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are both real, enforced downstream (reorder engine, quotation gate) — not display labels.
+Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are both real, enforced downstream (reorder engine, quotation gate) — not display labels. `status` is that internal value; `statusLabel` is its BRD C.10.5 display label, white-labeled per-deployment via `DMS Catalog Settings` (see `get_status_label_map` below) and falling back to the raw `status` value when unconfigured.
 
 #### GET `dms_erp.catalog.api.list_products`
 
@@ -534,7 +536,7 @@ Native ERPNext Item. The 5-state discontinuation lifecycle and altItemId are bot
     "seriesRef": "Marbella", "bulkQtyThreshold": 200, "retailQtyThreshold": 50,
     "category": "Vitrified", "swatch": "#D8C7A8",
     "stockQty": 1840, "bay": "—", "lastSoldDays": 0,
-    "dealerPrice": 560, "status": "Active", "isReorderable": true, "isSellable": true,
+    "dealerPrice": 560, "status": "Active", "statusLabel": "Active", "isReorderable": true, "isSellable": true,
     "piecesPerBox": 4, "sqftPerBox": 17.44, "weightPerBoxKg": 32,
     "leadTimeDays": 21, "altItemId": null,
     "dealerCodes": [{"dealer": "Anand Tiles", "customerItemCode": "AT-PVT-6060", "sampleIssued": true}],
@@ -639,9 +641,20 @@ its name and parent worth a second call for.
 (same shape as get_product)
 ```
 
-> status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back.
+> status: Active → Partially Discontinued → Factory Discontinued → Display Removal Pending → Pulled Back. isReorderable is false from Factory Discontinued on; isSellable is false only at Pulled Back. These are the real internal values `patch.status` is validated against — `statusLabel` (BRD C.10.5's display label) is never a settable key.
 
 > `dealerCodes` / `images` replace the entire child table each call (same convention as Pickup Run's `lines`), with rows shaped `{dealer, customer_item_code, sample_issued}` / `{image, image_type, is_primary}` — not the camelCase `_serialize` output shape.
+
+
+#### GET `dms_erp.catalog.api.get_status_label_map`
+
+**BRD C.10.5's configured display label for each real status** — for screens needing the whole set (filter dropdowns, the item edit form) rather than one resolved label already riding on a loaded product (`statusLabel` on `get_product`/`list_all_products_bulk`/`list_products` already covers that case). White-labeled per-deployment via the `DMS Catalog Settings` Single (Desk-only, no frontend settings screen); a status with no configured row falls back to its own raw internal value.
+
+**Response**
+
+```json
+{ "Active": "Active", "Partially Discontinued": "PDC", "Factory Discontinued": "Against Order", "Display Removal Pending": "Display Removal Pending", "Pulled Back": "Pulled Back" }
+```
 
 
 #### POST `dms_erp.catalog.api.upload_product_image`
@@ -2715,6 +2728,141 @@ Capacity-aware planning layer in front of supplier-ready PO lines — groups the
 
 ---
 
+## Route Plan
+
+BRD C.5 — multi-stop, multi-supplier pickup route planning across the Morbi→Bengaluru corridor, distinct from Pickup Run above (which stays as-is for a simple single-supplier booking). Links to the real `Transporter`/`Transporter Vehicle` fleet (tonnage + mode), not Pickup Run's box-capacity `Vehicle Type`. Stop sequencing/leg distance/time come from `dms_erp.purchase.routing_client` (Google Maps Routes API) — see the root `README.md` for the `dms_erp_google_maps_api_key` site_config requirement, and `DMS Purchase Settings.route_origin_latitude/longitude` for the fixed depot origin every leg is measured from. `routePolyline` is Google's encoded-polyline string for the real road path (opaque here — decoding it is the frontend's job, so the map can draw the actual route instead of a straight line between stops); null until `optimize_route`/`resequence_route_stops` has run at least once. Not yet built: live GPS tracking / per-stop arrival-dwell-departure capture (BRD C.5.1), any `approvals` gating, and container-vs-truck auto-selection (staff picks at creation time).
+
+#### GET `dms_erp.purchase.route_plan_api.list_route_plans`
+
+**List route plans** — paginated.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `status` | string | optional | Draft \| Dispatched \| Completed \| Cancelled |
+| `search` | string | optional | substring match on the Route Plan's own name |
+| `limit` | int | optional, default 20, max 100 | page size |
+| `offset` | int | optional, default 0 | rows to skip |
+
+**Response**
+
+```json
+{
+  "items": [{
+    "id": "RTP-2026-0003", "transporter": "Orient Transport Co", "transporterVehicle": "row-7",
+    "vehicleKind": "Truck", "scheduledDate": null, "status": "Draft",
+    "totalDistanceKm": 0, "totalDurationMinutes": 0, "totalWeightKg": 600,
+    "routePolyline": null,
+    "stops": [
+      { "id": "row-a1", "sequenceNo": 1, "supplier": "Orient Ceramics", "latitude": 22.8181, "longitude": 70.8328, "legDistanceKm": null, "legDurationMinutes": null },
+      { "id": "row-a2", "sequenceNo": 2, "supplier": "Moonstone Tiles", "latitude": 22.4707, "longitude": 70.0577, "legDistanceKm": null, "legDurationMinutes": null }
+    ],
+    "lines": [
+      { "supplier": "Orient Ceramics", "purchaseOrder": "PUR-ORD-2026-00014", "purchaseOrderItem": "row-9", "item": "PVT-6060", "qty": 10, "weightPerBoxKg": 20, "totalWeightKg": 200 }
+    ]
+  }],
+  "total": 3, "limit": 20, "offset": 0
+}
+```
+
+
+#### GET `dms_erp.purchase.route_plan_api.get_route_plan`
+
+**Get single route plan** — same response shape as one row of `list_route_plans`.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+
+
+#### POST `dms_erp.purchase.route_plan_api.create_route_plan`
+
+**Create a route plan** — Purchase/Warehouse/Management only. Needs at least one stop and one line; each line's Purchase Order Item must belong to a supplier that has a stop on this plan — rejected otherwise.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `transporter` | string | required | a `Transporter` id |
+| `transporter_vehicle` | string | required | a `Transporter Vehicle` row name (not a Link — see Pricing/Dealer docs above for the same row-name convention) |
+| `stops` | array of `{supplier}` | required | one per supplier; each Supplier needs `custom_latitude`/`custom_longitude` already set (purchase.supplier_api) |
+| `lines` | array of `{purchase_order_item, qty}` | required | same shape as Pickup Run's `lines` |
+| `scheduled_date` | date | optional | |
+
+**Response**: same shape as one row of `list_route_plans`.
+
+
+#### POST `dms_erp.purchase.route_plan_api.add_route_plan_stop`
+
+**Add a stop to a Draft plan.**
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `supplier` | string | required | rejected if this supplier already has a stop on the plan |
+
+
+#### POST `dms_erp.purchase.route_plan_api.add_route_plan_line`
+
+**Add a line to a Draft plan** — same ready-qty check `create_route_plan` runs, netting against every other Draft Pickup Run *and* Draft Route Plan reservation for that PO line.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `purchase_order_item` | string | required | |
+| `qty` | int | required | boxes |
+
+
+#### POST `dms_erp.purchase.route_plan_api.optimize_route`
+
+**Let Google choose the stop order** for a Draft plan's current stops (Routes API `optimizeWaypointOrder`), overwriting every stop's `sequenceNo`/`legDistanceKm`/`legDurationMinutes`, the plan's `totalDistanceKm`/`totalDurationMinutes`, and `routePolyline` (the real road path, replacing whatever was there before). Raises on any Maps-API failure (missing key, network error, no route found) rather than returning a degraded result — this is a synchronous staff action with no safe default to fall back to.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | must be Draft |
+
+**Response**: same shape as one row of `list_route_plans`, with stops reordered and legs/totals filled in.
+
+
+#### POST `dms_erp.purchase.route_plan_api.resequence_route_stops`
+
+**Manually reorder stops** after `optimize_route` — recomputes legs and `routePolyline` for the now-fixed order (the Directions API, not re-optimized) so totals and the drawn route never go stale after a hand edit.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | must be Draft |
+| `stop_order` | array of string | required | every existing stop's `id`, in the staff-chosen order — must list each stop exactly once |
+
+**Response**: same shape as `optimize_route`'s. Note: resequencing rebuilds the stops child table, so every stop's `id` changes again on this call — don't hold onto a stop `id` across an optimize/resequence pair.
+
+
+#### POST `dms_erp.purchase.route_plan_api.advance_route_plan_status`
+
+**Advance a route plan's status** — Purchase/Warehouse/Management only. `Draft → Dispatched | Cancelled`, `Dispatched → Completed`. On `Dispatched`: re-validates every line's ready qty (something may have moved since Draft), creates one `Inward Truck` per line (tagged with this plan's id, same flow Pickup Run's dispatch already uses), and — if the plan's total weight exceeds the chosen vehicle's `capacity_tonnes` — returns an `overloadWarning` string rather than blocking (BRD asks for an overload *warning*, not prevention).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `route_plan` | string | required | |
+| `next_status` | string | required | |
+
+**Response**: same shape as one row of `list_route_plans`, plus `overloadWarning` (string, only present when over capacity).
+
+
+---
+
 ## Purchase Requirements / Reorder Planning
 
 Fully real formula as of Phase 10+13: current stock, missed demand, pending inquiries, retail sales velocity, and open-PO coverage.
@@ -2745,6 +2893,7 @@ _No parameters._
 
 > ⚠️ Factory Discontinued / Display Removal Pending / Pulled Back items still appear in this array (suggestedQty 0, nonReorderable true) rather than being filtered out entirely
 > openPurchaseOrderQty already nets out of suggestedQty, so an item fully covered by an open PO naturally drops to 0 without a separate "covered" flag
+> A non-reorderable item with missed demand gets a `"<label> — demand exists but not reorderable"` reason — `<label>` is the item's BRD C.10.5 display label (`catalog.utils.status_label`, white-labeled per `DMS Catalog Settings`), not its raw internal status value
 
 
 #### POST `dms_erp.sales.inquiry_api.convert_to_purchase_requirement` · **PARTIAL**
@@ -3718,4 +3867,44 @@ The BRD's "Forecasting dashboard". No forecasting methodology was specified in t
 ```
 
 > ⚠️ confidence is always "low" right now by design — surface it in the UI wherever a projected number is shown, don't present this as a precise forecast
+
+## Reports — Delivery Risk
+
+BRD C.3.2's forecasting/stock window — per order and item, stock-in-hand/in-transit/factory-dispatch status and an at-risk flag, groupable by customer/item/supplier via the three filter params. A live FIFO model, not a recorded allocation: nothing in this app links a specific Purchase Order line to the Sales Order(s) it covers, so "which orders are at risk" is computed every call — oldest open order first (by `transaction_date`) against available supply (stock on hand, then on-track in-transit/factory-dispatch, then delayed in-transit/factory-dispatch). The same computation (`sales.delivery_risk.at_risk_sales_order_lines`) backs the daily `review_delivery_risk` escalation job, so the report and the flag always agree.
+
+#### GET `dms_erp.reports.delivery_risk.delivery_risk_window`
+
+**Delivery risk window**
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `customer` | string | optional | exact match on the Sales Order's dealer |
+| `item` | string | optional | exact match on item code |
+| `supplier` | string | optional | matches any covering Purchase Order's supplier |
+
+**Response**
+
+```json
+{
+  "rows": [{
+    "salesOrder": "SO-2026-00042", "salesOrderItem": "...", "customer": "Sharma Tiles",
+    "item": "PVT-6060", "deliveryDate": "2026-09-20",
+    "coveredFrom": "factory_dispatch_delayed", "atRisk": true, "delayDays": 10,
+    "coveringPoLines": [{"po": "PO-2026-00017", "supplier": "Sunrise Vitrified", "scheduleDate": "2026-09-05", "daysOverdue": 10}]
+  }],
+  "summary": {
+    "lineCount": 1, "atRiskCount": 1,
+    "byCustomer": {"Sharma Tiles": 1}, "byItem": {"PVT-6060": 1}, "bySupplier": {"Sunrise Vitrified": 1}
+  }
+}
+```
+
+> Every open Sales Order line gets a row, not just at-risk ones — `coveredFrom` is one of `stock` / `in_transit_ontrack` / `factory_dispatch_ontrack` / `in_transit_delayed` / `factory_dispatch_delayed` / `uncovered`. `atRisk` is only ever true when the line's own item has at least one delayed Purchase Order line **and** the covering supply is delayed (or the line is left uncovered) **and** its own `deliveryDate` is imminent (within `DMS Purchase Settings.delivery_risk_eta_buffer_days`) — an uncovered line with no delay anywhere in its supply is a plain reorder gap (`purchase.reorder_api`'s own territory), never flagged here.
+> The summary rollups (`byCustomer`/`byItem`/`bySupplier`) count only at-risk rows, so a mostly-healthy window still shows at a glance where the real exposure is.
+
+#### Scheduled job: `dms_erp.sales.delivery_risk.review_delivery_risk` (daily)
+
+Flags each newly at-risk Sales Order Item (`custom_delivery_risk_flagged_on`, set once, never cleared) and notifies the dealer's salesperson plus Management via the same in-app `Notification Log` every other daily job in this app uses — there's no real outbound WhatsApp/email send anywhere in `dms_erp` (`comms/api.py`'s own docstring), so "dealer notification" here stays a log-only escalation to the person positioned to actually call them, not a second pretend-send path for that same unsolved gap.
 

@@ -47,7 +47,13 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, is_reorderable, is_sellable, item_default_supplier
+from dms_erp.catalog.utils import (
+	DISCONTINUATION_STATUSES,
+	is_reorderable,
+	is_sellable,
+	item_default_supplier,
+	status_label,
+)
 from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
 from dms_erp.warehouse.utils import total_stock_for_item
@@ -159,6 +165,7 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"lastSoldDays": 0,
 		"dealerPrice": pricing_api.get_dealer_price(item_doc.name),
 		"status": status,
+		"statusLabel": status_label(status),
 		"isReorderable": is_reorderable(status),
 		"isSellable": is_sellable(status),
 		"piecesPerBox": item_doc.custom_pieces_per_box,
@@ -400,6 +407,11 @@ def _serialize_many(codes: list[str]) -> list[dict]:
 	):
 		images.setdefault(r.parent, []).append(_serialize_image(r))
 
+	# Resolved once for the whole call, not per item -- same "fixed handful of queries"
+	# mandate as everything else in this function; a per-item status_label() call here
+	# would reintroduce exactly the N-query blowup this function exists to avoid.
+	label_map = {s: status_label(s) for s in DISCONTINUATION_STATUSES}
+
 	out = []
 	for code in codes:
 		row = items.get(code)
@@ -429,6 +441,7 @@ def _serialize_many(codes: list[str]) -> list[dict]:
 				"lastSoldDays": 0,
 				"dealerPrice": dealer_price.get(code),
 				"status": status,
+				"statusLabel": label_map[status],
 				"isReorderable": is_reorderable(status),
 				"isSellable": is_sellable(status),
 				"piecesPerBox": row.get("custom_pieces_per_box"),
@@ -517,6 +530,15 @@ def list_item_colors():
 	list so the picker isn't empty on a fresh site."""
 	values = frappe.get_all("Item", filters={"custom_color": ["is", "set"]}, pluck="custom_color", distinct=True)
 	return sorted(set(values)) or COLOR_DEFAULTS
+
+
+@frappe.whitelist(methods=["GET"])
+def get_status_label_map() -> dict:
+	"""BRD C.10.5 -- the configured label (DMS Catalog Settings) for each of the 5 real
+	discontinuation statuses, for screens needing the whole set (filter dropdowns, the
+	item edit form) rather than one resolved label already riding on a loaded product
+	(_serialize/_serialize_many's own statusLabel key covers that case)."""
+	return {s: status_label(s) for s in DISCONTINUATION_STATUSES}
 
 
 def _distinct_item_values(fieldname: str) -> list[str]:
