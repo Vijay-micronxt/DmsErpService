@@ -29,6 +29,7 @@ equivalent for become Custom Fields:
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from dms_erp.catalog.utils import ORDER_UOMS
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATIONS
 from dms_erp.sales.order_channel import DEALER_TYPES
 
@@ -177,6 +178,36 @@ CUSTOM_FIELDS = {
 			"allow_on_submit": 1,
 			"insert_after": "delivery_date",
 		},
+		# Sheet 7.8 -- the qty/unit the line was actually entered in, when it wasn't
+		# Box (see catalog.utils.normalize_order_line_uoms). `qty` itself always stays
+		# in boxes; these are display-only, so a dealer/staff screen can show "50 Sqft
+		# (~4 boxes)" instead of just the converted box count.
+		{
+			"fieldname": "custom_entered_qty",
+			"fieldtype": "Float",
+			"label": "Entered Qty",
+			"insert_after": "custom_delivery_risk_flagged_on",
+		},
+		{
+			"fieldname": "custom_entered_uom",
+			"fieldtype": "Select",
+			"label": "Entered UOM",
+			"options": "\n".join(ORDER_UOMS),
+			"insert_after": "custom_entered_qty",
+		},
+	],
+	"Sales Invoice": [
+		{
+			"fieldname": "custom_order_channel",
+			"fieldtype": "Select",
+			"label": "Channel",
+			"options": "\n".join(ORDER_CHANNELS),
+			"default": "Retail",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"insert_after": "due_date",
+			"description": "BRD C.4.3 -- carried over from the Sales Order at create_sales_invoice time, so the Retail vs Bulk split (C.4.1's reorder exclusion included) still holds once an order is billed. Native Tally-migrated invoices never get this field set (nothing here rewrites synced records), which is exactly why sample_api.top_dealers and reorder_api/forecasting.py default a missing value to Retail rather than excluding it.",
+		},
 	],
 	"Quotation Item": [
 		{
@@ -184,6 +215,19 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Date",
 			"label": "Delivery Date",
 			"insert_after": "discount_percentage",
+		},
+		{
+			"fieldname": "custom_entered_qty",
+			"fieldtype": "Float",
+			"label": "Entered Qty",
+			"insert_after": "custom_delivery_date",
+		},
+		{
+			"fieldname": "custom_entered_uom",
+			"fieldtype": "Select",
+			"label": "Entered UOM",
+			"options": "\n".join(ORDER_UOMS),
+			"insert_after": "custom_entered_qty",
 		},
 	],
 	"Opportunity": [
@@ -229,7 +273,7 @@ CUSTOM_FIELDS = {
 			"fieldtype": "Link",
 			"label": "Salesperson",
 			"options": "User",
-			"description": "BRD C.12.3 — ownership of the dealer relationship. Targets/performance-vs-target reporting is a separate follow-up once the team decides whether that needs its own doctype or just a number field; this is the field-only version.",
+			"description": "BRD C.12.3 — ownership of the dealer relationship. Targets/performance-vs-target reporting (26 Oct 2026) is sales.sales_target_api, with its own DMS Sales Target doctype.",
 			"insert_after": "custom_dealer_type",
 		},
 		{

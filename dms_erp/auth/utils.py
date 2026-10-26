@@ -6,6 +6,7 @@ import frappe
 # Order matters: this is priority for `primary_role`, highest-privilege first.
 APP_ROLE_SLUGS = {
 	"DMS Management": "management",
+	"DMS Finance": "finance",
 	"DMS Purchase": "purchase",
 	"DMS Warehouse": "warehouse",
 	"DMS Sales": "sales",

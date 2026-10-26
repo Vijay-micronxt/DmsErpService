@@ -21,6 +21,9 @@ APP_ROLES = [
 	"DMS Warehouse",
 	"DMS Purchase",
 	"DMS Management",
+	# Pacific, 26 Oct 2026: a Finance role for BRD C.12.1's Finance dashboard and the
+	# payment-side actions (claim settlement, unloading and labour payments).
+	"DMS Finance",
 	"DMS Dealer",
 ]
 

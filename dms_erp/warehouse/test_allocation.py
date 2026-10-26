@@ -364,3 +364,65 @@ class TestAllocation(FrappeTestCase):
 			self.assertEqual(scanned["kind"], "item")
 			self.assertEqual(scanned["lot"]["itemCode"], self.item)
 			self.assertEqual(scanned["lot"]["batchNumber"], "ALLOC-BATCH-6")
+
+	def test_create_allocation_records_the_supplier_invoice_on_the_receipt(self):
+		# BRD C.4.4 -- "supplier invoice reference" captured at receipt, on the Purchase
+		# Receipt itself (where Shortage claims also read it from).
+		result = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-INV-B1",
+			total_qty=10,
+			lines=[{"bay": "ALLOC-A-02", "qty": 10}],
+			supplier=self.supplier,
+			supplier_invoice_no=" INV-7781 ",
+			supplier_invoice_date="2026-10-20",
+		)
+		self.assertEqual(result["supplierInvoiceNo"], "INV-7781")
+		self.assertEqual(str(result["supplierInvoiceDate"]), "2026-10-20")
+		self.assertEqual(
+			frappe.db.get_value("Purchase Receipt", result["purchaseReceipt"], "custom_supplier_invoice_no"), "INV-7781"
+		)
+
+		without = allocation_api.create_allocation(
+			item=self.item, batch_no="ALLOC-INV-B2", total_qty=5, lines=[{"bay": "ALLOC-A-02", "qty": 5}], supplier=self.supplier
+		)
+		self.assertIsNone(without["supplierInvoiceNo"])
+		self.assertIsNone(without["supplierInvoiceDate"])
+
+	def test_weight_entered_at_receipt_updates_a_batch_created_earlier_at_inward(self):
+		# BRD C.6.1 -- inward creates the batch at the item's standard weight; the actual
+		# weight entered at receipt must still land on it.
+		from dms_erp.warehouse.utils import ensure_batch
+
+		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
+		ensure_batch(self.item, "ALLOC-BW-EXISTING")
+		self.assertEqual(frappe.db.get_value("Batch", "ALLOC-BW-EXISTING", "custom_batch_weight_kg"), 28)
+
+		result = allocation_api.create_allocation(
+			item=self.item,
+			batch_no="ALLOC-BW-EXISTING",
+			total_qty=4,
+			lines=[{"bay": "ALLOC-A-02", "qty": 4}],
+			supplier=self.supplier,
+			weight_per_box_kg=30.5,
+		)
+		self.assertEqual(frappe.db.get_value("Batch", "ALLOC-BW-EXISTING", "custom_batch_weight_kg"), 30.5)
+		self.assertEqual(result["weightPerBoxKg"], 30.5)
+
+	def test_suggest_batch_weight_offers_the_last_received_batch(self):
+		item = make_item("ALLOC-BW-SUGGEST", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_weight_per_box_kg", 20)
+
+		fresh = allocation_api.suggest_batch_weight(item)
+		self.assertIsNone(fresh["lastBatch"])
+		self.assertEqual(fresh["standardWeightPerBoxKg"], 20)
+
+		for batch, weight in (("ALLOC-BW-S1", 21), ("ALLOC-BW-S2", 22.5)):
+			allocation_api.create_allocation(
+				item=item, batch_no=batch, total_qty=2, lines=[{"bay": "ALLOC-A-02", "qty": 2}],
+				supplier=self.supplier, weight_per_box_kg=weight,
+			)
+		latest = allocation_api.suggest_batch_weight(item)
+		self.assertEqual((latest["lastBatch"], latest["lastBatchWeightPerBoxKg"]), ("ALLOC-BW-S2", 22.5))
+		# The batch being received now is skipped, so its own placeholder isn't "suggested" back.
+		self.assertEqual(allocation_api.suggest_batch_weight(item, exclude_batch="ALLOC-BW-S2")["lastBatch"], "ALLOC-BW-S1")

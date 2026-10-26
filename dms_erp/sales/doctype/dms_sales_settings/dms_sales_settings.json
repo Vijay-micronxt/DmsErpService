@@ -10,6 +10,7 @@
   "inactive_dealer_notify_user",
   "reservation_max_days",
   "reservation_reminder_day",
+  "inquiry_drop_reasons",
   "eway_bill_threshold_amount"
  ],
  "fields": [
@@ -54,6 +55,12 @@
    "fieldname": "reservation_reminder_day",
    "fieldtype": "Int",
    "label": "Reservation Reminder Day"
+  },
+  {
+   "fieldname": "inquiry_drop_reasons",
+   "fieldtype": "Small Text",
+   "label": "Inquiry Drop Reasons",
+   "description": "One reason per line, offered when staff close or reject an inquiry without a customer PO (BRD C.2.3). \"Other\" always asks for details. Leave empty to use the standard list."
   },
   {
    "default": "50000",

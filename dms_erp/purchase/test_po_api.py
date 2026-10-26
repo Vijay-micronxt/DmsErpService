@@ -157,6 +157,49 @@ class TestPoApi(FrappeTestCase):
 		self.assertEqual(page["limit"], 2)
 		self.assertEqual(page["offset"], 0)
 
+	def test_po_sticker_data_has_no_bay_or_batch_yet(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=3, supplier=self.supplier, expected_ready_date=READY_BY)
+		rows = po_api.get_po_sticker_data(po["id"])
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["itemCode"], self.item)
+		self.assertEqual(rows[0]["qty"], 3)
+		self.assertEqual(rows[0]["purchaseOrder"], po["id"])
+		self.assertEqual(rows[0]["supplier"], self.supplier)
+		self.assertIsNone(rows[0]["bayCode"])
+		self.assertIsNone(rows[0]["batchNumber"])
+
+	def test_print_po_stickers_yields_one_entry_per_physical_box(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=5, supplier=self.supplier, expected_ready_date=READY_BY)
+		payload = po_api.print_po_stickers(po["id"], copies_per_box=2)
+		self.assertEqual(payload["count"], 10)
+		self.assertEqual(len(payload["stickers"]), 10)
+
+	def test_print_po_stickers_rejects_zero_copies(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=5, supplier=self.supplier, expected_ready_date=READY_BY)
+		with self.assertRaises(frappe.ValidationError):
+			po_api.print_po_stickers(po["id"], copies_per_box=0)
+
+	def test_render_po_stickers_html_shows_tbd_bay_and_pending_batch(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1, supplier=self.supplier, expected_ready_date=READY_BY)
+		html = po_api.render_po_stickers_html(po["id"])
+		self.assertIn(self.item, html)
+		self.assertIn("TBD", html)
+		self.assertIn("Pending allocation", html)
+
+	def test_render_po_stickers_html_escapes_item_name(self):
+		item = make_item("PO-STICKER-XSS-ITEM", "Vitrified")
+		frappe.db.set_value("Item", item, "item_name", "<script>alert(1)</script>")
+		po = po_api.create_purchase_order(item=item, ordered_qty=1, supplier=self.supplier, expected_ready_date=READY_BY)
+		html = po_api.render_po_stickers_html(po["id"])
+		self.assertNotIn("<script>alert(1)</script>", html)
+		self.assertIn("&lt;script&gt;", html)
+
+	def test_po_stickers_require_purchase_or_warehouse_role(self):
+		po = po_api.create_purchase_order(item=self.item, ordered_qty=1, supplier=self.supplier, expected_ready_date=READY_BY)
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			po_api.get_po_sticker_data(po["id"])
+
 	# -- BRD C.3.3: drop-ship --
 
 	def test_drop_ship_purchase_order_snapshots_the_sales_orders_addresses(self):

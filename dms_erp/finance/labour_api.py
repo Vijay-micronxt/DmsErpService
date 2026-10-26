@@ -26,7 +26,14 @@ from dms_erp.finance import accounting
 from dms_erp.pagination import clamp
 
 LABOUR_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
+# Paying labour is Finance's job; recording attendance stays with the warehouse.
+LABOUR_PAY_ROLES = LABOUR_WRITE_ROLES | {"DMS Finance"}
 PAYMENT_MODES = ["Cash", "Bank Transfer", "UPI", "Cheque"]
+
+
+def _assert_can_pay_labour():
+	if not set(frappe.get_roles(frappe.session.user)) & LABOUR_PAY_ROLES:
+		frappe.throw(_("Only Warehouse, Finance or Management can record a labour payment."), frappe.PermissionError)
 
 
 def _assert_can_manage_labour():
@@ -159,7 +166,7 @@ def add_attendance_day(
 
 @frappe.whitelist(methods=["POST"])
 def record_payment(record: str, amount_paid: float, payment_mode: str, payment_reference: str | None = None):
-	_assert_can_manage_labour()
+	_assert_can_pay_labour()
 
 	if payment_mode not in PAYMENT_MODES:
 		frappe.throw(_("Invalid payment_mode: {0}").format(payment_mode), frappe.ValidationError)

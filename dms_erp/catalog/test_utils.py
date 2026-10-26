@@ -1,7 +1,15 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from dms_erp.catalog.utils import DISCONTINUATION_STATUSES, status_label
+from dms_erp.catalog.setup import setup_catalog
+from dms_erp.catalog.utils import (
+	DISCONTINUATION_STATUSES,
+	convert_qty_to_boxes,
+	derive_sqft_per_box,
+	normalize_order_line_uoms,
+	status_label,
+)
+from dms_erp.warehouse.test_fixtures import ensure_company, make_item
 
 
 class TestStatusLabel(FrappeTestCase):
@@ -41,3 +49,75 @@ class TestStatusLabel(FrappeTestCase):
 		settings.save(ignore_permissions=True)
 
 		self.assertEqual(status_label("Pulled Back"), "Pulled Back")
+
+
+class TestDeriveSqftPerBox(FrappeTestCase):
+	def test_derives_from_height_width_and_pieces(self):
+		# A 600mm x 600mm tile, 4 pieces per box: (600/304.8)^2 * 4 = 15.5 sqft.
+		self.assertEqual(derive_sqft_per_box(600, 600, 4), 15.5)
+
+	def test_missing_any_input_returns_none(self):
+		self.assertIsNone(derive_sqft_per_box(None, 600, 4))
+		self.assertIsNone(derive_sqft_per_box(600, None, 4))
+		self.assertIsNone(derive_sqft_per_box(600, 600, None))
+		self.assertIsNone(derive_sqft_per_box(0, 600, 4))
+
+
+class TestConvertQtyToBoxes(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		setup_catalog()
+		cls.item = make_item("UOM-TEST-ITEM", "Vitrified")
+		frappe.db.set_value(
+			"Item",
+			cls.item,
+			{
+				"custom_pieces_per_box": 4,
+				"custom_sqft_per_box": 15.5,
+				"custom_weight_per_box_kg": 28,
+			},
+		)
+
+	def test_box_passes_through_unchanged(self):
+		self.assertEqual(convert_qty_to_boxes(self.item, 7, "Box"), 7)
+
+	def test_pcs_converts_and_rounds_up(self):
+		# 4 pieces/box -> 10 pcs needs 3 boxes (2.5 rounded up).
+		self.assertEqual(convert_qty_to_boxes(self.item, 10, "Pcs"), 3)
+
+	def test_sqft_converts_and_rounds_up(self):
+		self.assertEqual(convert_qty_to_boxes(self.item, 50, "Sqft"), 4)  # 50 / 15.5 = 3.22 -> 4
+
+	def test_sqm_converts_and_rounds_up(self):
+		# sqm_per_box derives from sqft_per_box (15.5 * 0.09290304 ~= 1.44sqm).
+		self.assertEqual(convert_qty_to_boxes(self.item, 4, "Sqm"), 3)  # 4 / 1.44 = 2.78 -> 3
+
+	def test_kg_converts_and_rounds_up(self):
+		self.assertEqual(convert_qty_to_boxes(self.item, 50, "Kg"), 2)  # 50 / 28 = 1.79 -> 2
+
+	def test_gram_converts_and_rounds_up(self):
+		self.assertEqual(convert_qty_to_boxes(self.item, 50000, "Gram"), 2)  # 50000 / 28000 -> 2
+
+	def test_unknown_uom_is_rejected(self):
+		with self.assertRaises(frappe.ValidationError):
+			convert_qty_to_boxes(self.item, 10, "Litre")
+
+	def test_missing_conversion_factor_is_rejected(self):
+		no_factors = make_item("UOM-TEST-NO-FACTORS", "Vitrified")
+		with self.assertRaises(frappe.ValidationError):
+			convert_qty_to_boxes(no_factors, 10, "Sqft")
+
+	def test_normalize_order_line_uoms_converts_and_tags_non_box_lines(self):
+		lines = [
+			{"item": self.item, "qty": 10},
+			{"item": self.item, "qty": 50, "uom": "Sqft"},
+		]
+		out = normalize_order_line_uoms(lines)
+		self.assertEqual(out[0]["qty"], 10)
+		self.assertNotIn("entered_qty", out[0])
+		self.assertNotIn("entered_uom", out[0])
+		self.assertEqual(out[1]["qty"], 4)
+		self.assertEqual(out[1]["entered_qty"], 50)
+		self.assertEqual(out[1]["entered_uom"], "Sqft")

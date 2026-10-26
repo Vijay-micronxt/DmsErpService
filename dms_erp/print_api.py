@@ -21,7 +21,7 @@ from frappe.utils import flt, formatdate, money_in_words
 from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.warehouse.utils import default_company
 
-PRINT_READ_ROLES = {"DMS Sales", "DMS Purchase", "DMS Warehouse", "DMS Management", "System Manager"}
+PRINT_READ_ROLES = {"DMS Sales", "DMS Purchase", "DMS Warehouse", "DMS Management", "DMS Finance", "System Manager"}
 
 _CSS = """
 	* { box-sizing: border-box; }

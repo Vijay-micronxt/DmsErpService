@@ -10,15 +10,26 @@ back to the item's own default supplier (see catalog.utils.item_default_supplier
 and only throws if neither the item nor its Series has one set.
 """
 
+from html import escape as _esc
+
 import frappe
 from frappe import _
 from frappe.utils import add_days, getdate, today
 
 from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier
 from dms_erp.pagination import clamp
+from dms_erp.qr_utils import qr_data_uri
+from dms_erp.warehouse.allocation_api import _BOX_STICKER_CSS
+from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
 from dms_erp.warehouse.utils import default_company
 
 PURCHASE_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
+PO_STICKER_ROLES = PURCHASE_WRITE_ROLES | BAY_WRITE_ROLES
+
+
+def _assert_can_print_po_stickers():
+	if not set(frappe.get_roles(frappe.session.user)) & PO_STICKER_ROLES:
+		frappe.throw(_("Only Purchase or Warehouse can print PO stickers."), frappe.PermissionError)
 
 
 def _assert_can_manage_purchase():
@@ -452,3 +463,82 @@ def flag_overdue_unpaid_pos():
 				}
 			).insert(ignore_permissions=True)
 		frappe.db.set_value("Purchase Order", po.name, "custom_return_flagged", 1)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_po_sticker_data(po: str) -> list[dict]:
+	"""Sheet 7.6 -- a box label is needed before goods physically arrive (so
+	material can be tagged at the supplier's dock or in transit), not only at
+	put-away time (warehouse.allocation_api.get_box_sticker_data, which needs a
+	confirmed Bay Allocation -- i.e. a real batch and bay that don't exist until
+	after the goods are actually received and allocated). This mirrors that
+	sticker's fields, keyed off the PO line instead: no batch number (not
+	assigned until Batch creation at allocation) and no bay -- both are reported
+	as None here, printed "TBD" by the frontend, and get replaced by a real
+	allocation sticker once the goods are actually put away."""
+	_assert_can_print_po_stickers()
+	doc = frappe.get_doc("Purchase Order", po)
+	rows = []
+	for row in doc.items:
+		item = frappe.get_cached_doc("Item", row.item_code)
+		payload = f"PO-ITEM|{row.item_code}|{doc.name}|{row.name}"
+		rows.append(
+			{
+				"itemCode": row.item_code,
+				"itemName": item.item_name,
+				"size": item.custom_size,
+				"finish": item.custom_finish,
+				"series": item.custom_series,
+				"qty": row.qty,
+				"piecesPerBox": item.custom_pieces_per_box,
+				"weightPerBoxKg": item.custom_weight_per_box_kg,
+				"purchaseOrder": doc.name,
+				"supplier": doc.supplier,
+				"bayCode": None,
+				"batchNumber": None,
+				"qrCode": qr_data_uri(payload),
+			}
+		)
+	return rows
+
+
+@frappe.whitelist(methods=["POST"])
+def print_po_stickers(po: str, copies_per_box: int = 1) -> dict:
+	"""One sticker entry per physical box ordered (not per PO line), same
+	per-box expansion as warehouse.allocation_api.print_box_stickers."""
+	_assert_can_print_po_stickers()
+	if copies_per_box < 1:
+		frappe.throw(_("copies_per_box must be at least 1."), frappe.ValidationError)
+
+	rows = get_po_sticker_data(po)
+	stickers = []
+	for row in rows:
+		box_count = int(row["qty"]) * int(copies_per_box)
+		stickers.extend([row] * box_count)
+	return {"purchaseOrder": po, "count": len(stickers), "stickers": stickers}
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def render_po_stickers_html(po: str, copies_per_box: int = 1) -> str:
+	"""Printable HTML sheet for get_po_sticker_data, reusing the exact same 4x2in
+	label CSS as the post-allocation box sticker (warehouse.allocation_api) so
+	the two look identical on the shelf -- only the Bay/Batch row differs, since
+	neither is known yet at PO-print time."""
+	payload = print_po_stickers(po, copies_per_box)
+	cards = []
+	for s in payload["stickers"]:
+		series_label = f" &middot; {_esc(s['series'])}" if s.get("series") else ""
+		cards.append(
+			f"""<div class="sticker">
+	<img class="qr" src="{s['qrCode']}" alt="QR">
+	<div class="info">
+		<div class="code">{_esc(s['itemCode'])}</div>
+		<div class="name">{_esc(s.get('itemName') or '')}{series_label}</div>
+		<div class="row"><span class="k">Size/Finish:</span> {_esc(s.get('size') or '—')} / {_esc(s.get('finish') or '—')}</div>
+		<div class="row"><span class="k">Batch:</span> Pending allocation</div>
+		<div class="row"><span class="k">Bay:</span> TBD</div>
+		<div class="row"><span class="k">PO:</span> {_esc(s['purchaseOrder'])} &middot; {_esc(s.get('supplier') or '—')}</div>
+	</div>
+</div>"""
+		)
+	return f"<!doctype html><html><head><meta charset='utf-8'><title>PO Stickers</title><style>{_BOX_STICKER_CSS}</style></head><body>{''.join(cards)}</body></html>"

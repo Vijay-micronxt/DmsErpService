@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.approvals import api as approvals_api
 from dms_erp.catalog.setup import setup_catalog
@@ -16,6 +17,11 @@ from dms_erp.warehouse.test_fixtures import (
 from dms_erp.warehouse.utils import default_company
 
 TEST_PASSWORD = "Pa$$w0rd123!"
+
+
+# Relative to today: a fixed date rotted into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date").
+DISPATCH = str(add_days(today(), 30))
 
 
 def _make_sales_only_user(email: str) -> str:
@@ -254,6 +260,44 @@ class TestApprovalsApi(FrappeTestCase):
 		amended = quotation_api.get_quotation(decided["referenceName"])
 		self.assertEqual(amended["lines"][0]["qty"], 50)
 
+	def test_preview_shows_before_and_after_for_a_queued_line_edit(self):
+		# BRD C.11 -- Management approves against a side-by-side version, and nothing
+		# changes until they decide.
+		quotation = self._make_quotation(qty=25)
+
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 55)
+
+		frappe.set_user("Administrator")
+		preview = approvals_api.preview_approval(queued["approval"]["id"])
+		self.assertEqual(preview["kind"], "quotation")
+		self.assertEqual([(l["item"], l["qty"]) for l in preview["before"]], [(self.priced_item, 25)])
+		self.assertEqual([(l["item"], l["qty"]) for l in preview["after"]], [(self.priced_item, 55)])
+		self.assertEqual(preview["afterNetTotal"], preview["after"][0]["rate"] * 55)
+		self.assertIsNone(preview["error"])
+		self.assertEqual(quotation_api.get_quotation(quotation["id"])["lines"][0]["qty"], 25)
+
+		# Once decided, no preview: the document has moved on.
+		approvals_api.decide_approval(queued["approval"]["id"], "Rejected")
+		self.assertIsNone(approvals_api.preview_approval(queued["approval"]["id"]))
+
+	def test_preview_of_a_queued_line_addition_lists_the_new_line(self):
+		quotation = self._make_quotation(qty=26)
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.add_quotation_line(quotation["id"], self.second_item, 7)
+
+		frappe.set_user("Administrator")
+		preview = approvals_api.preview_approval(queued["approval"]["id"])
+		self.assertEqual(len(preview["before"]), 1)
+		self.assertEqual({l["item"]: l["qty"] for l in preview["after"]}, {self.priced_item: 26, self.second_item: 7})
+
+	def test_preview_is_management_only(self):
+		quotation = self._make_quotation(qty=27)
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.update_quotation_line_qty(quotation["id"], self.priced_item, 30)
+		with self.assertRaises(frappe.PermissionError):
+			approvals_api.preview_approval(queued["approval"]["id"])
+
 	def test_rejecting_a_queued_line_edit_leaves_the_quotation_untouched(self):
 		quotation = self._make_quotation(qty=23)
 
@@ -283,7 +327,7 @@ class TestApprovalsApi(FrappeTestCase):
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=qty, source="Phone")
 		return self._create_order(
-			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 
 	def test_authorized_user_can_cancel_an_order_immediately_and_logs_an_approved_request(self):
@@ -473,7 +517,7 @@ class TestApprovalsApi(FrappeTestCase):
 		order = self._create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 		self.assertEqual(order["lines"][0]["discountPercentage"], 5)
@@ -493,7 +537,7 @@ class TestApprovalsApi(FrappeTestCase):
 		result = self._create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 2}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 
@@ -518,7 +562,7 @@ class TestApprovalsApi(FrappeTestCase):
 		self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 5}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)  # 5 * 500 = 2500, well under the 10000 limit
 
@@ -532,7 +576,7 @@ class TestApprovalsApi(FrappeTestCase):
 		self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 1000}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 
@@ -546,7 +590,7 @@ class TestApprovalsApi(FrappeTestCase):
 		order = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)  # 10 * 500 = 5000, over the 1000 limit
 
@@ -568,7 +612,7 @@ class TestApprovalsApi(FrappeTestCase):
 		result = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 
@@ -586,7 +630,7 @@ class TestApprovalsApi(FrappeTestCase):
 		queued = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 		approval_id = queued["approval"]["id"]
@@ -608,7 +652,7 @@ class TestApprovalsApi(FrappeTestCase):
 		queued = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 		approval_id = queued["approval"]["id"]
@@ -625,7 +669,7 @@ class TestApprovalsApi(FrappeTestCase):
 		)  # priced well over the 1000 limit
 		before = frappe.db.count("Approval Request")
 
-		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		after = frappe.db.count("Approval Request")
 		self.assertEqual(after, before + 1)
@@ -642,8 +686,63 @@ class TestApprovalsApi(FrappeTestCase):
 		before = frappe.db.count("Sales Order")
 
 		frappe.set_user(self.sales_user)
-		result = quotation_api.convert_to_order(quotation["id"], expected_dispatch="2026-09-01")
+		result = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
 
 		self.assertTrue(result["approvalRequired"])
 		self.assertEqual(result["approval"]["triggerType"], "Credit Limit Exceeded")
 		self.assertEqual(frappe.db.count("Sales Order"), before)
+
+	def test_preview_of_a_queued_cancellation_shows_the_stage_change(self):
+		order = self._make_order(qty=12)
+		frappe.set_user(self.sales_user)
+		queued = order_api.advance_order_stage(order["id"], "Cancelled")
+
+		frappe.set_user("Administrator")
+		preview = approvals_api.preview_approval(queued["approval"]["id"])
+		self.assertEqual(preview["kind"], "cancel")
+		self.assertEqual((preview["beforeStage"], preview["afterStage"]), ("Confirmed", "Cancelled"))
+		self.assertEqual(preview["before"][0]["qty"], 12)
+
+	# ---------------- Pricing Override (#3): a rate typed by staff ----------------
+
+	def test_a_typed_rate_from_sales_is_queued_and_applied_on_approval(self):
+		frappe.set_user(self.sales_user)
+		queued = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "rate": 480}], markup_pct=0
+		)
+		self.assertTrue(queued["approvalRequired"])
+		self.assertEqual(queued["approval"]["triggerType"], "Pricing Override")
+		self.assertIn("at 480", queued["approval"]["reason"])
+
+		frappe.set_user("Administrator")
+		decided = approvals_api.decide_approval(queued["approval"]["id"], "Approved")
+		line = quotation_api.get_quotation(decided["referenceName"])["lines"][0]
+		self.assertEqual(line["rate"], 480)
+		self.assertEqual(line["priceListRate"], 500)  # the dealer's price stays on the row
+
+	def test_management_typed_rate_applies_immediately_with_an_audit_record(self):
+		quotation = quotation_api.create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "rate": 470}], markup_pct=0
+		)
+		self.assertEqual(quotation["lines"][0]["rate"], 470)
+		self.assertTrue(
+			frappe.db.exists(
+				"Approval Request", {"trigger_type": "Pricing Override", "reference_name": quotation["id"], "status": "Approved"}
+			)
+		)
+
+	def test_a_typed_rate_on_an_order_works_the_same_way(self):
+		order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 3, "rate": 455}], expected_dispatch=DISPATCH
+		)
+		self.assertEqual(order["lines"][0]["rate"], 455)
+
+	def test_a_typed_rate_cannot_be_combined_with_a_discount_or_be_zero(self):
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(
+				dealer=self.dealer,
+				lines=[{"item": self.priced_item, "qty": 10, "rate": 480, "discount_percentage": 5}],
+				markup_pct=0,
+			)
+		with self.assertRaises(frappe.ValidationError):
+			quotation_api.create_quotation(dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "rate": 0}], markup_pct=0)

@@ -15,9 +15,10 @@ per-site through `_has` rather than assumed.
 import frappe
 from frappe import _
 
+from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 
-INVOICE_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
+INVOICE_READ_ROLES = {"DMS Sales", "DMS Management", "DMS Finance", "System Manager"}
 INVOICE_TYPES = ["Sales", "Credit Note", "Opening", "Proforma"]
 
 _SEARCH_FIELDS = ["name", "customer", "customer_name", "tally_voucher_no", "tally_vehicle_no", "tally_lr_no", "tally_eway_bill_no"]
@@ -129,6 +130,19 @@ def get_sales_invoice(invoice: str):
 	return _invoice_detail(frappe.get_doc("Sales Invoice", invoice))
 
 
+def _line_weight_kg(row) -> float | None:
+	"""BRD C.1.3 -- weight on the invoice. stock_qty is the line in the item's stock UOM
+	(boxes), whatever UOM it was billed in; the batch's own weight wins over the item's
+	standard one, as at allocation. None (not 0) when no weight is known, so a total is
+	never shown as smaller than it really is."""
+	per_box = None
+	if row.get("batch_no"):
+		per_box = frappe.db.get_value("Batch", row.batch_no, "custom_batch_weight_kg") or None
+	per_box = per_box or item_weight_per_box_kg(row.item_code) or None
+	qty = row.get("stock_qty") or row.qty
+	return round(per_box * qty, 2) if per_box and qty else None
+
+
 def _invoice_detail(doc) -> dict:
 	"""Unguarded core of get_sales_invoice -- also what the dealer portal's own
 	get_my_invoice/list_my_invoices return (ownership is that endpoint's check, in
@@ -144,9 +158,12 @@ def _invoice_detail(doc) -> dict:
 		(doc.name,),
 		as_dict=True,
 	)
+	line_weights = [_line_weight_kg(row) for row in doc.items]
 	return {
 		**_serialize_row(doc),
 		"dueDate": doc.due_date,
+		# Only when every line's weight is known -- a partial sum would understate it.
+		"totalWeightKg": round(sum(line_weights), 2) if line_weights and None not in line_weights else None,
 		# Customer.gstin only exists where India Compliance is installed.
 		"dealerGstin": doc.get("billing_address_gstin")
 		or (
@@ -169,8 +186,9 @@ def _invoice_detail(doc) -> dict:
 				"rate": row.rate,
 				"amount": row.amount,
 				"batchNo": row.get("batch_no"),
+				"weightKg": weight,
 			}
-			for row in doc.items
+			for row, weight in zip(doc.items, line_weights)
 		],
 		"taxes": [{"description": row.description, "rate": row.rate, "amount": row.tax_amount} for row in doc.taxes],
 		"receipts": [

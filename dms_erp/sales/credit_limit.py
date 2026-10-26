@@ -32,6 +32,8 @@ credit-limit check leaking raw HTML/emails to a dealer -- it just doesn't get
 the queue-for-approval treatment.
 """
 
+from contextlib import contextmanager
+
 import frappe
 
 from dms_erp.warehouse.utils import default_company
@@ -88,6 +90,22 @@ def committed_order_value(dealer: str) -> float:
 	return row[0][0] or 0
 
 
+@contextmanager
+def credit_limit_approved():
+	"""Marks orders created inside this block as BRD C.11 credit-limit overrides that
+	Management has approved (queued and approved, or placed by Management directly).
+	ERPNext runs its own credit check on Sales Order submit and lets through only its
+	"Credit Controller" role -- so without this, an order Management had just approved
+	was still refused. order_api.finalize_new_order reads the flag and skips ERPNext's
+	check for that order only; every other order keeps it."""
+	previous = frappe.flags.get("dms_credit_limit_approved")
+	frappe.flags.dms_credit_limit_approved = True
+	try:
+		yield
+	finally:
+		frappe.flags.dms_credit_limit_approved = previous
+
+
 def gate_credit_limit(
 	*,
 	dealer: str,
@@ -119,15 +137,18 @@ def gate_credit_limit(
 
 	from dms_erp.approvals.api import gate_document_creation
 
-	return gate_document_creation(
-		trigger_type="Credit Limit Exceeded",
-		reference_doctype=reference_doctype,
-		reason=(
-			f"{frappe.session.user}'s order for {dealer} would bring committed "
-			f"order value to {projected:.0f}, over the {limit:.0f} credit limit."
-		),
-		create_fn=create_fn,
-		create_kwargs=create_kwargs,
-		authorized_roles=CREDIT_LIMIT_AUTHORIZED_ROLES,
-		applier_action=applier_action,
-	)
+	# Only matters when the caller is authorized and the order is created right away; a
+	# queued request creates nothing here (the replay sets the flag itself on approval).
+	with credit_limit_approved():
+		return gate_document_creation(
+			trigger_type="Credit Limit Exceeded",
+			reference_doctype=reference_doctype,
+			reason=(
+				f"{frappe.session.user}'s order for {dealer} would bring committed "
+				f"order value to {projected:.0f}, over the {limit:.0f} credit limit."
+			),
+			create_fn=create_fn,
+			create_kwargs=create_kwargs,
+			authorized_roles=CREDIT_LIMIT_AUTHORIZED_ROLES,
+			applier_action=applier_action,
+		)

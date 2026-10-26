@@ -363,6 +363,49 @@ class TestProducts(FrappeTestCase):
 		product = catalog_api.get_product("PROD-TEST-A")
 		self.assertEqual(product["dealerPrice"], 612)
 
+	def test_available_stock_qty_excludes_damage_and_display_stock(self):
+		"""Client finding "stock accuracy" — availableStockQty (sellable_stock_for_item)
+		is wired onto get_product's response alongside the untouched staff-facing
+		stockQty (total_stock_for_item); real bay-level coverage lives in
+		warehouse.test_utils.TestSellableStockForItem, this just checks the wiring."""
+		product = catalog_api.create_product(
+			code="PROD-TEST-STOCK",
+			name="Test Stock Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		with (
+			patch("dms_erp.catalog.api.total_stock_for_item", return_value=18) as total_mock,
+			patch("dms_erp.catalog.api.sellable_stock_for_item", return_value=15) as sellable_mock,
+		):
+			fetched = catalog_api.get_product(product["id"])
+		total_mock.assert_called_once_with(product["id"])
+		sellable_mock.assert_called_once_with(product["id"])
+		self.assertEqual(fetched["stockQty"], 18)
+		self.assertEqual(fetched["availableStockQty"], 15)
+
+	def test_get_excluded_stock_delegates_to_warehouse_utils(self):
+		product = catalog_api.create_product(
+			code="PROD-TEST-EXCLUDED",
+			name="Test Excluded Stock Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+		)
+		with patch(
+			"dms_erp.warehouse.utils.excluded_stock_for_item", return_value=[{"bayType": "damage", "boxes": 3}]
+		) as mock:
+			rows = catalog_api.get_excluded_stock(product["id"])
+		mock.assert_called_once_with(product["id"])
+		self.assertEqual(rows, [{"bayType": "damage", "boxes": 3}])
+
 	def test_new_product_has_no_dealer_codes_or_images(self):
 		product = catalog_api.create_product(
 			code="PROD-TEST-C",
@@ -733,6 +776,46 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(
 			catalog_api.resolve_item_by_name(scoped_dealer, "nordik oke"), {"status": "none"}
 		)
+
+	def test_colour_and_base_colour_are_separate_fields(self):
+		# BRD C.1.2: "Colour is captured as both Colour and Base Colour".
+		product = catalog_api.create_product(
+			code="PROD-TEST-COLOURS",
+			name="Two Colour Fields Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=self.series,
+			color="Ivory Beige",
+			base_colour="Beige",
+		)
+		self.assertEqual((product["color"], product["baseColour"]), ("Ivory Beige", "Beige"))
+
+		updated = catalog_api.update_product("PROD-TEST-COLOURS", {"baseColour": "White"})
+		self.assertEqual((updated["color"], updated["baseColour"]), ("Ivory Beige", "White"))
+		self.assertIn("White", catalog_api.list_item_base_colours())
+
+	def test_reorder_frequency_comes_from_the_series_and_can_be_changed_per_item(self):
+		# BRD D.2 puts reorder_frequency on the Series; C.4.1 calls it item-level.
+		series = series_api.create_series(series_name="Product Test Frequency Series", reorder_frequency="Every 2 months")
+		self.assertEqual(series["reorderFrequency"], "Every 2 months")
+
+		product = catalog_api.create_product(
+			code="PROD-TEST-FREQ",
+			name="Frequency Item",
+			category="Vitrified",
+			supplier=self.supplier,
+			purchase_cost=400,
+			margin_pct=25,
+			effective_date="2026-08-01",
+			series_ref=series["id"],
+		)
+		self.assertEqual(product["reorderFrequency"], "Every 2 months")
+
+		updated = catalog_api.update_product("PROD-TEST-FREQ", {"reorderFrequency": "Monthly"})
+		self.assertEqual(updated["reorderFrequency"], "Monthly")
 
 	def test_create_product_with_series_ref_fills_in_unset_attributes(self):
 		series_api.create_series(

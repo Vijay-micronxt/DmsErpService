@@ -28,16 +28,23 @@ CUSTOM_FIELDS = {
 		{
 			"fieldname": "custom_color",
 			"fieldtype": "Data",
-			"label": "Base Colour",
-			"description": "ISS-2026-00632 / BRD C.1.4's primary colour attribute -- the item's single main colour.",
+			"label": "Colour",
+			"description": "BRD C.1.2 Colour -- the item's own colour name (e.g. Ivory Beige), the one the item name is composed from (series + colour + finish, client requirement 8.5). Was labelled Base Colour; Base Colour is its own field below.",
 			"insert_after": "custom_finish",
+		},
+		{
+			"fieldname": "custom_base_colour",
+			"fieldtype": "Data",
+			"label": "Base Colour",
+			"description": "BRD C.1.2 -- \"Colour is captured as both Colour and Base Colour\": the broad colour family (e.g. Beige, White, Grey) for filtering, alongside the item's own Colour.",
+			"insert_after": "custom_color",
 		},
 		{
 			"fieldname": "custom_colour_attribute_1",
 			"fieldtype": "Data",
 			"label": "Colour Attribute 1",
 			"description": "ISS-2026-00632 -- a secondary colour descriptor alongside Base Colour (e.g. a shade, tone or accent colour), filterable in the dealer portal catalogue.",
-			"insert_after": "custom_color",
+			"insert_after": "custom_base_colour",
 		},
 		{
 			"fieldname": "custom_colour_attribute_2",
@@ -91,6 +98,14 @@ CUSTOM_FIELDS = {
 		{"fieldname": "custom_sqft_per_box", "fieldtype": "Float", "label": "Sqft per Box", "insert_after": "custom_pieces_per_box"},
 		{"fieldname": "custom_weight_per_box_kg", "fieldtype": "Float", "label": "Weight per Box (Kg)", "insert_after": "custom_sqft_per_box"},
 		{
+			"fieldname": "custom_height_mm",
+			"fieldtype": "Float",
+			"label": "Tile Height (mm)",
+			"description": "Physical tile dimension. When this, Tile Width and Pieces per Box are all set and Sqft per Box is left blank at creation, Sqft per Box is derived from these rather than typed in separately (see catalog.utils.derive_sqft_per_box) -- so the two can't drift apart.",
+			"insert_after": "custom_weight_per_box_kg",
+		},
+		{"fieldname": "custom_width_mm", "fieldtype": "Float", "label": "Tile Width (mm)", "insert_after": "custom_height_mm"},
+		{
 			"fieldname": "custom_discontinuation_status",
 			"fieldtype": "Select",
 			"label": "Discontinuation Status",
@@ -98,7 +113,7 @@ CUSTOM_FIELDS = {
 			"default": "Active",
 			"in_list_view": 1,
 			"in_standard_filter": 1,
-			"insert_after": "custom_weight_per_box_kg",
+			"insert_after": "custom_width_mm",
 		},
 		{
 			"fieldname": "custom_moq",
@@ -113,6 +128,14 @@ CUSTOM_FIELDS = {
 			"label": "Production MOQ (Boxes)",
 			"description": "BRD C.4.2 -- \"production MOQ may differ from stock MOQ\": the floor once a Vendor Enquiry confirms this quantity must be produced rather than pulled from ready stock. Same Supplier -> Company fallback as custom_moq.",
 			"insert_after": "custom_moq",
+		},
+		{
+			"fieldname": "custom_reorder_frequency",
+			"fieldtype": "Select",
+			"label": "Reorder Frequency",
+			"options": "\nMonthly\nEvery 2 months\nEvery 3 months",
+			"description": "BRD C.4.1 item-level reorder frequency (D.2: Series reorder_frequency, \"reorder cadence\") -- copied from the Series when the item is created, editable per item. Shown on the reorder review; it does not change the suggested quantity.",
+			"insert_after": "custom_production_moq",
 		},
 		{
 			"fieldname": "custom_default_supplier",

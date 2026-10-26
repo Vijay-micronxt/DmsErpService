@@ -45,3 +45,14 @@ wired into Sales Taxes and Charges in Phase 5.
 Writes restricted to DMS Warehouse/Management (or System Manager) for
 claims/unloading; DMS Accounting Settings itself is Management/System
 Manager only. Everyone reads the operational records.
+
+- **Year-end claim reconciliation notice (BRD C.8.2, 26 Oct 2026)** — the
+  31-Mar-removal/1-Apr-reinstatement *journal* cycle is still not automated
+  (this app never posts to the GL at claim filing time, only at settlement, so
+  there's no open ledger balance for a journal to reverse — that needs its own
+  filing-time GL posting decision first, bigger than this module). What *is*
+  now automated: `notify_year_end_claim_reconciliation` (scheduled daily, a
+  no-op every day except 31 March/1 April) alerts Finance/Management with the
+  count and total of everything `claims_pending_year_end_reconciliation`
+  still shows open, so that report actually gets looked at on the two days it
+  matters instead of sitting unopened.

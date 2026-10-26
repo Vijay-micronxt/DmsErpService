@@ -20,7 +20,7 @@ from frappe import _
 
 from dms_erp.pagination import clamp
 
-PAYMENT_READ_ROLES = {"DMS Management", "System Manager"}
+PAYMENT_READ_ROLES = {"DMS Management", "DMS Finance", "System Manager"}
 JOURNAL_PAYMENT_TYPES = ("Bank Entry", "Cash Entry")
 DIRECTIONS = ("Receive", "Pay")
 

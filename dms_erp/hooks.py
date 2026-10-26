@@ -68,6 +68,10 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 # BRD C.3.2: a delayed supplier PO that threatens an open order's own delivery
 # date flags that order line and notifies its salesperson + Management (see
 # sales/delivery_risk.py) -- a no-op for every item with no delayed supply.
+# BRD C.8.2: a no-op every day except 31 Mar/1 Apr, when it notifies Finance/
+# Management of claims still pending year-end reconciliation (see
+# finance/claims_api.py's module docstring for why this stops short of posting
+# an actual journal).
 scheduler_events = {
 	"daily": [
 		"dms_erp.purchase.reorder_api.notify_reorder_review",
@@ -80,6 +84,7 @@ scheduler_events = {
 		# ISS-2026-00635 -- day-20 reminder / past-21-days review flag on open Sales Orders.
 		"dms_erp.sales.reservation.review_reservations",
 		"dms_erp.sales.delivery_risk.review_delivery_risk",
+		"dms_erp.finance.claims_api.notify_year_end_claim_reconciliation",
 	],
 	# MOM §3.7 -- "every month, the system will generate a list of active dealer numbers."
 	"monthly": [

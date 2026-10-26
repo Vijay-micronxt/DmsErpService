@@ -132,9 +132,9 @@ def dealer_activity_report(dealer: str | None = None):
 def salesperson_assignment_report():
 	"""BRD C.12.3 — every salesperson (a User holding custom_salesperson on at
 	least one Customer) with their assigned dealers and each dealer's order count/
-	value, same rollup shape as dealer_activity_report. Targets/performance-vs-
-	target is a deliberate follow-up, not built here (see sales/setup.py's
-	custom_salesperson field description) — this is dealer ownership only.
+	value, same rollup shape as dealer_activity_report. All-time, unlike
+	sales.sales_target_api.salesperson_target_progress (26 Oct 2026), which scopes
+	the same Sales Order source to one target month.
 	Dealers with no salesperson assigned are grouped under salesperson=None so
 	nothing silently drops off the report."""
 	dealers = dealer_api.list_dealers()

@@ -536,6 +536,56 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(order["taxes"], [])
 		self.assertEqual(order["total"], order["netTotal"])
 
+	def _make_uom_item(self):
+		item = make_item("QTN-UOM-TEST-ITEM", "Vitrified")
+		frappe.db.set_value(
+			"Item",
+			item,
+			{"custom_pieces_per_box": 4, "custom_sqft_per_box": 15.5, "custom_weight_per_box_kg": 28},
+		)
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+		dealer_catalog_api.set_product_visibility(self.dealer, item, True)
+		return item
+
+	def test_quotation_line_entered_in_sqft_is_converted_to_boxes(self):
+		item = self._make_uom_item()
+		quotation = self._create_quotation(
+			dealer=self.dealer, lines=[{"item": item, "qty": 50, "uom": "Sqft"}], markup_pct=12
+		)
+		line = quotation["lines"][0]
+		self.assertEqual(line["qty"], 4)  # ceil(50 / 15.5) = 4 boxes
+		self.assertEqual(line["enteredQty"], 50)
+		self.assertEqual(line["enteredUom"], "Sqft")
+		self.assertEqual(line["amount"], 4 * 560)  # round(500 * 1.12) = 560/box
+
+	def test_quotation_line_left_in_box_carries_no_entered_fields(self):
+		quotation = self._create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+		line = quotation["lines"][0]
+		self.assertIsNone(line["enteredQty"])
+		self.assertIsNone(line["enteredUom"])
+
+	def test_quotation_line_uom_without_a_conversion_factor_is_refused(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._create_quotation(
+				dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "uom": "Pcs"}], markup_pct=12
+			)
+
+	def test_update_quotation_line_qty_clears_stale_entered_uom(self):
+		"""A direct box-qty override on an amend must drop the line's own entered-unit
+		annotation -- it would otherwise go stale against the new qty."""
+		item = self._make_uom_item()
+		quotation = self._create_quotation(
+			dealer=self.dealer, lines=[{"item": item, "qty": 50, "uom": "Sqft"}], markup_pct=12
+		)
+		updated = quotation_api.update_quotation_line_qty(quotation["id"], item, 9)
+		line = updated["lines"][0]
+		self.assertEqual(line["qty"], 9)
+		self.assertIsNone(line["enteredQty"])
+		self.assertIsNone(line["enteredUom"])
+
 	# -- BRD C.3.3: bill-to/ship-to mandatory addresses --
 
 	def test_create_quotation_rejects_a_missing_address(self):

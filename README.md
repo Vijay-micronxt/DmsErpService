@@ -252,6 +252,8 @@ everyone can read.
 | `dms_erp.catalog.dealer_catalog_api.category_coverage` | `{total, visible}` for a dealer + Item Group |
 | `dms_erp.notifications_api.list_my_notifications` | the signed-in user's own Notification Log (`{items, unread}`), for the staff app's header bell |
 | `dms_erp.notifications_api.mark_notifications_read` | POST; `ids` (omit = all of the user's own); returns `{unread}` |
+| `dms_erp.approvals.api.preview_approval` | `name`; before vs after for a still-Pending amend/cancel request, nothing changed (Management only) |
+| `dms_erp.sales.dealer_portal_api.my_catalog_export` | the signed-in dealer's own catalogue as printable HTML, never priced (`dealer_catalog_api.dealer_catalog_export` is staff-only) |
 | `dms_erp.print_api.render_quotation_html` / `render_sales_order_html` / `render_purchase_order_html` | `quotation` / `order` / `purchase_order`; printable HTML built from the saved document (staff roles) |
 | `dms_erp.reports.sales_reports.open_inquiries_report` / `advance_payment_pending_report` | optional `dealer` |
 | `dms_erp.reports.warehouse_reports.batch_wise_stock_report` | optional `category`, `search` |
@@ -284,7 +286,8 @@ read.
 | `stock_api.validate_allocation` | error/warning issues for a proposed bay+qty+category, ported from `validateAllocation` |
 | `inward_api.list_trucks` / `add_truck` / `advance_truck` | truck gate queue; write-restricted; `list_trucks` is paginated (`limit`/`offset`, `{items, total}`) |
 | `allocation_api.list_allocations` / `get_allocation` | paginated (`limit`/`offset`, `{items, total}`); optional `inward_truck`/`status`/`item` filters |
-| `allocation_api.create_allocation` | write-restricted; posts and submits a native Purchase Receipt — the actual stock-effecting event |
+| `allocation_api.create_allocation` | write-restricted; posts and submits a native Purchase Receipt — the actual stock-effecting event; optional `weight_per_box_kg` (saved on the batch), `supplier_invoice_no` / `supplier_invoice_date` (on the receipt) |
+| `allocation_api.suggest_batch_weight` | `item`, optional `exclude_batch`; the last received batch's weight per box plus the item's standard weight (BRD C.6.1 pre-fill) |
 | `allocation_api.mark_allocation_printed` / `confirm_putaway` | write-restricted; `confirm_putaway` does not move stock again |
 | `allocation_api.resolve_scan` | read-only; same `PI-BAY|`/`PI-ITEM|` code format as the frontend, plus bare-code lookup |
 | `transfer_api.list_transfers` / `transfer_stock` | native Stock Entry (Material Transfer); write-restricted; `list_transfers` is paginated (`limit`/`offset`, `{items, total}`) |
@@ -324,7 +327,8 @@ Manager`). Everyone reads.
 | `quotation_api.convert_to_order` | write-restricted; wraps ERPNext's native Quotation→Sales Order mapper |
 | `order_api.list_orders` / `get_order` | native Sales Order; paginated, optional `dealer`/`stage`/`search` filters |
 | `order_api.create_order` | write-restricted; direct Inquiry→Order (no markup) — the only other path is `convert_to_order` |
-| `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks |
+| `order_api.advance_order_stage` | write-restricted; only the next forward stage or `Cancelled` (not after `Delivered`); entering `Picking` auto-creates Pick Tasks; entering `Dispatched` requires every line Picked and posts a real Delivery Note (stock decrement) |
+| `order_api.create_sales_invoice` | write-restricted; one per order, gated to Dispatched/Delivered; wraps ERPNext's native Sales Order→Sales Invoice mapper; carries the order's retail/bulk channel onto the invoice |
 | `picking_api.list_pick_tasks` | paginated (`limit`/`offset`, `{items, total}`); optional `order` filter |
 | `picking_api.auto_allocate` | write-restricted; allocates `min(qty, available)` from live stock across non-blocked bays |
 | `picking_api.patch_task` | write-restricted; assign picker / adjust status / batch / bay |

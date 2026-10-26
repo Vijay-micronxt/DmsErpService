@@ -25,6 +25,8 @@
   "whatsapp_replied",
   "remarks",
   "customer_po",
+  "drop_reason",
+  "drop_reason_note",
   "linked_sales_order",
   "linked_quotation",
   "linked_opportunity"
@@ -150,6 +152,18 @@
    "fieldname": "customer_po",
    "fieldtype": "Data",
    "label": "Customer PO Number"
+  },
+  {
+   "fieldname": "drop_reason",
+   "fieldtype": "Data",
+   "label": "Drop Reason",
+   "description": "BRD C.2.3 -- why an inquiry was closed or rejected without becoming an order. One of DMS Sales Settings' Inquiry Drop Reasons."
+  },
+  {
+   "fieldname": "drop_reason_note",
+   "fieldtype": "Small Text",
+   "label": "Drop Reason Details",
+   "description": "Free text, required when the drop reason is Other."
   },
   {
    "description": "BRD D.3 — set once, at the same moment status moves to \"Converted to Order\" (sales.order_api._create_order), so the conversion is traceable from the Inquiry side rather than only discoverable by searching the Sales Order for a matching custom_source_ref.",
