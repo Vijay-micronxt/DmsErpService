@@ -96,3 +96,54 @@ Phase 3 (Warehouse/Stock) and Phase 5 (Sales) respectively.
 - **Categories** — `list_item_group_names` returns every leaf category unpaginated (the staff app had been
   using `list_item_groups`' first page of 20 as "all categories", so Dealer Catalogs missed every item outside
   them on a migrated site with ~1,100); `create_item_group` adds one from the product form's picker.
+
+## Colour and Base Colour (BRD C.1.2)
+
+"Colour is captured as both Colour and Base Colour." `custom_color` is **Colour** -- the item's own colour,
+the one the item name is composed from (series + colour + finish, client requirement 8.5). It used to be
+labelled "Base Colour" in Desk; it was empty on every migrated item, so the relabel moved no data.
+`custom_base_colour` is **Base Colour**, the broad family for filtering; its picker
+(`list_item_base_colours`) falls back to `COLOR_DEFAULTS`, which are families. ISS-2026-00632's
+`custom_colour_attribute_1/2` stay as they were.
+
+
+## Top Dealers (BRD C.10.4), sample_api.top_dealers
+
+"Top dealers for sample/display planning are identified from retail sales over the last six
+months, excluding bulk/project sales." Pacific, 26 Oct 2026: ranked by the invoices already in
+the system -- the migrated Tally `Sales Invoice` records -- not this app's own Sales Orders,
+which don't yet cover six months of history. Those carry no retail/bulk tag, so bulk/project is
+excluded by the dealer's own `custom_dealer_type` (Bulk / Project), the same field BRD C.1.4's
+dealer type uses; once an invoice posted from this app carries `custom_order_channel` (see the
+billing work, `sales/README.md`), that's checked too. Credit notes, opening entries and
+proformas (`invoice_api._type_condition`) don't count -- only real sales. An optional `item`
+narrows it to dealers who bought that item, to decide whose display it should be.
+
+
+## UOM conversion and tile dimensions (sheet 7.8, 26 Oct 2026), catalog.utils
+
+Order/quotation lines no longer have to be entered in boxes. `ORDER_UOMS` (Box/Pcs/Sqft/Sqm/
+Kg/Gram) and `convert_qty_to_boxes(item, qty, uom)` are the single conversion point, called once
+by `sales.order_api.create_order` and `sales.quotation_api.create_quotation` -- before
+`auto_classify_channel`, the credit-limit estimate, or pricing ever see `qty`, since every one of
+those is a box-qty rule. Conversion uses the item's own existing per-box figures
+(`custom_pieces_per_box`/`custom_sqft_per_box`/`custom_weight_per_box_kg`; Sqm derives from Sqft
+via `SQFT_TO_SQM`, Gram from the Kg figure); an item missing the figure a given unit needs throws
+a clear `ValidationError` naming it, rather than guessing. Whatever doesn't divide evenly into a
+whole box rounds **up** (`math.ceil`) -- a dealer can end up with slightly more tile than asked
+for, never less, since a box can't be physically split.
+
+`normalize_order_line_uoms(lines)` runs the conversion over a whole `lines` payload and tags each
+line with `entered_qty`/`entered_uom` *only* when a non-Box unit was actually used (left out
+entirely for a plain box order) -- these land on `custom_entered_qty`/`custom_entered_uom`
+(Sales Order Item / Quotation Item) purely for display, e.g. "entered as 50 Sqft" next to the
+real box qty. `qty` itself is always the box-equivalent; nothing downstream (stock, picking,
+invoicing) ever needs to know what unit a line was entered in.
+
+`custom_height_mm`/`custom_width_mm` (Item, Float) capture the physical tile dimensions.
+`derive_sqft_per_box(height_mm, width_mm, pieces_per_box)` is used once, at `create_product`
+time, to fill in `custom_sqft_per_box` automatically when it's left blank and the three inputs
+are all known -- never overrides an explicitly supplied value, and never retrofits existing
+items. No Series-level mirroring yet (unlike pieces/sqft/weight per box) -- a deliberate v1 scope
+cut; items created from a Series without their own height/width still need `custom_sqft_per_box`
+set directly, same as before this existed.

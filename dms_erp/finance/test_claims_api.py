@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -5,9 +7,18 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.finance import claims_api
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
+from dms_erp.setup.install import create_app_roles
 from dms_erp.warehouse import allocation_api, stock_api, transfer_api
 from dms_erp.warehouse.setup import setup_warehouse
 from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_item, make_supplier
+
+
+def _finance_user(email="claims-year-end-finance@example.com"):
+	if not frappe.db.exists("User", email):
+		frappe.get_doc(
+			{"doctype": "User", "email": email, "first_name": "Year End Finance", "send_welcome_email": 0, "roles": [{"role": "DMS Finance"}]}
+		).insert(ignore_permissions=True)
+	return email
 
 
 class TestClaimsApi(FrappeTestCase):
@@ -18,6 +29,7 @@ class TestClaimsApi(FrappeTestCase):
 		setup_catalog()
 		setup_pricing()
 		setup_warehouse()
+		create_app_roles()
 		cls.supplier = make_supplier("Claims Test Supplier")
 		cls.item = make_item("CLAIM-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
@@ -243,6 +255,44 @@ class TestClaimsApi(FrappeTestCase):
 		self.assertIn(open_claim["id"], ids)
 		self.assertNotIn(settled_claim["id"], ids)
 
+	def test_year_end_notify_is_a_noop_on_an_ordinary_day(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-YEAREND-NOOP")
+		claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1000)
+		finance_user = _finance_user()
+		frappe.db.delete("Notification Log", {"for_user": finance_user})
+
+		with patch("dms_erp.finance.claims_api.today", return_value="2026-10-26"):
+			claims_api.notify_year_end_claim_reconciliation()
+
+		self.assertEqual(frappe.db.count("Notification Log", {"for_user": finance_user}), 0)
+
+	def test_year_end_notify_alerts_finance_on_31_march_when_claims_are_pending(self):
+		stock_entry = self._make_damage_transfer("CLAIM-BATCH-YEAREND-MAR31")
+		claims_api.file_claim(stock_entry=stock_entry, insurer="HDFC Ergo", claim_amount=1500)
+		finance_user = _finance_user()
+		frappe.db.delete("Notification Log", {"for_user": finance_user})
+
+		with patch("dms_erp.finance.claims_api.today", return_value="2026-03-31"):
+			claims_api.notify_year_end_claim_reconciliation()
+
+		self.assertGreaterEqual(frappe.db.count("Notification Log", {"for_user": finance_user}), 1)
+
+	def test_year_end_notify_does_not_alert_when_nothing_is_pending(self):
+		# Other tests in this class leave their own open claims lying around (same
+		# accumulating-state pattern test_claims_pending_year_end_reconciliation_lists_only_open_claims
+		# already relies on), so "nothing pending" can't be asserted from real DB state here --
+		# this forces that specific condition directly instead.
+		finance_user = _finance_user()
+		frappe.db.delete("Notification Log", {"for_user": finance_user})
+
+		with (
+			patch("dms_erp.finance.claims_api.today", return_value="2026-04-01"),
+			patch("dms_erp.finance.claims_api._claims_pending_year_end_reconciliation", return_value=[]),
+		):
+			claims_api.notify_year_end_claim_reconciliation()
+
+		self.assertEqual(frappe.db.count("Notification Log", {"for_user": finance_user}), 0)
+
 	def test_write_requires_warehouse_or_management_role(self):
 		stock_entry = self._make_damage_transfer("CLAIM-BATCH-7")
 		frappe.set_user("Guest")
@@ -265,3 +315,36 @@ class TestClaimsApi(FrappeTestCase):
 		if main_lot:
 			self.assertIsNone(main_lot[0]["damageType"])
 			self.assertIsNone(main_lot[0]["claimRef"])
+
+
+class TestClaimsReadAccess(FrappeTestCase):
+	"""Claims carry supplier names and amounts; the read endpoints had no role check at
+	all, so a dealer signed in to the portal could list every claim."""
+
+	@staticmethod
+	def _user(email, role):
+		if not frappe.db.exists("User", email):
+			frappe.get_doc(
+				{"doctype": "User", "email": email, "first_name": email.split("@")[0], "send_welcome_email": 0, "roles": [{"role": role}]}
+			).insert(ignore_permissions=True)
+		return email
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_a_dealer_cannot_read_any_claims_endpoint(self):
+		frappe.set_user(self._user("claims.reader.dealer@pacific.test", "DMS Dealer"))
+		for call in (
+			lambda: claims_api.list_claims(),
+			lambda: claims_api.get_claim("ANY-CLAIM"),
+			lambda: claims_api.accumulated_claims_by_supplier(),
+			lambda: claims_api.claims_pending_year_end_reconciliation(),
+			lambda: claims_api.claim_summary(),
+		):
+			with self.assertRaises(frappe.PermissionError):
+				call()
+
+	def test_staff_can_read_the_per_supplier_accumulation(self):
+		frappe.set_user(self._user("claims.reader.purchase@pacific.test", "DMS Purchase"))
+		self.assertIsInstance(claims_api.accumulated_claims_by_supplier(), list)
+		self.assertIn("receivable", claims_api.claim_summary())

@@ -55,6 +55,14 @@ def _batch_weight_per_box_kg(batch_no: str | None) -> float | None:
 	return frappe.db.get_value("Batch", batch_no, "custom_batch_weight_kg")
 
 
+def _supplier_invoice_ref(purchase_receipt: str | None) -> dict:
+	# Lives on the Purchase Receipt, not the allocation slip -- claims_api reads the same
+	# fields for a Shortage claim. Imported here because the two modules import each other.
+	from dms_erp.finance.claims_api import _supplier_invoice_ref as read_ref
+
+	return read_ref(purchase_receipt)
+
+
 def _serialize(doc) -> dict:
 	weight_per_box_kg = _batch_weight_per_box_kg(doc.batch_no)
 	if weight_per_box_kg is None:
@@ -75,6 +83,7 @@ def _serialize(doc) -> dict:
 		"shortageQty": doc.shortage_qty or 0,
 		"damagedQty": doc.damaged_qty or 0,
 		"claim": doc.claim,
+		**_supplier_invoice_ref(doc.purchase_receipt),
 		"weightPerBoxKg": weight_per_box_kg,
 		"totalWeightKg": (weight_per_box_kg or 0) * doc.total_qty if weight_per_box_kg is not None else None,
 		"piecesPerBox": pieces_per_box,
@@ -139,6 +148,8 @@ def create_allocation(
 	shortage_qty: float = 0,
 	damaged_qty: float = 0,
 	responsibility: str | None = None,
+	supplier_invoice_no: str | None = None,
+	supplier_invoice_date: str | None = None,
 ):
 	"""7.11 -- batch_no is now optional here: inward_api.add_truck/
 	update_truck_batch is the preferred place to capture it, "while purchase
@@ -153,7 +164,12 @@ def create_allocation(
 	initiated" -- responsibility is required in that case, and a real
 	Shortage claim (same claim_type/responsibility this app's Insurance
 	Claim already modelled for exactly this, BRD C.8.3) is auto-filed
-	against this receipt, not left as a manual follow-up step."""
+	against this receipt, not left as a manual follow-up step.
+
+	BRD C.4.4 also lists the "supplier invoice reference" among what receipt captures:
+	`supplier_invoice_no`/`supplier_invoice_date` go onto this Purchase Receipt's own
+	custom fields (purchase/setup.py). Both optional -- the supplier's invoice doesn't
+	always travel with the truck."""
 	_assert_can_allocate()
 
 	if (shortage_qty or 0) + (damaged_qty or 0) > 0 and not responsibility:
@@ -190,6 +206,12 @@ def create_allocation(
 		frappe.throw(_("A batch number is required (directly, or already captured on the inward_truck)."), frappe.ValidationError)
 
 	ensure_batch(item, batch_no, weight_per_box_kg=weight_per_box_kg)
+	if weight_per_box_kg is not None:
+		# BRD C.6.1 -- "the actual batch weight ... is entered when inventory is received".
+		# The batch usually exists already (inward_api creates it when the batch number is
+		# captured on the truck, at the item's standard weight), and ensure_batch never
+		# touches an existing batch -- so a weight entered here was silently dropped.
+		frappe.db.set_value("Batch", batch_no, "custom_batch_weight_kg", weight_per_box_kg)
 
 	alloc = frappe.get_doc(
 		{
@@ -225,6 +247,8 @@ def create_allocation(
 			"supplier": supplier,
 			"company": default_company(),
 			"posting_date": today(),
+			"custom_supplier_invoice_no": (supplier_invoice_no or "").strip() or None,
+			"custom_supplier_invoice_date": supplier_invoice_date or None,
 			"items": [
 				{
 					"item_code": item,
@@ -275,6 +299,30 @@ def create_allocation(
 		truck.save(ignore_permissions=True)
 
 	return _serialize(alloc)
+
+
+@frappe.whitelist(methods=["GET"])
+def suggest_batch_weight(item: str, exclude_batch: str | None = None) -> dict:
+	"""BRD C.6.1 -- "for a repeat PO, the system can reference the last received batch's
+	weight." Received = has a Bay Allocation (the receipt this module posts), newest first,
+	with a weight recorded. A suggestion to pre-fill the receipt form, never applied by
+	itself: the manufacturer's material can change between batches. `exclude_batch` skips
+	the batch being received now, which may already exist from inward."""
+	_assert_can_allocate()
+	filters = {"item": item}
+	if exclude_batch:
+		filters["batch_no"] = ["!=", exclude_batch]
+	last = None
+	for batch_no in frappe.get_all("Bay Allocation", filters=filters, pluck="batch_no", order_by="creation desc", limit=20):
+		weight = frappe.db.get_value("Batch", batch_no, "custom_batch_weight_kg") if batch_no else None
+		if weight:
+			last = {"batch": batch_no, "weightPerBoxKg": weight}
+			break
+	return {
+		"lastBatch": last["batch"] if last else None,
+		"lastBatchWeightPerBoxKg": last["weightPerBoxKg"] if last else None,
+		"standardWeightPerBoxKg": item_weight_per_box_kg(item) or None,
+	}
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

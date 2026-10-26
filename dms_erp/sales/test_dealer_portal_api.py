@@ -100,6 +100,25 @@ class TestDealerPortalApi(FrappeTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			dealer_portal_api.get_item("NO-SUCH-ITEM")
 
+	def test_get_item_never_carries_the_raw_staff_facing_stock_total(self):
+		"""Client finding "stock accuracy" — a dealer only ever sees availableStockQty;
+		the raw stockQty total (which would include damage/display-bay stock) is
+		dropped the same way dealerCodes/dealerPrice already are."""
+		entry = dealer_portal_api.get_item(self.item)
+		self.assertNotIn("stockQty", entry)
+		self.assertIn("availableStockQty", entry)
+
+	def test_get_excluded_stock_matches_catalog_apis_warehouse_breakdown(self):
+		with patch(
+			"dms_erp.warehouse.utils.excluded_stock_for_item", return_value=[{"bayType": "display", "boxes": 2}]
+		):
+			rows = dealer_portal_api.get_excluded_stock(self.item)
+		self.assertEqual(rows, [{"bayType": "display", "boxes": 2}])
+
+	def test_get_excluded_stock_rejects_a_nonexistent_item(self):
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_excluded_stock("NO-SUCH-ITEM")
+
 	def test_resolve_code_by_the_dealers_own_mapped_code(self):
 		from dms_erp.catalog.api import update_product
 
@@ -223,6 +242,20 @@ class TestDealerPortalApi(FrappeTestCase):
 		mine = dealer_portal_api.list_my_orders()
 		self.assertTrue(all(row["dealerId"] == self.other_dealer for row in mine["items"]))
 
+	def test_list_my_orders_exclude_completed_hides_delivered_and_cancelled(self):
+		open_order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
+		cancelled_order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
+		order_api.advance_order_stage(cancelled_order["id"], "Cancelled")
+
+		frappe.set_user(self.dealer_user)
+		pending = dealer_portal_api.list_my_orders(exclude_completed=True)
+		ids = [row["id"] for row in pending["items"]]
+		self.assertIn(open_order["id"], ids)
+		self.assertNotIn(cancelled_order["id"], ids)
+
+		everything = dealer_portal_api.list_my_orders()
+		self.assertIn(cancelled_order["id"], [row["id"] for row in everything["items"]])
+
 	def test_get_my_order_rejects_another_dealers_order(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
 		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-MINE-2")
@@ -263,7 +296,7 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user(self.dealer_user)
 
 		for o in (dealer_portal_api.get_my_order(order["id"]), *dealer_portal_api.list_my_orders()["items"]):
-			for key in ("channel", "owner", "advanceConfirmed", "reservation"):
+			for key in ("channel", "owner", "advanceConfirmed", "reservation", "deliveryNotes"):
 				self.assertNotIn(key, o)
 			self.assertTrue(all("by" not in e for e in o["history"]))
 
@@ -578,6 +611,21 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.PermissionError):
 			dealer_portal_api.get_catalog()
+
+
+	def test_my_catalog_export_is_the_dealers_own_catalogue_without_prices(self):
+		# BRD C.14.1 -- shareable catalogue in the dealer app; never priced for a dealer.
+		html = dealer_portal_api.my_catalog_export()
+		self.assertIn(self.item, html)
+		self.assertNotIn(self.hidden_item, html)  # another dealer's item
+		self.assertNotIn("₹", html)
+		self.assertIn("price-exclusive format", html)
+
+	def test_a_dealer_cannot_use_the_staff_catalog_export(self):
+		# It takes any dealer plus a price toggle -- a dealer could otherwise pull another
+		# dealer's catalogue with that dealer's prices.
+		with self.assertRaises(frappe.PermissionError):
+			dealer_catalog_api.dealer_catalog_export(self.other_dealer, include_price=True)
 
 
 class TestUpdateMyEmail(FrappeTestCase):

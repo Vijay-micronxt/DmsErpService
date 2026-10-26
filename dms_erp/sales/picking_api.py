@@ -5,8 +5,11 @@ simple Pending/Allocated/Picked status, which Pick List doesn't model at that
 granularity. Auto-allocation reads live stock from warehouse/utils.py — nothing here
 owns its own view of what's on hand.
 
-Marking a task Picked does not itself create a Delivery Note or reduce stock (see
-sales/order_api.py's module docstring) — that's a natural future refinement.
+Marking a task Picked is what order_api._assert_lines_ready_for_delivery checks before
+letting an order move to Dispatched — the actual stock movement happens there, against
+every line's own `suggested_bay`/`batch_no`, not here (a task being Picked records that
+staff physically did it; the Delivery Note is posted once, for the whole order, at the
+moment that movement is real).
 """
 
 import frappe

@@ -127,7 +127,7 @@ class TestInquiryApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
 		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
-		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
+		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date=str(add_days(today(), 30)))
 
 		self.assertEqual(po["lines"][0]["orderedQty"], 40)
 		self.assertEqual(po["sourceInquiry"], inquiry["id"])
@@ -138,23 +138,26 @@ class TestInquiryApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
 		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
-		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
+		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date=str(add_days(today(), 30)))
 
 		self.assertEqual(po["supplier"], self.supplier)
 
 	def test_convert_to_purchase_requirement_requires_a_supplier_when_none_can_be_resolved(self):
-		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
+		# Its own item: another test sets a default supplier on self.item, which would then
+		# be resolved here. (This used to pass only because a stale date failed first.)
+		item = make_item("INQ-NO-SUPPLIER-ITEM", "Vitrified")
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
 		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
 		with self.assertRaises(frappe.ValidationError):
-			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date="2026-09-01")
+			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date=str(add_days(today(), 30)))
 
 	def test_convert_to_purchase_requirement_rejects_ineligible_status(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 		inquiry_api.update_inquiry(inquiry["id"], {"status": "Converted to Order"})
 
 		with self.assertRaises(frappe.ValidationError):
-			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
+			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date=str(add_days(today(), 30)))
 
 	def test_create_inquiry_allows_item_outside_dealer_catalog(self):
 		# ISS-2026-00644: a dealer may inquire on an item Purchase hasn't assigned to
@@ -280,3 +283,48 @@ class TestInquiryApi(FrappeTestCase):
 			inquiry_api.create_inquiry(dealer=dealer, item=self.item, qty=1, source="Phone")
 
 		self.assertEqual(len(inquiry_api.list_all_inquiries(dealer=dealer)), 3)
+
+
+class TestInquiryDropReason(FrappeTestCase):
+	"""BRD C.2.3 -- dropped inquiries record a reason. Pacific chose a warning (in the
+	staff app), not a block, for closing without a customer PO."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_company()
+		setup_catalog()
+		cls.dealer = make_dealer("Inquiry Drop Reason Dealer")
+		cls.item = make_item("INQ-DROP-ITEM", "Vitrified")
+
+	def _inquiry(self):
+		return inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=5, source="Phone")
+
+	def test_closing_with_a_listed_reason_records_it(self):
+		closed = inquiry_api.update_inquiry(self._inquiry()["id"], {"status": "Closed", "dropReason": "Bought elsewhere"})
+		self.assertEqual((closed["status"], closed["dropReason"]), ("Closed", "Bought elsewhere"))
+
+	def test_other_needs_details_and_an_unknown_reason_is_refused(self):
+		inquiry = self._inquiry()["id"]
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.update_inquiry(inquiry, {"status": "Rejected", "dropReason": "Other"})
+		with self.assertRaises(frappe.ValidationError):
+			inquiry_api.update_inquiry(inquiry, {"status": "Rejected", "dropReason": "Made up reason"})
+		rejected = inquiry_api.update_inquiry(inquiry, {"status": "Rejected", "dropReason": "Other", "dropReasonNote": "Changed design"})
+		self.assertEqual(rejected["dropReasonNote"], "Changed design")
+
+	def test_closing_without_a_reason_is_still_allowed(self):
+		# A warning, not a block -- and other callers that close inquiries keep working.
+		self.assertEqual(inquiry_api.update_inquiry(self._inquiry()["id"], {"status": "Closed"})["status"], "Closed")
+
+	def test_reason_list_comes_from_settings_with_other_last(self):
+		self.assertEqual(inquiry_api.list_inquiry_drop_reasons()[-1], "Other")
+		frappe.db.set_single_value("DMS Sales Settings", "inquiry_drop_reasons", "Too costly\nOther\nNo stock")
+		try:
+			self.assertEqual(inquiry_api.list_inquiry_drop_reasons(), ["Too costly", "No stock", "Other"])
+		finally:
+			frappe.db.set_single_value("DMS Sales Settings", "inquiry_drop_reasons", "")
+
+	def test_customer_po_can_be_set_on_the_inquiry(self):
+		updated = inquiry_api.update_inquiry(self._inquiry()["id"], {"customerPo": " PO-881 "})
+		self.assertEqual(updated["customerPo"], "PO-881")

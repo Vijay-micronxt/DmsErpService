@@ -85,6 +85,63 @@ def _assert_can_manage_display():
 		frappe.throw(_("Only Sales, Warehouse or Management can manage sample displays."), frappe.PermissionError)
 
 
+TOP_DEALER_WINDOW_MONTHS = 6
+
+
+@frappe.whitelist(methods=["GET"])
+def top_dealers(item: str | None = None, months: int = TOP_DEALER_WINDOW_MONTHS, limit: int = 20) -> list[dict]:
+	"""BRD C.10.4 -- "top dealers for sample/display planning are identified from retail
+	sales over the last six months, excluding bulk/project sales". Ranked by the invoices
+	actually in the system (Pacific, 26 Oct 2026: the migrated Tally invoices), net of tax.
+	Those carry no retail/bulk tag, so bulk/project is excluded by dealer type (BRD C.1.4's
+	Retail / Bulk / Project / Distributor), plus the invoice's own channel once invoices
+	made here carry one. Credit notes, opening entries and proformas don't count. `item`
+	narrows it to dealers who bought that item -- who to give its display to."""
+	_assert_can_manage_display()
+
+	from dms_erp.sales.invoice_api import _has, _type_condition
+
+	conditions = [
+		"si.docstatus = 1",
+		"si.posting_date >= %(since)s",
+		_type_condition("Sales"),
+		"ifnull(c.custom_dealer_type, '') not in ('Bulk', 'Project')",
+	]
+	if _has("custom_order_channel"):
+		conditions.append("ifnull(si.custom_order_channel, 'Retail') = 'Retail'")
+	params = {"since": add_months(today(), -int(months)), "limit": int(limit), "item": item}
+	if item:
+		value_sql, item_join = "sum(sii.net_amount)", "inner join `tabSales Invoice Item` sii on sii.parent = si.name"
+		conditions.append("sii.item_code = %(item)s")
+	else:
+		value_sql, item_join = "sum(si.net_total)", ""
+	rows = frappe.db.sql(
+		f"""
+		select si.customer as dealer, max(si.customer_name) as dealer_name,
+			{value_sql} as value, count(distinct si.name) as invoices, max(si.posting_date) as last_invoice
+		from `tabSales Invoice` si
+		{item_join}
+		inner join `tabCustomer` c on c.name = si.customer
+		where {" and ".join(conditions)}
+		group by si.customer
+		order by value desc
+		limit %(limit)s
+		""",
+		params,
+		as_dict=True,
+	)
+	return [
+		{
+			"dealer": r.dealer,
+			"dealerName": r.dealer_name,
+			"retailValue": round(float(r.value or 0), 2),
+			"invoices": r.invoices,
+			"lastInvoice": r.last_invoice,
+		}
+		for r in rows
+	]
+
+
 def _serialize_request(doc) -> dict:
 	return {
 		"id": doc.name,

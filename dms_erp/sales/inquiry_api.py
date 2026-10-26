@@ -68,6 +68,24 @@ INQUIRY_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 PURCHASE_REQUIREMENT_STATUSES = {"Open", "Out of Stock", "Pre-order Required"}
 
 
+DEFAULT_DROP_REASONS = ["Price too high", "Bought elsewhere", "Not available in time", "Dealer not responding", "Requirement cancelled", "Other"]
+
+
+def drop_reasons() -> list[str]:
+	"""BRD C.2.3 -- "dropped inquiries record a reason". The list is per-site config (DMS
+	Sales Settings, one per line) since this app is white-labeled; "Other" is always
+	offered last, with its own free-text details."""
+	configured = frappe.db.get_single_value("DMS Sales Settings", "inquiry_drop_reasons") or ""
+	reasons = [line.strip() for line in configured.splitlines() if line.strip()] or list(DEFAULT_DROP_REASONS)
+	return [r for r in reasons if r != "Other"] + ["Other"]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_inquiry_drop_reasons() -> list[str]:
+	_assert_can_manage_inquiries()
+	return drop_reasons()
+
+
 def _assert_can_manage_inquiries():
 	if not set(frappe.get_roles(frappe.session.user)) & INQUIRY_WRITE_ROLES:
 		frappe.throw(_("Only Sales or Management can manage inquiries."), frappe.PermissionError)
@@ -125,6 +143,8 @@ def _serialize(doc) -> dict:
 		"contactPhone": doc.contact_phone,
 		"whatsappReplied": bool(doc.whatsapp_replied),
 		"customerPo": doc.customer_po,
+		"dropReason": doc.get("drop_reason"),
+		"dropReasonNote": doc.get("drop_reason_note"),
 		"linkedSalesOrder": doc.linked_sales_order,
 		"linkedQuotation": doc.linked_quotation,
 		"linkedOpportunity": doc.linked_opportunity,
@@ -366,13 +386,24 @@ def update_inquiry(inquiry: str, patch: dict):
 		"whatsappReplied": "whatsapp_replied",
 		"contactName": "contact_name",
 		"contactPhone": "contact_phone",
+		"customerPo": "customer_po",
+		"dropReason": "drop_reason",
+		"dropReasonNote": "drop_reason_note",
 	}
 
 	doc = frappe.get_doc("Inquiry", inquiry)
 	for key, value in patch.items():
 		fieldname = field_map.get(key)
 		if fieldname:
-			doc.set(fieldname, value)
+			doc.set(fieldname, value.strip() if isinstance(value, str) else value)
+
+	# BRD C.2.3 -- closing without a customer PO is allowed (Pacific chose a warning, shown
+	# by the staff app, not a block), but a drop reason that is given must be a real one.
+	if doc.drop_reason:
+		if doc.drop_reason not in drop_reasons():
+			frappe.throw(_("{0} is not one of the inquiry drop reasons.").format(doc.drop_reason), frappe.ValidationError)
+		if doc.drop_reason == "Other" and not (doc.drop_reason_note or "").strip():
+			frappe.throw(_("Describe the reason when choosing Other."), frappe.ValidationError)
 	doc.save(ignore_permissions=True)
 	return _serialize(doc)
 

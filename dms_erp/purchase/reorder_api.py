@@ -114,6 +114,44 @@ def _grouped_open_purchase_orders() -> dict[str, list[dict]]:
 	return grouped
 
 
+def _grouped_reserved_qty() -> dict[str, float]:
+	"""BRD C.4.1's "reserved" -- boxes on submitted Sales Orders that haven't left the
+	warehouse yet. Same definition sales.reservation uses for its reminders (an order holds
+	stock until Dispatched / Delivered / Cancelled), so the two never disagree. Not
+	ERPNext's Bin.reserved_qty: that only comes down on a Delivery Note, which this app
+	doesn't post (BRD C.3.1), so it would keep growing and over-order. All channels count:
+	a bulk order holds stock just the same, even though only retail drives the target."""
+	from dms_erp.sales.reservation import CLOSED_STAGES
+
+	rows = frappe.db.sql(
+		"""
+		select soi.item_code as item, sum(soi.stock_qty) as qty
+		from `tabSales Order Item` soi
+		inner join `tabSales Order` so on so.name = soi.parent
+		where so.docstatus = 1 and coalesce(so.custom_fulfillment_stage, '') not in %s
+		group by soi.item_code
+		""",
+		(tuple(CLOSED_STAGES),),
+		as_dict=True,
+	)
+	return {r.item: float(r.qty or 0) for r in rows}
+
+
+def _last_purchase_dates() -> dict[str, str]:
+	"""BRD C.4.1 review column "last purchase date": the newest submitted PO per item."""
+	rows = frappe.db.sql(
+		"""
+		select poi.item_code as item, max(po.transaction_date) as last_date
+		from `tabPurchase Order Item` poi
+		inner join `tabPurchase Order` po on po.name = poi.parent
+		where po.docstatus = 1
+		group by poi.item_code
+		""",
+		as_dict=True,
+	)
+	return {r.item: r.last_date for r in rows}
+
+
 def _bulk_stock_for_items(item_codes: list[str]) -> dict[str, float]:
 	"""Same figure as total_stock_for_item, for every item in one query -- calling
 	that per item (one Bin query each) is the dominant cost of reorder_suggestions
@@ -170,12 +208,16 @@ def _bulk_default_supplier(item_codes: list[str]) -> dict[str, str | None]:
 
 @frappe.whitelist(methods=["GET"])
 def reorder_suggestions():
-	items = frappe.get_all("Item", fields=["name", "custom_discontinuation_status", "lead_time_days", "custom_moq"])
+	items = frappe.get_all(
+		"Item", fields=["name", "custom_discontinuation_status", "lead_time_days", "custom_moq", "custom_reorder_frequency"]
+	)
 	item_codes = [i.name for i in items]
 	missed_by_item = _grouped_inquiry_qty(MISSED_DEMAND_STATUSES)
 	pending_by_item = _grouped_inquiry_qty(PENDING_INQUIRY_STATUSES)
 	sales_by_item = _grouped_recent_sales_qty()
 	open_po_by_item = _grouped_open_purchase_orders()
+	reserved_by_item = _grouped_reserved_qty()
+	last_purchase_by_item = _last_purchase_dates()
 	stock_by_item = _bulk_stock_for_items(item_codes)
 	default_supplier_by_item = _bulk_default_supplier(item_codes)
 	moq_by_item = _bulk_resolve_moq(item_codes, default_supplier_by_item)
@@ -194,6 +236,8 @@ def reorder_suggestions():
 			moq_by_item.get(item.name, 0),
 			target_stock_months,
 			default_supplier_by_item.get(item.name),
+			reserved_by_item.get(item.name, 0),
+			last_purchase_by_item.get(item.name),
 		)
 		for item in items
 	]
@@ -212,6 +256,8 @@ def _suggestion_for(
 	moq: float = 0,
 	target_stock_months: float = DEFAULT_TARGET_STOCK_MONTHS,
 	default_supplier: str | None = None,
+	reserved_qty: float = 0,
+	last_purchase_date=None,
 ) -> dict:
 	status = item.custom_discontinuation_status or "Active"
 	non_reorderable = not is_reorderable(status)
@@ -238,14 +284,21 @@ def _suggestion_for(
 			f"~{lead_time_demand_qty} boxes of expected demand across a {item.lead_time_days}-day lead time "
 			f"({recent_retail_sales_qty} boxes sold in the last {SALES_VELOCITY_WINDOW_DAYS} days)"
 		)
+	# BRD C.4.1's own formula: Net available = Current stock - Reserved + In-transit.
+	# In-transit is the open-PO quantity still to be received (see this module's docstring).
+	free_stock = current_stock - reserved_qty
+	net_available = free_stock + open_po_qty
+
 	if current_stock == 0:
 		reasons.append("Zero stock on hand")
-	elif current_stock < target_stock_qty:
+	elif free_stock < target_stock_qty:
 		reasons.append(f"Below the {target_stock_qty}-box target ({target_stock_months} months of avg sales)")
+	if reserved_qty > 0:
+		reasons.append(f"{reserved_qty:g} boxes reserved for open orders")
 	if open_po_qty > 0:
 		reasons.append(f"{open_po_qty} boxes already on order across {len(open_purchase_orders)} open PO(s)")
 
-	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + target_stock_qty - current_stock - open_po_qty
+	raw_need = missed_demand_qty + pending_inquiry_qty + lead_time_demand_qty + target_stock_qty - net_available
 	# BRD C.4.1 -- round UP to the nearest 5 boxes, never down (a shortfall rounded
 	# down would under-order). round() rounds to nearest, which silently under-orders
 	# half the time (e.g. 65.1 -> 65 instead of 70) -- a real, previously-confirmed bug.
@@ -271,6 +324,18 @@ def _suggestion_for(
 		# None here means Purchase must pick one by hand when acting on this suggestion.
 		"defaultSupplier": default_supplier,
 		"currentStock": current_stock,
+		# BRD C.4.1 review columns.
+		"reservedQty": reserved_qty,
+		"inTransitQty": open_po_qty,
+		"availableQty": net_available,
+		"avgMonthlySales": round(avg_monthly_sales, 1),
+		"leadTimeDays": item.lead_time_days or 0,
+		# BRD C.4.1 "item-level reorder frequency" -- planning context only; the BRD gives it
+		# no part in the quantity formula, so it doesn't change suggestedQty.
+		"reorderFrequency": item.get("custom_reorder_frequency") or None,
+		"lastPurchaseDate": last_purchase_date,
+		"status": status,
+		"statusLabel": status_label(status),
 		"missedDemandQty": missed_demand_qty,
 		"pendingInquiryQty": pending_inquiry_qty,
 		"recentRetailSalesQty": recent_retail_sales_qty,

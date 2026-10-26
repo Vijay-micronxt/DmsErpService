@@ -8,8 +8,9 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
+from dms_erp.warehouse import allocation_api
 from dms_erp.sales import utils as sales_utils
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
 
 
 # Relative to today: fixed dates rot into the past, and ERPNext then refuses the order
@@ -35,6 +36,30 @@ class TestOrderApi(FrappeTestCase):
 		frappe.set_user("Administrator")
 		if frappe.db.exists("Product Series", "Order Test Series"):
 			frappe.delete_doc("Product Series", "Order Test Series", force=True, ignore_permissions=True)
+
+	def _stock(self, item, qty, bay=None):
+		"""Real on-hand stock so a Delivery Note can actually post against it (negative
+		stock is refused site-wide, same as a real warehouse). Returns the Warehouse
+		doc's own name -- what Pick Task.suggested_bay / Delivery Note.warehouse hold --
+		not the human bay code create_allocation's own `lines[].bay` takes."""
+		bay = bay or make_bay(f"{item}-DN-BAY", categories=["Vitrified"])
+		allocation_api.create_allocation(
+			item=item, batch_no=f"{item}-DN-B1", total_qty=qty, lines=[{"bay": bay["code"], "qty": qty}], supplier=self.supplier
+		)
+		return bay["id"]
+
+	def _dispatch(self, order_id):
+		"""Walks an order from Picking through to Dispatched, actually marking its one
+		Pick Task Picked -- the real readiness gate _assert_lines_ready_for_delivery
+		checks (stock must already exist via self._stock first, or the Delivery Note
+		this posts will be refused for insufficient stock, same as production)."""
+		order_api.advance_order_stage(order_id, "Picking")
+		task = picking_api.list_pick_tasks(order_id)["items"][0]
+		picking_api.auto_allocate(task["id"])
+		picking_api.patch_task(task["id"], {"picker": "Administrator", "status": "Picked"})
+		order_api.confirm_advance_payment(order_id)
+		order_api.advance_order_stage(order_id, "Ready to Dispatch")
+		return order_api.advance_order_stage(order_id, "Dispatched")
 
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
@@ -206,9 +231,9 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(cancelled["stage"], "Cancelled")
 
 		order2 = self._make_order()
-		order_api.confirm_advance_payment(order2["id"])
-		for stage in ("Picking", "Ready to Dispatch", "Dispatched", "Delivered"):
-			order_api.advance_order_stage(order2["id"], stage)
+		self._stock(self.item, 10)
+		self._dispatch(order2["id"])
+		order_api.advance_order_stage(order2["id"], "Delivered")
 		with self.assertRaises(frappe.ValidationError):
 			order_api.advance_order_stage(order2["id"], "Cancelled")
 
@@ -221,6 +246,74 @@ class TestOrderApi(FrappeTestCase):
 		self.assertEqual(tasks[0]["itemCode"], self.item)
 		self.assertEqual(tasks[0]["qty"], 25)
 		self.assertEqual(tasks[0]["status"], "Pending")
+
+	def test_dispatch_is_refused_until_every_line_is_marked_picked(self):
+		item = make_item("ORDER-DISPATCH-UNPICKED", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		self._stock(item, 10)
+
+		order = order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH)
+		order_api.confirm_advance_payment(order["id"])
+		order_api.advance_order_stage(order["id"], "Picking")
+		order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+
+		with self.assertRaises(frappe.ValidationError):
+			order_api.advance_order_stage(order["id"], "Dispatched")
+		# The stage must not have half-advanced.
+		self.assertEqual(order_api.get_order(order["id"])["stage"], "Ready to Dispatch")
+
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
+		picking_api.auto_allocate(task["id"])
+		picking_api.patch_task(task["id"], {"picker": "Administrator", "status": "Picked"})
+		dispatched = order_api.advance_order_stage(order["id"], "Dispatched")
+		self.assertEqual(dispatched["stage"], "Dispatched")
+
+	def test_dispatch_posts_a_real_delivery_note_against_the_picked_bay_and_batch(self):
+		item = make_item("ORDER-DN-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		bay = self._stock(item, 10)
+		from dms_erp.warehouse.utils import total_stock_for_item
+
+		self.assertEqual(total_stock_for_item(item), 10)
+
+		order = order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH)
+		order_api.advance_order_stage(order["id"], "Picking")
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
+		picking_api.auto_allocate(task["id"])
+		picking_api.patch_task(task["id"], {"picker": "Administrator", "status": "Picked"})
+		order_api.confirm_advance_payment(order["id"])
+		order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+
+		dispatched = order_api.advance_order_stage(order["id"], "Dispatched")
+		self.assertEqual(len(dispatched["deliveryNotes"]), 1)
+		dn = dispatched["deliveryNotes"][0]
+		self.assertEqual(dn["lines"], [{"itemCode": item, "qty": 10, "warehouse": bay, "batchNo": f"{item}-DN-B1"}])
+		self.assertTrue(frappe.db.get_value("Delivery Note", dn["id"], "docstatus") == 1)
+
+		# The real stock effect: on-hand drops by what was actually dispatched.
+		self.assertEqual(total_stock_for_item(item), 0)
+
+		# Dispatching the same order a second time (e.g. a retry) must never double-post.
+		with self.assertRaises(frappe.ValidationError):
+			order_api.advance_order_stage(order["id"], "Dispatched")
+
+	def test_create_sales_invoice_carries_the_orders_channel(self):
+		# BRD C.4.3 -- the retail/bulk tag follows the order onto its invoice.
+		bulk_order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": self.item, "qty": 3}], expected_dispatch=DISPATCH, channel="Bulk"
+		)
+		frappe.db.set_value("Sales Order", bulk_order["id"], "custom_fulfillment_stage", "Dispatched")
+		invoice = order_api.create_sales_invoice(bulk_order["id"])
+		self.assertEqual(invoice["channel"], "Bulk")
+		# What the frontend actually re-fetches (createSalesInvoice follows with get_order).
+		self.assertEqual(order_api.get_order(bulk_order["id"])["invoices"][0]["channel"], "Bulk")
+
+		retail_order = self._make_order()
+		frappe.db.set_value("Sales Order", retail_order["id"], "custom_fulfillment_stage", "Dispatched")
+		invoice = order_api.create_sales_invoice(retail_order["id"])
+		self.assertEqual(invoice["channel"], "Retail")
 
 	def test_write_requires_sales_or_management_role(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=1, source="Phone")
@@ -399,3 +492,53 @@ class TestOrderApi(FrappeTestCase):
 		order_api.advance_order_stage(second["id"], "Cancelled")
 		fourth = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH)
 		self.assertEqual(fourth["possibleDuplicates"], [])
+
+	def _make_uom_item(self):
+		item = make_item("ORDER-UOM-TEST-ITEM", "Vitrified")
+		frappe.db.set_value(
+			"Item",
+			item,
+			{"custom_pieces_per_box": 4, "custom_sqft_per_box": 15.5, "custom_weight_per_box_kg": 28},
+		)
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		return item
+
+	def test_order_line_entered_in_sqft_is_converted_to_boxes(self):
+		item = self._make_uom_item()
+		order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": item, "qty": 50, "uom": "Sqft"}], expected_dispatch=DISPATCH
+		)
+		line = order["lines"][0]
+		self.assertEqual(line["qty"], 4)  # ceil(50 / 15.5) = 4 boxes
+		self.assertEqual(line["enteredQty"], 50)
+		self.assertEqual(line["enteredUom"], "Sqft")
+		self.assertEqual(line["amount"], 4 * 360)
+
+	def test_order_line_left_in_box_carries_no_entered_fields(self):
+		order = self._make_order(qty=6)
+		line = order["lines"][0]
+		self.assertEqual(line["qty"], 6)
+		self.assertIsNone(line["enteredQty"])
+		self.assertIsNone(line["enteredUom"])
+
+	def test_order_line_uom_without_a_conversion_factor_is_refused(self):
+		item = make_item("ORDER-UOM-NO-FACTOR-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.create_order(
+				dealer=self.dealer, lines=[{"item": item, "qty": 10, "uom": "Pcs"}], expected_dispatch=DISPATCH
+			)
+
+	def test_uom_conversion_happens_before_channel_classification(self):
+		"""A line entered in Sqft must be converted to boxes before auto_classify_channel
+		ever compares qty against the item's bulk_qty_threshold: 2000 (raw sqft) would
+		wrongly trip a 500-box Bulk threshold, but the real box-equivalent (130) does not."""
+		item = self._make_uom_item()
+		frappe.db.set_value("Item", item, "custom_bulk_qty_threshold", 500)
+		order = order_api.create_order(
+			dealer=self.dealer, lines=[{"item": item, "qty": 2000, "uom": "Sqft"}], expected_dispatch=DISPATCH
+		)
+		self.assertEqual(order["lines"][0]["qty"], 130)  # ceil(2000 / 15.5)
+		self.assertEqual(order["channel"], "Retail")  # 130 boxes stays under the 500-box threshold

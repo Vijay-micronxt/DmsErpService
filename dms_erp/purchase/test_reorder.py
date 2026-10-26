@@ -83,11 +83,15 @@ class TestReorder(FrappeTestCase):
 		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 
-	def _sell(self, item, qty, channel=None):
+	def _sell(self, item, qty, channel=None, delivered=True):
 		"""A submitted Sales Order straight from staff -- no inquiry, so the sale doesn't
-		also count as pending/missed inquiry demand."""
+		also count as pending/missed inquiry demand. Delivered by default: these stand for
+		past sales history, and an order still open reserves its stock (BRD C.4.1)."""
 		kwargs = {"channel": channel} if channel else {}
-		return order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=DISPATCH, **kwargs)
+		order = order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=DISPATCH, **kwargs)
+		if delivered:
+			frappe.db.set_value("Sales Order", order["id"], "custom_fulfillment_stage", "Delivered")
+		return order
 
 	def _missed_demand(self, item, qty):
 		"""An inquiry on a zero-stock item, which create_inquiry auto-sets to Out of Stock."""
@@ -153,8 +157,9 @@ class TestReorder(FrappeTestCase):
 		settings.save(ignore_permissions=True)
 		try:
 			item = make_item("REORDER-PULLED-LABELLED", "Vitrified")
-			catalog_api.update_product(item, {"status": "Pulled Back"})
+			# Demand first, then the pull-back: a pulled-back item can't take a new inquiry.
 			self._missed_demand(item, 15)
+			catalog_api.update_product(item, {"status": "Pulled Back"})
 
 			suggestion = self._suggestion_for(item)
 			self.assertTrue(suggestion["nonReorderable"])
@@ -284,3 +289,45 @@ class TestReorder(FrappeTestCase):
 		notified = notify_reorder_review(suggestions=[{"suggestedQty": 0}])
 		self.assertEqual(notified, 0)
 		self.assertFalse(frappe.get_all("Notification Log", filters={"for_user": self.purchase_user}))
+
+	def test_open_orders_reserve_stock_and_raise_the_suggestion(self):
+		# BRD C.4.1: Net available = Current stock - Reserved + In-transit.
+		item = make_item("REORDER-RESERVED", "Vitrified")
+		frappe.db.set_value("Item", item, "lead_time_days", 0)
+		self._price(item)
+		self._stock(item, 100)
+
+		before = self._suggestion_for(item)
+		self.assertEqual(before["reservedQty"], 0)
+		self.assertEqual(before["suggestedQty"], 0)  # no sales history, nothing reserved
+
+		open_order = self._sell(item, 60, delivered=False)
+		reserved = self._suggestion_for(item)
+		self.assertEqual(reserved["reservedQty"], 60)
+		self.assertEqual(reserved["availableQty"], 40)
+		self.assertTrue(any("60 boxes reserved for open orders" in r for r in reserved["reasons"]))
+
+		# Once it leaves the warehouse it no longer holds stock.
+		frappe.db.set_value("Sales Order", open_order["id"], "custom_fulfillment_stage", "Dispatched")
+		self.assertEqual(self._suggestion_for(item)["reservedQty"], 0)
+
+	def test_review_columns_include_in_transit_last_purchase_and_lead_time(self):
+		item = make_item("REORDER-COLUMNS", "Vitrified")
+		frappe.db.set_value("Item", item, "lead_time_days", 12)
+		self._missed_demand(item, 10)
+		po = po_api.create_purchase_order(item=item, ordered_qty=25, supplier=self.supplier, expected_ready_date=DISPATCH)
+
+		suggestion = self._suggestion_for(item)
+		self.assertEqual(suggestion["inTransitQty"], 25)
+		self.assertEqual(suggestion["availableQty"], 25)  # 0 stock - 0 reserved + 25 in transit
+		self.assertEqual(suggestion["leadTimeDays"], 12)
+		self.assertEqual(str(suggestion["lastPurchaseDate"]), str(frappe.db.get_value("Purchase Order", po["id"], "transaction_date")))
+		self.assertEqual(suggestion["status"], "Active")
+		self.assertIn("avgMonthlySales", suggestion)
+		self.assertIsNone(suggestion["reorderFrequency"])
+
+		# Planning context only -- it must not move the suggested quantity.
+		frappe.db.set_value("Item", item, "custom_reorder_frequency", "Every 3 months")
+		with_frequency = self._suggestion_for(item)
+		self.assertEqual(with_frequency["reorderFrequency"], "Every 3 months")
+		self.assertEqual(with_frequency["suggestedQty"], suggestion["suggestedQty"])

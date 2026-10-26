@@ -27,7 +27,7 @@ configured, that raises a clear ValidationError rather than posting to a guessed
 account. This keeps the app fully usable before an accountant has picked a CoA;
 turning on GL posting later is a config change, not a redeploy.
 
-BRD C.8.2's year-end (31 Mar removal / 1 Apr reinstatement) journal cycle is
+BRD C.8.2's year-end (31 Mar removal / 1 Apr reinstatement) *journal* cycle is
 deliberately NOT built here: this app has never posted anything to the GL at
 *filing* time (only at settlement), so there is no open receivable balance in the
 ledger for a year-end job to reverse yet — building one would post a journal
@@ -36,7 +36,11 @@ a filing-time GL posting decision first, which is bigger than "claim voucher
 unification" and belongs in its own conversation with Pacific/the accountant.
 `claims_pending_year_end_reconciliation` gives finance the honest, read-only
 version instead: everything still Filed/Approved as of a given date, for a human
-to reconcile until that decision is made.
+to reconcile until that decision is made. `notify_year_end_claim_reconciliation`
+(26 Oct 2026, scheduled daily) is the automation half that *is* safe to build
+without that decision: it doesn't post anything, it just makes sure Finance/
+Management actually see that list on the two days it matters, instead of it only
+existing as a report nobody opens unprompted.
 """
 
 import frappe
@@ -47,9 +51,29 @@ from dms_erp.finance import accounting
 from dms_erp.pagination import clamp
 
 CLAIM_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
+# Approving / settling / rejecting a claim is a finance decision; filing one stays with the warehouse.
+CLAIM_DECIDE_ROLES = CLAIM_WRITE_ROLES | {"DMS Finance"}
 DAMAGE_TO_CLAIM_TRANSFER_TYPE = "Damage→Insurance Claim"
 CLAIM_TYPES = ["Insurance", "Transit", "Shortage"]
 OPEN_CLAIM_STATUSES = ["Filed", "Approved"]
+
+
+def _assert_can_read_claims():
+	"""Claims carry supplier names and money, so reading them is staff-only. A dealer's
+	portal (JWT) session is already confined to the dealer-portal API by auth.middleware;
+	this is the second layer, for any other session -- e.g. a dealer signing in through
+	Frappe's own cookie login with their portal password, which that middleware never
+	sees. These endpoints had no check of their own and frappe.get_all skips permissions.
+	Any staff role reads: the staff app shows the Claims screen to every role."""
+	from dms_erp.auth.api import STAFF_ROLES
+
+	if not set(frappe.get_roles(frappe.session.user)) & set(STAFF_ROLES):
+		frappe.throw(_("Only staff can view claims."), frappe.PermissionError)
+
+
+def _assert_can_decide_claims():
+	if not set(frappe.get_roles(frappe.session.user)) & CLAIM_DECIDE_ROLES:
+		frappe.throw(_("Only Warehouse, Finance or Management can update a claim's status."), frappe.PermissionError)
 
 
 def _assert_can_manage_claims():
@@ -149,6 +173,7 @@ def list_all_claims(status: str | None = None) -> list[dict]:
 
 @frappe.whitelist(methods=["GET"])
 def list_claims(status: str | None = None, claim_type: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+	_assert_can_read_claims()
 	limit, offset = clamp(limit, offset)
 	filters = _claim_filters(status, claim_type)
 	if search:
@@ -167,6 +192,7 @@ def list_claims(status: str | None = None, claim_type: str | None = None, search
 
 @frappe.whitelist(methods=["GET"])
 def get_claim(claim: str):
+	_assert_can_read_claims()
 	return _serialize(frappe.get_doc("Insurance Claim", claim))
 
 
@@ -175,6 +201,7 @@ def accumulated_claims_by_supplier(claim_type: str | None = None) -> list[dict]:
 	"""BRD C.8: "small values are accumulated — always grouped by supplier/company —
 	before a claim voucher is raised." A grouping view over still-open (Filed/
 	Approved) claims; filing/approval itself is unchanged, per-claim."""
+	_assert_can_read_claims()
 	rows = frappe.db.sql(
 		"""
 		select supplier, count(*) as claim_count, sum(claim_amount) as total_claimed
@@ -189,13 +216,7 @@ def accumulated_claims_by_supplier(claim_type: str | None = None) -> list[dict]:
 	return [{"supplier": r.supplier, "claimCount": r.claim_count, "totalClaimed": r.total_claimed} for r in rows]
 
 
-@frappe.whitelist(methods=["GET"])
-def claims_pending_year_end_reconciliation(as_of=None) -> list[dict]:
-	"""BRD C.8.2's 31-Mar removal/1-Apr reinstatement journal cycle isn't automated
-	yet (see module docstring for why) — this is the honest, read-only version: every
-	claim still Filed/Approved as of `as_of` (defaults to today), for a human to
-	reconcile."""
-	as_of = getdate(as_of) if as_of else getdate(today())
+def _claims_pending_year_end_reconciliation(as_of) -> list[dict]:
 	names = frappe.get_all(
 		"Insurance Claim",
 		filters={"status": ["in", OPEN_CLAIM_STATUSES], "filed_at": ["<=", as_of]},
@@ -203,6 +224,58 @@ def claims_pending_year_end_reconciliation(as_of=None) -> list[dict]:
 		order_by="filed_at asc",
 	)
 	return [_serialize(frappe.get_doc("Insurance Claim", name)) for name in names]
+
+
+@frappe.whitelist(methods=["GET"])
+def claims_pending_year_end_reconciliation(as_of=None) -> list[dict]:
+	"""BRD C.8.2's 31-Mar removal/1-Apr reinstatement journal cycle isn't automated
+	yet (see module docstring for why) — this is the honest, read-only version: every
+	claim still Filed/Approved as of `as_of` (defaults to today), for a human to
+	reconcile."""
+	_assert_can_read_claims()
+	as_of = getdate(as_of) if as_of else getdate(today())
+	return _claims_pending_year_end_reconciliation(as_of)
+
+
+YEAR_END_NOTIFY_MONTH_DAYS = {(3, 31), (4, 1)}
+YEAR_END_NOTIFY_ROLES = {"DMS Finance", "DMS Management", "System Manager"}
+
+
+def notify_year_end_claim_reconciliation():
+	"""Scheduled daily (hooks.py), but only actually does anything on 31 March or 1
+	April — BRD C.8.2's year-end removal/reinstatement cycle. Building an automated
+	journal for that cycle isn't possible yet (see module docstring: this app has
+	never posted anything to the GL at claim *filing* time, only at settlement, so
+	there is no open ledger balance for a journal to reverse — that needs its own
+	filing-time GL posting decision first, bigger than this module and not assumed
+	here). Until that decision is made, this is the honest half of the automation:
+	make sure Finance/Management actually see claims_pending_year_end_reconciliation's
+	list on the two days it matters, rather than it only existing as a report nobody
+	opens unprompted. A no-op both on every other day and when nothing is pending."""
+	now = getdate(today())
+	if (now.month, now.day) not in YEAR_END_NOTIFY_MONTH_DAYS:
+		return
+
+	pending = _claims_pending_year_end_reconciliation(now)
+	if not pending:
+		return
+
+	from dms_erp.approvals.api import _users_with_any_role
+
+	total_claimed = sum(c["claimAmount"] for c in pending)
+	subject = _("Year-end claim reconciliation ({0}): {1} claim(s) still open, totalling {2}").format(
+		now, len(pending), total_claimed
+	)
+	for user in _users_with_any_role(YEAR_END_NOTIFY_ROLES):
+		frappe.get_doc(
+			{
+				"doctype": "Notification Log",
+				"for_user": user,
+				"type": "Alert",
+				"document_type": "Insurance Claim",
+				"subject": subject,
+			}
+		).insert(ignore_permissions=True)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -276,7 +349,7 @@ def update_claim_status(
 	settlement_mode: str | None = None,
 	responsibility: str | None = None,
 ):
-	_assert_can_manage_claims()
+	_assert_can_decide_claims()
 
 	doc = frappe.get_doc("Insurance Claim", claim)
 	doc.status = status
@@ -295,6 +368,7 @@ def update_claim_status(
 
 @frappe.whitelist(methods=["GET"])
 def claim_summary():
+	_assert_can_read_claims()
 	claims = frappe.get_all("Insurance Claim", fields=["status", "claim_amount", "settled_amount"])
 	receivable = sum(c.claim_amount for c in claims if c.status in ("Filed", "Approved"))
 	settled = sum((c.settled_amount or 0) for c in claims if c.status == "Settled")

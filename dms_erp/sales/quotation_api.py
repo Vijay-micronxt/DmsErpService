@@ -48,6 +48,7 @@ from dms_erp.catalog.utils import (
 	item_sqft_per_box,
 	item_sqm_per_box,
 	item_weight_per_box_kg,
+	normalize_order_line_uoms,
 	status_label,
 )
 from dms_erp.pagination import clamp
@@ -122,7 +123,23 @@ def _serialize_line(row) -> dict:
 		# purchase price; see _purchase_cost for where that number comes from.
 		"purchaseCost": purchase_cost,
 		"belowPurchaseCost": purchase_cost is not None and flt(row.rate) < purchase_cost,
+		# Sheet 7.8 -- the originally entered qty/unit, only when it wasn't Box.
+		"enteredQty": row.get("custom_entered_qty"),
+		"enteredUom": row.get("custom_entered_uom"),
 	}
+
+
+def _typed_rate(item: str, line: dict, discount_pct: float) -> float | None:
+	"""A rate typed by staff (BRD C.7.3 / C.11 #3), or None. Gated for approval by
+	approvals.api.gate_discount_over_price_list before any document is created."""
+	if line.get("rate") in (None, ""):
+		return None
+	rate = float(line["rate"])
+	if rate <= 0:
+		frappe.throw(_("The rate for {0} must be more than zero.").format(item), frappe.ValidationError)
+	if discount_pct:
+		frappe.throw(_("Give {0} either a discount or a rate, not both.").format(item), frappe.ValidationError)
+	return round(rate, 2)
 
 
 def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dict]:
@@ -142,6 +159,11 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 		if not 0 <= discount_pct <= 100:
 			frappe.throw(_("Discount for {0} must be between 0 and 100%.").format(item), frappe.ValidationError)
 		rate = round(price_list_rate * (1 - discount_pct / 100))
+		typed_rate = _typed_rate(item, line, discount_pct)
+		if typed_rate is not None:
+			# BRD C.11 #3 -- the price list rate stays on the row, so the override is
+			# always visible against what the dealer's price actually was.
+			rate = typed_rate
 		items.append(
 			{
 				"item_code": item,
@@ -157,6 +179,10 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 				# this document is reloaded and something reads it back -- see
 				# _lines_from_items below and sales/setup.py's own docstring.
 				"custom_delivery_date": line.get("delivery_date"),
+				# Sheet 7.8 -- only set when entered in a non-Box unit (see
+				# catalog.utils.normalize_order_line_uoms).
+				"custom_entered_qty": line.get("entered_qty"),
+				"custom_entered_uom": line.get("entered_uom"),
 			}
 		)
 	return items
@@ -175,6 +201,8 @@ def _lines_from_items(rows) -> list[dict]:
 			"qty": row.qty,
 			"discount_percentage": row.discount_percentage,
 			"delivery_date": row.custom_delivery_date,
+			"entered_qty": row.get("custom_entered_qty"),
+			"entered_uom": row.get("custom_entered_uom"),
 		}
 		for row in rows
 	]
@@ -340,11 +368,17 @@ def create_quotation(
 	mixed-dealer selection can't be merged and is rejected outright rather than
 	silently dropped or split. custom_inquiry (a single Link, unchanged) keeps
 	pointing at the first inquiry in the list, for existing single-inquiry
-	callers/reports."""
+	callers/reports.
+
+	A line may also carry `uom` (sheet 7.8 -- Box/Pcs/Sqft/Sqm/Kg/Gram; Box when
+	left unset), converted to boxes before anything else -- channel
+	classification, pricing -- ever sees `qty` (see order_api.create_order's
+	own copy of this same normalization)."""
 	_assert_can_manage_quotations()
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	lines = normalize_order_line_uoms(lines)
 	if inquiries:
 		mismatched = [
 			i for i in inquiries if frappe.db.get_value("Inquiry", i, "dealer") != dealer
@@ -543,7 +577,12 @@ def _update_quotation_line_qty_action(quotation: str, item: str, qty: float) -> 
 	lines = _lines_from_items(doc.items)
 	for l in lines:
 		if l["item"] == item:
+			# A direct box-qty override invalidates whatever unit this line was
+			# originally entered in (sheet 7.8) -- the display annotation would
+			# otherwise go stale against the new qty.
 			l["qty"] = qty
+			l["entered_qty"] = None
+			l["entered_uom"] = None
 	return _amend_with_lines(doc, lines)
 
 
@@ -552,6 +591,53 @@ AMEND_ACTIONS = {
 	"remove_line": _remove_quotation_line_action,
 	"update_qty": _update_quotation_line_qty_action,
 }
+
+
+def preview_amend(action: str, quotation: str, item: str, qty: float | None = None) -> dict:
+	"""BRD C.11 -- the side-by-side version Management approves against. Applies the
+	queued edit to a copy of the lines and re-prices them exactly as the amend would
+	(every line from the current approved price, _amend_with_lines), but saves nothing.
+	Re-pricing is why "after" can differ on lines the edit didn't touch."""
+	doc = frappe.get_doc("Quotation", quotation)
+	before = [
+		{"item": row.item_code, "itemName": row.item_name, "qty": row.qty, "rate": row.rate, "amount": row.amount}
+		for row in doc.items
+	]
+	lines = _lines_from_items(doc.items)
+	if action == "add_line":
+		lines.append({"item": item, "qty": qty})
+	elif action == "remove_line":
+		lines = [l for l in lines if l["item"] != item]
+	elif action == "update_qty":
+		for l in lines:
+			if l["item"] == item:
+				l["qty"] = qty
+	else:
+		frappe.throw(_("Unknown quotation edit {0}.").format(action), frappe.ValidationError)
+
+	error = None
+	try:
+		priced = _priced_items(doc.party_name, doc.custom_markup_pct, lines)
+		after = [
+			{
+				"item": p["item_code"],
+				"itemName": frappe.get_cached_value("Item", p["item_code"], "item_name"),
+				"qty": p["qty"],
+				"rate": p["rate"],
+				"amount": p["rate"] * float(p["qty"]),
+			}
+			for p in priced
+		]
+	except frappe.ValidationError as e:
+		# Approving would fail the same way -- show why instead of a made-up "after".
+		after, error = None, str(e)
+	return {
+		"before": before,
+		"after": after,
+		"beforeNetTotal": doc.net_total,
+		"afterNetTotal": sum(l["amount"] for l in after) if after is not None else None,
+		"error": error,
+	}
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

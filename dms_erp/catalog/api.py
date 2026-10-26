@@ -49,6 +49,7 @@ from frappe.utils import cint, flt
 
 from dms_erp.catalog.utils import (
 	DISCONTINUATION_STATUSES,
+	derive_sqft_per_box,
 	is_reorderable,
 	is_sellable,
 	item_default_supplier,
@@ -56,7 +57,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
-from dms_erp.warehouse.utils import total_stock_for_item
+from dms_erp.warehouse.utils import sellable_stock_for_item, total_stock_for_item
 
 CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 DEFAULT_STOCK_UOM = "Box"
@@ -142,6 +143,9 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"size": item_doc.custom_size,
 		"finish": item_doc.custom_finish,
 		"color": item_doc.custom_color,
+		# BRD C.1.2 -- Colour (above) and Base Colour, the broad family.
+		"baseColour": item_doc.get("custom_base_colour"),
+		"reorderFrequency": item_doc.get("custom_reorder_frequency") or None,
 		# .get(), not attribute access: a site that has this code but hasn't run `bench migrate`
 		# yet lacks these Custom Fields, and a plain attribute read there turns every product
 		# list/detail call into a 500. The values just come back empty until it's migrated.
@@ -160,6 +164,10 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		# stock_api.list_stock for the per-bay breakdown), which this flat singular
 		# field from the frontend's Product type can't represent on its own.
 		"stockQty": total_stock_for_item(item_doc.name),
+		# Client finding "stock accuracy" -- the dealer-facing "available" number; excludes
+		# damage/insurance-claim and display-bay stock (see warehouse.utils for why). stockQty
+		# above stays the genuine physical total for staff/warehouse/reorder uses.
+		"availableStockQty": sellable_stock_for_item(item_doc.name),
 		"bay": "—",
 		# Last-sold comes from Phase 5 (Sales) — stubbed for now.
 		"lastSoldDays": 0,
@@ -171,6 +179,8 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		"piecesPerBox": item_doc.custom_pieces_per_box,
 		"sqftPerBox": item_doc.custom_sqft_per_box,
 		"weightPerBoxKg": item_doc.custom_weight_per_box_kg,
+		"heightMm": item_doc.get("custom_height_mm"),
+		"widthMm": item_doc.get("custom_width_mm"),
 		# BRD D.2 -- the item's own custom_default_supplier if set, else its Series'
 		# supplier (see catalog.utils.item_default_supplier).
 		"defaultSupplier": item_default_supplier(item_doc.name),
@@ -303,6 +313,8 @@ _BULK_ITEM_FIELDS = (
 	"custom_size",
 	"custom_finish",
 	"custom_color",
+	"custom_base_colour",
+	"custom_reorder_frequency",
 	"custom_colour_attribute_1",
 	"custom_colour_attribute_2",
 	"custom_design_attribute_1",
@@ -426,6 +438,8 @@ def _serialize_many(codes: list[str]) -> list[dict]:
 				"size": row.get("custom_size"),
 				"finish": row.get("custom_finish"),
 				"color": row.get("custom_color"),
+				"baseColour": row.get("custom_base_colour"),
+				"reorderFrequency": row.get("custom_reorder_frequency") or None,
 				"colourAttribute1": row.get("custom_colour_attribute_1"),
 				"colourAttribute2": row.get("custom_colour_attribute_2"),
 				"designAttribute1": row.get("custom_design_attribute_1"),
@@ -518,6 +532,18 @@ def get_product(item: str):
 	return _serialize(frappe.get_doc("Item", item))
 
 
+@frappe.whitelist(methods=["GET"])
+def get_excluded_stock(item: str) -> list[dict]:
+	"""Client finding "stock accuracy" -- the "View more" breakdown behind availableStockQty:
+	what's sitting in a damage/insurance-claim or display bay for this item, which
+	availableStockQty (and therefore the dealer portal's "available" number) already
+	excludes. Read-only, no role gate -- same convention as get_product itself; a dealer
+	session reaches this through dealer_portal_api's own delegation."""
+	from dms_erp.warehouse.utils import excluded_stock_for_item
+
+	return excluded_stock_for_item(item)
+
+
 COLOR_DEFAULTS = ["White", "Beige", "Grey", "Black", "Brown"]
 
 
@@ -530,6 +556,13 @@ def list_item_colors():
 	list so the picker isn't empty on a fresh site."""
 	values = frappe.get_all("Item", filters={"custom_color": ["is", "set"]}, pluck="custom_color", distinct=True)
 	return sorted(set(values)) or COLOR_DEFAULTS
+
+
+@frappe.whitelist(methods=["GET"])
+def list_item_base_colours():
+	"""Distinct Base Colour values in use, for its dropdown-with-create (client requirement
+	8.6). Falls back to COLOR_DEFAULTS, which are colour families -- what Base Colour holds."""
+	return _distinct_item_values("custom_base_colour") or COLOR_DEFAULTS
 
 
 @frappe.whitelist(methods=["GET"])
@@ -582,6 +615,8 @@ def create_product(
 	size: str | None = None,
 	finish: str | None = None,
 	color: str | None = None,
+	base_colour: str | None = None,
+	reorder_frequency: str | None = None,
 	colour_attribute_1: str | None = None,
 	colour_attribute_2: str | None = None,
 	design_attribute_1: str | None = None,
@@ -591,6 +626,8 @@ def create_product(
 	pieces_per_box: float = 0,
 	sqft_per_box: float = 0,
 	weight_per_box_kg: float = 0,
+	height_mm: float = 0,
+	width_mm: float = 0,
 	# BRD D.2 — independent of `supplier` above (which is only who this launch price came
 	# from): lets Purchase name a different default supplier at creation time, e.g. when
 	# the launch quote and the intended ongoing source aren't the same company. Falls back
@@ -621,6 +658,10 @@ def create_product(
 	finish, series_label, pieces_per_box, sqft_per_box, weight_per_box_kg, bulk_qty_threshold, retail_qty_threshold = _apply_series_defaults(
 		series_ref, finish, pieces_per_box, sqft_per_box, weight_per_box_kg
 	)
+	# Sheet item -- Height/Width (mm): only derives Sqft per Box when the caller left it
+	# unset (0) and both dimensions plus pieces_per_box are known. Never overrides an
+	# explicitly supplied sqft_per_box.
+	sqft_per_box = sqft_per_box or derive_sqft_per_box(height_mm, width_mm, pieces_per_box) or 0
 
 	item = frappe.get_doc(
 		{
@@ -633,6 +674,11 @@ def create_product(
 			"custom_size": size,
 			"custom_finish": finish,
 			"custom_color": color,
+			"custom_base_colour": base_colour,
+			# BRD C.4.1/D.2 -- item-level reorder frequency, from the Series unless given.
+			"custom_reorder_frequency": reorder_frequency
+			or frappe.db.get_value("Product Series", series_ref, "reorder_frequency")
+			or None,
 			"custom_colour_attribute_1": colour_attribute_1,
 			"custom_colour_attribute_2": colour_attribute_2,
 			"custom_design_attribute_1": design_attribute_1,
@@ -646,6 +692,8 @@ def create_product(
 			"custom_pieces_per_box": pieces_per_box,
 			"custom_sqft_per_box": sqft_per_box,
 			"custom_weight_per_box_kg": weight_per_box_kg,
+			"custom_height_mm": height_mm or None,
+			"custom_width_mm": width_mm or None,
 			# BRD D.2 -- defaults to the launch-pricing supplier when default_supplier isn't
 			# given explicitly, so every item created through this endpoint always gets one;
 			# Purchase can still re-source it later via update_product's "defaultSupplier" patch.
@@ -689,6 +737,8 @@ def update_product(item: str, patch: dict):
 		"size": "custom_size",
 		"finish": "custom_finish",
 		"color": "custom_color",
+		"baseColour": "custom_base_colour",
+		"reorderFrequency": "custom_reorder_frequency",
 		"colourAttribute1": "custom_colour_attribute_1",
 		"colourAttribute2": "custom_colour_attribute_2",
 		"designAttribute1": "custom_design_attribute_1",
@@ -698,6 +748,8 @@ def update_product(item: str, patch: dict):
 		"piecesPerBox": "custom_pieces_per_box",
 		"sqftPerBox": "custom_sqft_per_box",
 		"weightPerBoxKg": "custom_weight_per_box_kg",
+		"heightMm": "custom_height_mm",
+		"widthMm": "custom_width_mm",
 		"leadTimeDays": "lead_time_days",
 		"hsnCode": "gst_hsn_code",
 		"dealerCodes": "custom_dealer_codes",

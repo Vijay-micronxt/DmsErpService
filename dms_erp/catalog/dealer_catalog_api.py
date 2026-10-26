@@ -235,6 +235,20 @@ def _images_cell(images: list) -> str:
 
 @frappe.whitelist(methods=["GET"])
 def dealer_catalog_export(dealer: str, include_price: str | int | bool = True) -> str:
+	"""Staff-only wrapper over _dealer_catalog_export_html. It takes any `dealer` plus a
+	price toggle and had no check of its own. A dealer's portal (JWT) session is already
+	confined to the dealer-portal API by auth.middleware; this is the second layer, for a
+	session that middleware never sees (e.g. Frappe's own cookie login with the portal
+	password), which could otherwise pull another dealer's priced catalogue. Dealers get
+	their own catalogue, never priced, through dealer_portal_api.my_catalog_export."""
+	from dms_erp.auth.api import STAFF_ROLES
+
+	if not set(frappe.get_roles(frappe.session.user)) & set(STAFF_ROLES):
+		frappe.throw(_("Only staff can export a dealer's catalog."), frappe.PermissionError)
+	return _dealer_catalog_export_html(dealer, include_price)
+
+
+def _dealer_catalog_export_html(dealer: str, include_price: str | int | bool = True) -> str:
 	"""BRD C.14 — a per-dealer catalog sheet limited to what catalog_for(dealer)
 	already resolves as visible-and-sellable for that dealer, rendered as printable
 	HTML the same way allocation_api.render_box_stickers_html renders sticker sheets

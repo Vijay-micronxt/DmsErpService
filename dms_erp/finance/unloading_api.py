@@ -23,6 +23,13 @@ from dms_erp.finance import accounting
 from dms_erp.pagination import clamp
 
 CHARGE_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
+# Paying an unloading voucher is Finance's job; recording the charge stays with the warehouse.
+CHARGE_PAY_ROLES = CHARGE_WRITE_ROLES | {"DMS Finance"}
+
+
+def _assert_can_pay_charges():
+	if not set(frappe.get_roles(frappe.session.user)) & CHARGE_PAY_ROLES:
+		frappe.throw(_("Only Warehouse, Finance or Management can mark an unloading voucher paid."), frappe.PermissionError)
 
 
 def _assert_can_manage_charges():
@@ -126,7 +133,7 @@ def record_charge(
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def mark_paid(charge: str):
-	_assert_can_manage_charges()
+	_assert_can_pay_charges()
 
 	doc = frappe.get_doc("Unloading Charge", charge)
 	truck = frappe.get_doc("Inward Truck", doc.inward_truck)

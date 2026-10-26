@@ -197,6 +197,42 @@ def get_approval(name: str):
 	return _serialize(frappe.get_doc("Approval Request", name))
 
 
+@frappe.whitelist(methods=["GET"])
+def preview_approval(name: str):
+	"""BRD C.11 -- amend/cancel "routes for approval with a version diff". Before vs after
+	for a still-Pending amend/cancel request, computed from the live document without
+	changing it. None for other triggers or decided requests: once decided, the document
+	has already moved on and a "before" from today would be wrong."""
+	_assert_can_decide()
+	doc = frappe.get_doc("Approval Request", name)
+	if doc.trigger_type != "Amend Or Cancel Submitted Document" or doc.status != "Pending":
+		return None
+	payload = dict(json.loads(doc.payload or "{}"))
+	action = payload.pop("action", None)
+
+	if doc.reference_doctype == "Quotation":
+		from dms_erp.sales.quotation_api import preview_amend
+
+		return {"kind": "quotation", **preview_amend(action, **payload)}
+	if doc.reference_doctype == "Sales Order" and action == "cancel":
+		so = frappe.get_doc("Sales Order", payload["order"])
+		lines = [
+			{"item": row.item_code, "itemName": row.item_name, "qty": row.qty, "rate": row.rate, "amount": row.amount}
+			for row in so.items
+		]
+		return {
+			"kind": "cancel",
+			"beforeStage": so.get("custom_fulfillment_stage"),
+			"afterStage": "Cancelled",
+			"before": lines,
+			"after": lines,
+			"beforeNetTotal": so.net_total,
+			"afterNetTotal": so.net_total,
+			"error": None,
+		}
+	return None
+
+
 @frappe.whitelist(methods=["POST"])
 def decide_approval(name: str, decision: str, note: str | None = None):
 	_assert_can_decide()
@@ -382,16 +418,25 @@ def gate_discount_over_price_list(
 	see approvals.api's own module docstring for why it collapses into this
 	same check here.)"""
 	threshold = _discount_approval_threshold_pct()
-	if not any(float(line.get("discount_percentage") or 0) > threshold for line in lines):
-		return create_fn(**create_kwargs)
-
 	discounted_items = [
 		line["item"] for line in lines if float(line.get("discount_percentage") or 0) > threshold
 	]
+	# BRD C.11 trigger #3 -- staff typed the final rate themselves instead of a discount.
+	# Any typed rate is an override (BRD C.7.3: "even a one-rupee change"); callers send
+	# `rate` only when it differs from the dealer's price.
+	rated_items = [f"{line['item']} at {float(line['rate']):g}" for line in lines if line.get("rate") not in (None, "")]
+	if not discounted_items and not rated_items:
+		return create_fn(**create_kwargs)
+
+	parts = []
+	if rated_items:
+		parts.append(f"typed the rate for {', '.join(rated_items)}")
+	if discounted_items:
+		parts.append(f"applied a discount on {', '.join(discounted_items)} (over the {threshold:.0f}% approval threshold)")
 	return gate_document_creation(
-		trigger_type="Discount Over Price List",
+		trigger_type="Pricing Override" if rated_items else "Discount Over Price List",
 		reference_doctype=reference_doctype,
-		reason=f"{frappe.session.user} applied a discount on {', '.join(discounted_items)} (over the {threshold:.0f}% approval threshold).",
+		reason=f"{frappe.session.user} {' and '.join(parts)}.",
 		create_fn=create_fn,
 		create_kwargs=create_kwargs,
 	)
@@ -463,13 +508,17 @@ def _apply_credit_limit_exceeded(doc) -> dict:
 	else:
 		frappe.throw(_("Unknown credit-limit action: {0}").format(action), frappe.ValidationError)
 
-	result = create_fn(**payload)
+	from dms_erp.sales.credit_limit import credit_limit_approved
+
+	with credit_limit_approved():
+		result = create_fn(**payload)
 	return {"doctype": "Sales Order", "name": result["id"]}
 
 
 APPLIERS = {
 	"Channel Override": _apply_document_creation,
 	"Discount Over Price List": _apply_document_creation,
+	"Pricing Override": _apply_document_creation,
 	"Amend Or Cancel Submitted Document": _apply_amend_or_cancel,
 	"Credit Limit Exceeded": _apply_credit_limit_exceeded,
 }

@@ -103,13 +103,55 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
 - **Order** (`order_api.py`) — ERPNext's native `Sales Order`. Pacific's warehouse-
   fulfillment stages (Confirmed → Picking → Ready to Dispatch → Dispatched →
   Delivered/Cancelled) are a distinct operational flow layered on top via a custom
-  field + a structured stage-history child table — advancing them does not itself
-  create a Delivery Note or move stock; that's a natural future refinement. An
-  order sourced directly from an Inquiry (no markup) and one converted from a
-  Quotation (via ERPNext's own native mapper) are the only two creation paths,
-  matching the frontend's `sourceType: "Inquiry" | "Quotation"`. `total` (Phase 14)
-  is ERPNext's own `grand_total` — always server-computed, since every line's
-  `rate` came from `get_dealer_price` at creation, never a client-supplied value.
+  field + a structured stage-history child table. An order sourced directly from
+  an Inquiry (no markup) and one converted from a Quotation (via ERPNext's own
+  native mapper) are the only two creation paths, matching the frontend's
+  `sourceType: "Inquiry" | "Quotation"`. `total` (Phase 14) is ERPNext's own
+  `grand_total` — always server-computed, since every line's `rate` came from
+  `get_dealer_price` at creation, never a client-supplied value. BRD C.11 #3
+  (Pricing Override) adds a `rate` a caller may send per line instead of
+  `discount_percentage` (not both) — see `approvals.api.gate_discount_over_price_list`.
+
+  **Billing (26 Oct 2026)** closes BRD Figure 4's order-to-cash gap, done from the
+  staff app, not Desk:
+  - **Advancing to Dispatched posts a real ERPNext `Delivery Note`**
+    (`_create_delivery_note`) — the one point in this app's whole order lifecycle
+    where `Bin.actual_qty` actually goes down for a sale; before this, reorder
+    suggestions, the dealer portal's stock figures and every dashboard had been
+    overstating on-hand stock by everything ever sold. Gated on every line's Pick
+    Task actually being Picked (`_assert_lines_ready_for_delivery`) — Pick Task's
+    own `suggested_bay` is only `ensure_pick_tasks`' initial category-based guess,
+    never confirmed by the picking screen's own flow, so the warehouse and batch
+    are instead resolved from real on-hand stock at dispatch time
+    (`_resolve_delivery_bay_and_batch`, over `warehouse.utils.list_stock_lots`) —
+    the unambiguous case only (exactly one bay+batch with enough on hand); a split
+    or insufficient pick blocks dispatch with a clear reason rather than guessing.
+  - **`create_sales_invoice`** (pre-existing) now also carries the order's
+    `custom_order_channel` onto the Sales Invoice (BRD C.4.3) — a new
+    `Sales Invoice.custom_order_channel` custom field, so Retail-only signals
+    (reorder, `sample_api.top_dealers`) stay correct once invoices made here
+    (not migrated from Tally, which never gets this field) start covering real
+    sales volume.
+  - `_order_delivery_notes`/`deliveryNotes` on `_serialize` mirror
+    `_order_invoices`/`invoices` — empty until Dispatched, real rows after.
+    `dealer_portal_api._dealer_order` strips `deliveryNotes` same as the other
+    internal keys: the bay/warehouse names in it are internal layout, not
+    something a dealer needs (their `stage` already says Dispatched/Delivered).
+
+  **UOM entry (sheet 7.8, 26 Oct 2026)**. `create_order`/`create_quotation` each
+  normalize every line via `catalog.utils.normalize_order_line_uoms` as the very
+  first thing they do — before `auto_classify_channel`, the credit-limit estimate,
+  or `_priced_order_line`/`_priced_items` ever see `qty` — so a line entered in
+  Pcs/Sqft/Sqm/Kg/Gram converts to its box-equivalent before any box-qty rule runs
+  against it (a dealer ordering 2000 Sqft must not misclassify as Bulk just because
+  2000 looks like a big number; it's ~130 boxes). The originally entered qty/unit
+  survive as `custom_entered_qty`/`custom_entered_uom` (new Sales Order Item /
+  Quotation Item fields) purely for display, only when the line wasn't already in
+  Box. `quotation_api._update_quotation_line_qty_action` clears both on the edited
+  line when its qty is overridden directly in boxes — the annotation would
+  otherwise go stale against the new qty. `add_quotation_line`/`remove_quotation_line`
+  and `order_api`'s own line-level patches are deliberately NOT extended to accept a
+  `uom` — only the two creation entry points are, for now.
 - **Pick Task** (`picking_api.py`, `doctype/pick_task`) — a genuine custom doctype.
   ERPNext's native Pick List exists but is a coarser, all-or-nothing document per
   pick run; Pacific wants one row per order line with a suggested bay, a partially-
@@ -212,3 +254,18 @@ Pick Tasks; everyone reads.
   fields are only ever written straight to the DB, so a save/cancel from a stale open
   copy would overwrite them -- `_sync_state` restores them from the copy Frappe loaded
   just before the save.
+
+- **Salesperson targets (BRD C.12.3 follow-up, 26 Oct 2026)** — `sales_target_api.py`
+  and its own `DMS Sales Target` doctype (one row per salesperson per calendar
+  month). `set_salesperson_target` is a Management-only upsert keyed on
+  (salesperson, month) -- a second call for the same month updates the existing row
+  rather than creating a duplicate. `salesperson_target_progress` is the actual
+  report: for every salesperson with a target set in the given month (default: the
+  current month), it sums the submitted Sales Order value of every dealer
+  `custom_salesperson` assigns to them -- same dealer-ownership rule and Sales Order
+  source `reports.sales_reports.salesperson_assignment_report` already uses, just
+  scoped to one month instead of all time. A salesperson with no target row for the
+  month doesn't appear in the report at all; there's nothing to measure progress
+  against. Deliberately flat: one ₹ figure against all of a salesperson's dealer
+  order value, no per-channel split and no dealer-level sub-targets -- nothing in
+  the BRD or sheet asks for more than that.

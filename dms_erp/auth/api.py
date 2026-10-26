@@ -29,7 +29,7 @@ from dms_erp.auth.utils import build_user_profile, generate_opaque_token, hash_t
 
 # System Manager is included as an admin escape hatch (e.g. MicroNXT support access);
 # every real staff user should hold one of the four DMS roles.
-STAFF_ROLES = ["DMS Sales", "DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"]
+STAFF_ROLES = ["DMS Sales", "DMS Warehouse", "DMS Purchase", "DMS Management", "DMS Finance", "System Manager"]
 
 
 def _assert_staff_access(user: str):

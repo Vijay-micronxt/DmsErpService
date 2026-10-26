@@ -15,6 +15,18 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
   line-level read helpers factored out of `dashboard.purchase_dashboard`'s inline
   SQL — shared by that dashboard tile and the `reports` module's Purchase Pickup
   Plan/PO Pending reports instead of existing as duplicated queries.
+- **Reserved stock in the reorder formula** (BRD C.4.1: Net available = Current stock − Reserved +
+  In-transit). `reservedQty` is the boxes on submitted Sales Orders not yet Dispatched / Delivered /
+  Cancelled — the same "holds stock" rule `sales/reservation.py` uses — not ERPNext's
+  `Bin.reserved_qty`, which only falls on a Delivery Note this app doesn't post, so it would only
+  ever grow. All channels reserve; only retail drives the target. Suggestions also carry the BRD's
+  review columns (`inTransitQty`, `availableQty`, `avgMonthlySales`, `leadTimeDays`,
+  `lastPurchaseDate`, `status`/`statusLabel`, `reorderFrequency`). Reorder frequency follows BRD D.2:
+  a Select on the Series ("reorder cadence"), copied onto each new Item (`custom_reorder_frequency`, C.4.1's
+  "item-level") and editable there. It is planning context only -- the BRD gives it no part in the formula, so
+  it never changes `suggestedQty`. The BRD's "supplier/item-group filter" on the review screen is
+  client-side only (`requirements.tsx`) -- `reorder_suggestions` already carries `defaultSupplier`
+  and the item's category is on the product record, so there's no server-side filter to add.
 - **Reorder-suggestion engine** (`reorder_api.py`) — fully real as of Phase 10.
   `currentStock` and the safety-stock/non-reorderable logic were real from Phase 4
   (Phase 3's live Bin aggregate); `missedDemandQty`, `pendingInquiryQty` and
@@ -143,3 +155,13 @@ instead of a `0` stub, now that Warehouse exists.
   `Bank Account` (party_type Supplier, `is_default`), read/written through `bank` on create/update_supplier --
   not a custom field, so Payment Entries see the same record. Only the default non-company account is managed;
   others set up in Desk are left alone. The `Bank` master is created on first use.
+- **Box stickers before goods arrive (sheet 7.6, 26 Oct 2026)** — `get_po_sticker_data`/
+  `print_po_stickers`/`render_po_stickers_html` mirror `warehouse.allocation_api`'s own box-sticker
+  functions exactly (same QR payload shape, same 4x2in label CSS, reused via import rather than
+  duplicated), but keyed off a PO line instead of a Bay Allocation — so a label can be printed the
+  moment a PO is raised, before the truck even leaves the supplier, not only after put-away. There
+  is no batch or bay yet at this point (`batchNumber`/`bayCode` are always `None`; the rendered
+  sticker shows "Pending allocation" / "TBD"), and this sticker is never fed into `resolve_scan` —
+  it's a physical label only, replaced by the real post-allocation sticker once the goods are
+  actually received and allocated. Gated by `PO_STICKER_ROLES` (Purchase or Warehouse), since
+  either team may be the one tagging material before it reaches the bay.

@@ -16,9 +16,9 @@ and writes them. Both are read-only here; classification is recomputed nightly a
 dealerType has no write endpoint of its own yet.
 
 `salesperson` (BRD C.12.3 — ownership of the dealer relationship) is written by
-`set_dealer_salesperson`. Targets/performance-vs-target reporting is a deliberate
-follow-up, not built here — see sales/setup.py's custom_salesperson field description
-for why.
+`set_dealer_salesperson`. Targets/performance-vs-target reporting (26 Oct 2026) is
+`sales.sales_target_api` — a separate module since it owns its own doctype
+(`DMS Sales Target`), not another field on Customer.
 
 `create_dealer` / `update_dealer` cover the rest of the master-data write side (BRD
 MD-01): name, group, territory, dealer type, credit limit, salesperson, GSTIN,

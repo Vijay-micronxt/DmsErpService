@@ -34,6 +34,7 @@ SALES_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 WAREHOUSE_READ_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
 PURCHASE_READ_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 MANAGEMENT_READ_ROLES = {"DMS Management", "System Manager"}
+FINANCE_READ_ROLES = {"DMS Finance", "DMS Management", "System Manager"}
 
 
 def _assert_role(allowed: set, message: str):
@@ -383,6 +384,65 @@ def _credit_exposure_alerts() -> list[dict]:
 	]
 
 
+@frappe.whitelist(methods=["GET"])
+def finance_dashboard():
+	"""BRD C.12.1's Finance role view: what's owed to Pacific and what Pacific owes, plus the
+	"payment -> dispatch" action list. Receivables come from the general ledger
+	(finance.ledger), not Sales Invoice.outstanding_amount -- migrated Tally receipts were
+	mostly journals never allocated to an invoice, so per-invoice outstanding (and any
+	"overdue invoice" count built on it) overstates what dealers actually owe."""
+	_assert_role(FINANCE_READ_ROLES, "Only Finance or Management can view the finance dashboard.")
+
+	from dms_erp.finance.ledger import party_balances
+	from dms_erp.reports.sales_reports import advance_payment_pending_report
+	from dms_erp.warehouse.utils import default_company
+
+	company = default_company()
+	dealers = frappe.get_all("Customer", filters={"disabled": 0}, pluck="name")
+	balances = party_balances("Customer", dealers, company) if dealers else {}
+	owing = sorted(((d, b) for d, b in balances.items() if b > 0.5), key=lambda x: -x[1])
+	names = (
+		{c.name: c.customer_name for c in frappe.get_all("Customer", filters={"name": ["in", [d for d, _b in owing[:10]]]}, fields=["name", "customer_name"])}
+		if owing
+		else {}
+	)
+
+	advance_rows = advance_payment_pending_report()["rows"]
+
+	unloading = frappe.db.sql(
+		"""
+		select count(*) as n, coalesce(sum(t.boxes * c.rate_per_box), 0) as amount
+		from `tabUnloading Charge` c inner join `tabInward Truck` t on t.name = c.inward_truck
+		where c.status != 'Paid'
+		""",
+		as_dict=True,
+	)[0]
+	labour = frappe.db.sql(
+		"""
+		select count(*) as n, coalesce(sum(amount_due - coalesce(amount_paid, 0)), 0) as amount
+		from `tabLabour Attendance And Payment` where status != 'Paid'
+		""",
+		as_dict=True,
+	)[0]
+	claims = claim_summary()
+
+	return {
+		"receivables": {
+			"total": round(sum(b for _d, b in owing), 2),
+			"dealerCount": len(owing),
+			"topDealers": [{"dealer": d, "dealerName": names.get(d, d), "balance": round(b, 2)} for d, b in owing[:10]],
+		},
+		"advancePending": {
+			"count": len(advance_rows),
+			"value": round(sum(r.get("orderValue") or 0 for r in advance_rows), 2),
+			"orders": advance_rows[:10],
+		},
+		"claimsReceivable": claims["receivable"],
+		"unloadingUnpaid": {"count": unloading.n, "amount": float(unloading.amount)},
+		"labourDue": {"count": labour.n, "amount": float(labour.amount)},
+	}
+
+
 # ==================== Role-agnostic entry point ====================
 
 # One native ERPNext `Dashboard` doc per role, named after that role's own DMS Role doc (e.g. the
@@ -393,6 +453,7 @@ def _credit_exposure_alerts() -> list[dict]:
 # so this ships ahead of that setup being done.
 _DASHBOARD_DOC_BY_ROLE = {
 	"management": "DMS Management",
+	"finance": "DMS Finance",
 	"purchase": "DMS Purchase",
 	"warehouse": "DMS Warehouse",
 	"sales": "DMS Sales",

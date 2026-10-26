@@ -1,9 +1,11 @@
 """Orders — ERPNext's native Sales Order. Pacific's warehouse-fulfillment stages
 (Confirmed -> Picking -> Ready to Dispatch -> Dispatched -> Delivered/Cancelled) are
 a distinct operational flow layered on top via `custom_fulfillment_stage` and a
-structured `custom_stage_history` (see sales/setup.py) — advancing them here does
-not itself create a Delivery Note or move stock; that's a natural future refinement
-once a real dispatch/delivery step is in scope.
+structured `custom_stage_history` (see sales/setup.py). Advancing to Dispatched posts
+a real Delivery Note (see _create_delivery_note) — the one point in this app's whole
+order lifecycle where Bin.actual_qty actually goes down for a sale; everywhere else
+(reorder suggestions, the dealer portal's stock figures, dashboards) had been
+overstating on-hand stock by everything ever sold until this existed.
 
 An Order sourced directly from an Inquiry (no Quotation, no retail markup) is created
 here; an Order sourced from a Quotation goes through quotation_api.convert_to_order,
@@ -22,6 +24,7 @@ from dms_erp.catalog.utils import (
 	item_sqft_per_box,
 	item_sqm_per_box,
 	item_weight_per_box_kg,
+	normalize_order_line_uoms,
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
@@ -87,9 +90,32 @@ def _serialize(doc) -> dict:
 			for row in sorted(doc.custom_stage_history, key=lambda r: r.idx)
 		],
 		"invoices": _order_invoices(doc.name),
+		"deliveryNotes": _order_delivery_notes(doc.name),
 		# ISS-2026-00635 -- 21-day reservation timeline; see sales.reservation.
 		"reservation": reservation_summary(doc),
 	}
+
+
+def _order_delivery_notes(order: str) -> list[dict]:
+	"""Real data the moment a Dispatch has actually posted one (see advance_order_stage /
+	_create_delivery_note); [] before then. Mirrors _order_invoices below -- same
+	exclude-cancelled, one-frappe.get_doc-per-row shape."""
+	names = frappe.db.sql(
+		"select distinct parent from `tabDelivery Note Item` where against_sales_order=%s", (order,), as_dict=True
+	)
+	notes = []
+	for row in names:
+		docstatus = frappe.db.get_value("Delivery Note", row.parent, "docstatus")
+		if docstatus != 2:
+			doc = frappe.get_doc("Delivery Note", row.parent)
+			notes.append(
+				{
+					"id": doc.name,
+					"postingDate": doc.posting_date,
+					"lines": [{"itemCode": row.item_code, "qty": row.qty, "warehouse": row.warehouse, "batchNo": row.batch_no} for row in doc.items],
+				}
+			)
+	return notes
 
 
 def _order_invoices(order: str) -> list[dict]:
@@ -138,6 +164,9 @@ def _serialize_line(row) -> dict:
 		"totalSqft": (sqft_per_box or 0) * row.qty if sqft_per_box is not None else None,
 		"sqmPerBox": sqm_per_box,
 		"totalSqm": round((sqm_per_box or 0) * row.qty, 4) if sqm_per_box is not None else None,
+		# Sheet 7.8 -- the originally entered qty/unit, only when it wasn't Box.
+		"enteredQty": row.get("custom_entered_qty"),
+		"enteredUom": row.get("custom_entered_uom"),
 	}
 
 
@@ -167,6 +196,10 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 
 	so.insert(ignore_permissions=True)
 	clear_unrequested_default_tax(so)
+	if frappe.flags.get("dms_credit_limit_approved"):
+		# BRD C.11: Management approved this order over the credit limit (see
+		# sales.credit_limit.credit_limit_approved) -- don't let ERPNext's own check refuse it.
+		so.check_credit_limit = lambda: None
 	so.submit()
 	out = _serialize(so)
 	out["possibleDuplicates"] = duplicates
@@ -278,6 +311,11 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 	# No discount -> pass the approved rate through byte-for-byte, same as before
 	# discount existed here; only an actual discount introduces new rounding.
 	rate = round(price_list_rate * (1 - discount_pct / 100), 2) if discount_pct else price_list_rate
+	from dms_erp.sales.quotation_api import _typed_rate
+
+	typed_rate = _typed_rate(item, line, discount_pct)
+	if typed_rate is not None:
+		rate = typed_rate  # BRD C.11 #3, gated before creation (see create_order)
 	return {
 		"item_code": item,
 		"qty": line["qty"],
@@ -285,6 +323,10 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 		"discount_percentage": discount_pct,
 		"rate": rate,
 		"delivery_date": line.get("delivery_date") or default_delivery_date,
+		# Sheet 7.8 -- only set when the line was actually entered in a non-Box unit
+		# (see catalog.utils.normalize_order_line_uoms); None/None for a plain box order.
+		"custom_entered_qty": line.get("entered_qty"),
+		"custom_entered_uom": line.get("entered_uom"),
 	}
 
 
@@ -382,10 +424,16 @@ def create_order(
 	value included) would exceed their configured credit limit (BRD C.11
 	trigger #1 -- see sales.credit_limit.gate_credit_limit). `taxes_and_charges`
 	names an existing Sales Taxes and Charges Template; see
-	sales.utils.apply_tax_template."""
+	sales.utils.apply_tax_template.
+
+	A line may also carry `uom` (sheet 7.8 -- Box/Pcs/Sqft/Sqm/Kg/Gram; Box when
+	left unset), converted to boxes by normalize_order_line_uoms before anything
+	else -- channel classification, the credit-limit estimate, pricing -- ever
+	sees `qty`, since every one of those is a box-qty rule."""
 	_assert_can_manage_orders()
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	lines = normalize_order_line_uoms(lines)
 
 	default_channel = auto_classify_channel(dealer, lines)
 	resolved_channel = channel if channel is not None else default_channel
@@ -446,6 +494,9 @@ def _estimate_order_value(dealer: str, lines: list[dict]) -> float:
 	for line in lines:
 		price = get_price_for_dealer(line["item"], dealer) or 0
 		discount_pct = float(line.get("discount_percentage") or 0)
+		if line.get("rate") not in (None, ""):
+			total += float(line["rate"]) * line["qty"]
+			continue
 		total += price * (1 - discount_pct / 100) * line["qty"]
 	return total
 
@@ -511,6 +562,11 @@ def advance_order_stage(
 			applier_action="cancel",
 		)
 
+	if next_stage == "Dispatched":
+		# Validated before anything is written: a blocked dispatch should leave the
+		# order exactly as it was, not half-advanced with no stock movement to match.
+		_assert_lines_ready_for_delivery(doc)
+
 	doc.custom_fulfillment_stage = next_stage
 	if vehicle:
 		doc.custom_vehicle = vehicle
@@ -523,8 +579,89 @@ def advance_order_stage(
 		from dms_erp.sales.picking_api import ensure_pick_tasks
 
 		ensure_pick_tasks(order)
+	elif next_stage == "Dispatched":
+		_create_delivery_note(order)
 
 	return _serialize(doc)
+
+
+def _assert_lines_ready_for_delivery(doc) -> None:
+	"""Every Sales Order line needs a Pick Task that's actually Picked -- staff's own
+	"Mark picked" confirmation (picking.tsx) -- before dispatch can post a real stock
+	movement against it. `suggested_bay` is only ever ensure_pick_tasks's initial
+	category-based guess, never confirmed by the picking screen's own flow (it doesn't
+	ask staff to correct it before "Mark picked"), so it's a signal that picking is
+	underway, not where the stock dispatch will actually draw from -- see
+	_resolve_delivery_bay_and_batch, which finds that from real on-hand stock instead.
+	A line with no Pick Task, or one not yet Picked, blocks the move rather than
+	silently skipping the stock effect of a real dispatch."""
+	picked = set(
+		frappe.get_all("Pick Task", filters={"sales_order": doc.name, "status": "Picked"}, pluck="sales_order_item")
+	)
+	missing = [row.item_code for row in doc.items if row.name not in picked]
+	if missing:
+		frappe.throw(
+			_("{0} has {1} not yet marked picked -- confirm picking before dispatch.").format(doc.name, ", ".join(missing)),
+			frappe.ValidationError,
+		)
+
+
+def _resolve_delivery_bay_and_batch(item: str, qty: float) -> tuple[str, str]:
+	"""Which bay and batch a Delivery Note line should actually draw from, for `item`.
+	Reads the same ground truth the Stock View page already uses
+	(warehouse.utils.list_stock_lots) rather than Pick Task's own `suggested_bay`,
+	which is only ever an unconfirmed initial guess (see
+	_assert_lines_ready_for_delivery). Only ever auto-resolves the unambiguous case --
+	exactly one bay+batch with enough on hand across the whole warehouse; none, or
+	more than one, blocks the dispatch with a clear reason rather than guessing which
+	one staff meant or silently splitting the line across bays/batches Pick Task never
+	recorded a split for."""
+	from dms_erp.warehouse.utils import list_stock_lots
+
+	lots = [l for l in list_stock_lots(item=item) if l["boxes"] >= qty]
+	if len(lots) == 1:
+		return lots[0]["bayId"], lots[0]["batchNumber"]
+	if not lots:
+		frappe.throw(
+			_("No single bay has {0} boxes of {1} in one batch to dispatch -- split the pick across bays in Picking first.").format(
+				qty, item
+			),
+			frappe.ValidationError,
+		)
+	frappe.throw(
+		_("{0} is split across {1} bays/batches with {2}+ boxes each -- pick from a single one before dispatch.").format(
+			item, len(lots), qty
+		),
+		frappe.ValidationError,
+	)
+
+
+def _create_delivery_note(order: str) -> dict:
+	"""BRD C.3.1 / Figure 4 -- "if stock is available it converts to delivery [...]":
+	the real stock-decrement event for this order, which nothing in this app's order
+	lifecycle had ever actually posted (Bin.actual_qty only ever went up, via
+	allocation_api's Purchase Receipt at inward, never down for a sale going out).
+	Posted automatically the instant an order reaches Dispatched (see
+	advance_order_stage) -- the same "the real stock-effecting event happens on its
+	own, not a separate manual step staff can forget" pattern allocation_api already
+	uses for receipt, rather than a second button for staff to remember to click.
+
+	Uses ERPNext's own Sales Order -> Delivery Note mapper (ERPNext's actual
+	stock-ledger-posting document) so items/rates are carried over from the
+	already-approved order, never re-derived; each line's warehouse and batch come
+	from _resolve_delivery_bay_and_batch (every line must already be Picked -- see
+	_assert_lines_ready_for_delivery, called first)."""
+	from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+
+	doc = frappe.get_doc("Sales Order", order)
+	_assert_lines_ready_for_delivery(doc)
+
+	dn = make_delivery_note(order)
+	for row in dn.items:
+		row.warehouse, row.batch_no = _resolve_delivery_bay_and_batch(row.item_code, row.qty)
+	dn.insert(ignore_permissions=True)
+	dn.submit()
+	return {"id": dn.name}
 
 
 def _cancel_order_action(order: str, note: str | None = None) -> dict:
@@ -577,6 +714,7 @@ def _serialize_invoice(doc) -> dict:
 		"grandTotal": doc.grand_total,
 		"outstandingAmount": doc.outstanding_amount,
 		"status": doc.status,
+		"channel": doc.get("custom_order_channel"),
 		"lines": lines,
 		"totalWeightKg": round(total_weight_kg, 2) if any_weight else None,
 	}
@@ -600,11 +738,11 @@ def create_sales_invoice(order: str):
 	invoicing practice. One live invoice per order: a second call against an
 	already-invoiced order is rejected rather than silently double-billing it.
 
-	The separate Delivery Note / real stock-movement step the BRD diagram
-	shows ahead of this, and real payment/AR tracking after it, remain their
-	own separate, larger, not-yet-scoped pieces of work -- this only closes
-	the Sales Invoice gap itself. _order_invoices (see _serialize) starts
-	returning real rows for this order the moment this runs."""
+	The Delivery Note step the BRD diagram shows ahead of this now posts
+	automatically at Dispatched (see _create_delivery_note) -- this function only
+	ever handles the Sales Invoice. Real payment/AR tracking after it remains its
+	own separate, larger, not-yet-scoped piece of work. _order_invoices (see
+	_serialize) starts returning real rows for this order the moment this runs."""
 	_assert_can_manage_orders()
 
 	doc = frappe.get_doc("Sales Order", order)
@@ -621,6 +759,8 @@ def create_sales_invoice(order: str):
 	from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 
 	invoice = make_sales_invoice(order, ignore_permissions=True)
+	# BRD C.4.3 -- the retail/bulk tag follows the order onto its invoice.
+	invoice.custom_order_channel = doc.custom_order_channel
 	invoice.insert(ignore_permissions=True)
 	invoice.submit()
 

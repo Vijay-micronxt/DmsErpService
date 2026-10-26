@@ -24,7 +24,7 @@ from frappe import _
 from frappe.utils import flt, getdate, today
 
 from dms_erp.catalog.api import get_product, resolve_dealer_code
-from dms_erp.catalog.dealer_catalog_api import browsable_catalog_for, catalog_for, is_visible
+from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.sales.dealer_api import _assert_email_available
@@ -39,6 +39,15 @@ from dms_erp.warehouse.utils import all_batches, top_batches, total_stock_for_it
 
 
 MAX_ENQUIRY_ITEMS = 50
+
+
+@frappe.whitelist(methods=["GET"])
+def my_catalog_export() -> str:
+	"""BRD C.14.1 -- the dealer's own catalogue "shareable (e.g. PDF for WhatsApp) and in
+	the dealer app": the same printable sheet staff export, limited to this dealer's own
+	orderable items, and never priced -- dealers see no price before a quotation (client
+	request, Oct 2026; see _catalog_entry)."""
+	return _dealer_catalog_export_html(_current_dealer(), include_price=False)
 
 
 def _current_dealer() -> str:
@@ -72,6 +81,9 @@ def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> di
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
 	product.pop("dealerPrice", None)
+	# Client finding "stock accuracy" -- a dealer only ever sees availableStockQty (damage/
+	# display-bay stock already excluded), never the raw staff-facing total.
+	product.pop("stockQty", None)
 	product["dealerCode"] = own_code
 	# The catalog list keeps the cheap top-3 preview; an item's own detail page lists
 	# every batch (client request, Oct 2026: which batch the stock belongs to).
@@ -249,6 +261,21 @@ def get_item(item: str) -> dict:
 	if item not in set(browsable_catalog_for(dealer)):
 		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
 	return _catalog_entry(item, dealer, every_batch=True)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_excluded_stock(item: str) -> list[dict]:
+	"""Client finding "stock accuracy" — the "View more" breakdown behind
+	availableStockQty: boxes of this item sitting in a damage/insurance-claim or
+	display bay, shown separately so a dealer can still see and optionally ask for
+	them without them being counted as regular available stock. Same existence
+	gate as get_item."""
+	from dms_erp.catalog.api import get_excluded_stock as _get_excluded_stock
+
+	dealer = _current_dealer()
+	if item not in set(browsable_catalog_for(dealer)):
+		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
+	return _get_excluded_stock(item)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -529,13 +556,21 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	return data
 
 
+# Client finding ISS-2026 "only show pending orders" (sheet item) -- the dealer portal's
+# Orders screen lands on this view by default; Delivered/Cancelled only show up when a
+# dealer explicitly picks that tab. Matches order_api.ORDER_STAGES' own terminal states.
+COMPLETED_ORDER_STAGES = ("Delivered", "Cancelled")
+
+
 @frappe.whitelist(methods=["GET"])
-def list_my_orders(stage: str | None = None, limit: int = 20, offset: int = 0):
+def list_my_orders(stage: str | None = None, exclude_completed: bool = False, limit: int = 20, offset: int = 0):
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 	filters = {"customer": dealer}
 	if stage:
 		filters["custom_fulfillment_stage"] = stage
+	elif exclude_completed:
+		filters["custom_fulfillment_stage"] = ["not in", COMPLETED_ORDER_STAGES]
 	total = frappe.db.count("Sales Order", filters=filters)
 	names = frappe.get_all(
 		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
@@ -551,12 +586,15 @@ def list_my_orders(stage: str | None = None, limit: int = 20, offset: int = 0):
 # Internal to Pacific, never shown to a dealer: the retail/bulk channel (an internal
 # classification, already kept off the dealer's quotation), the staff owner's and every
 # stage-changer's user/email, the advance-payment sign-off and the reservation-review flags.
-_INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "reservation")
+_INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "reservation", "deliveryNotes")
 
 
 def _dealer_order(doc) -> dict:
 	"""order_api's staff serialization with Pacific-internal fields removed -- the
-	portal used to receive the staff shape as-is, including staff email addresses."""
+	portal used to receive the staff shape as-is, including staff email addresses.
+	deliveryNotes (BRD C.3.1) is stripped too -- its warehouse/bay names are internal
+	warehouse layout, nothing a dealer needs; the order's own `stage` already tells
+	them whether it has shipped."""
 	order = _serialize_order(doc)
 	for key in _INTERNAL_ORDER_KEYS:
 		order.pop(key, None)

@@ -20,7 +20,7 @@ from frappe import _
 from dms_erp.finance.payment_api import PAYMENT_READ_ROLES
 from dms_erp.sales.invoice_api import INVOICE_READ_ROLES
 
-STAFF_ROLES = {"DMS Sales", "DMS Purchase", "DMS Warehouse", "DMS Management", "System Manager"}
+STAFF_ROLES = {"DMS Sales", "DMS Purchase", "DMS Warehouse", "DMS Management", "DMS Finance", "System Manager"}
 MIN_QUERY_LENGTH = 2
 RESULTS_PER_DOCTYPE = 5
 

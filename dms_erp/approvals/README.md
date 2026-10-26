@@ -16,7 +16,7 @@ condition. See `api.py`'s own module docstring for the exact contract.
 5. Amendment or cancellation of a submitted sales/purchase document
 6. Retail-vs-bulk classification override
 
-Four are wired today:
+Five are wired today:
 
 - **#6 (Channel Override)**: `sales.order_channel.gate_channel_override`, called
   from `quotation_api.create_quotation` and `order_api.create_order` whenever an
@@ -54,18 +54,24 @@ Four are wired today:
   Invoice, so it's an honest stand-in for true receivables, not the real
   thing). A dealer with no credit limit configured is never gated at all.
 
-**#3 (Pricing Override) is deliberately not wired separately.** BRD C.7.3 talks
-about "any transaction-level price or discount change" as one idea, but this
-codebase only has one transaction-level pricing lever -- `discount_percentage`
--- already covered by #4. There's no explicit-rate-override field a caller can
-set instead; building a real, distinct #3 means adding that capability first,
-not just another gate.
+**#3 (Pricing Override)** is wired since 26 Oct 2026, when Pacific asked for staff to be able to type the
+final rate. A quotation or order line may carry `rate` instead of `discount_percentage` (not both; it must be
+above zero). `gate_discount_over_price_list` gates both levers in one request: any typed rate makes it a
+"Pricing Override" (BRD C.7.3: even a one-rupee change), otherwise a discount over the threshold is
+"Discount Over Price List". The line keeps `price_list_rate`, so the override stays visible against the
+dealer's real price.
 
 **#2 (Overdue Outstanding) is not wired at all, and can't be with a gate alone.**
 Unlike #3, this isn't a missing field but a missing *subsystem*: "overdue"
 means an invoice past its due date and still unpaid, and this app posts no
 Sales Invoice or Payment Entry (see `dashboard.api`'s own honest
 `outstandingReceivables: 0`). A real #2 needs AR tracking built first.
+
+**Version diff for #5** (`api.preview_approval`): before vs after for a still-Pending
+amend/cancel request, built from the live document without changing it — for a quotation
+edit, `quotation_api.preview_amend` re-prices the would-be lines exactly as the amend
+will, so Management sees real after-amounts. Decided requests get no preview: the
+document has moved on, so a "before" read today would be wrong.
 
 ## How a trigger plugs in
 

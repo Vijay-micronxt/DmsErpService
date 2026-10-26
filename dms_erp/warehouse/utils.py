@@ -53,6 +53,44 @@ def total_stock_for_item(item_code: str) -> float:
 	return float(total or 0)
 
 
+# Client finding (sheet item) "stock accuracy" -- a dealer-facing "available" count must not
+# include damaged stock (a real defect, same bays claims_api/stock_api already treat specially)
+# or stock set aside for display. There is no dedicated "sample" bay type in this app, so a
+# display bay is the closest existing stand-in for what the client calls "sample stock" --
+# revisit if a real sample bay type is ever added. Deliberately NOT applied to
+# total_stock_for_item itself: warehouse/reorder/dashboard uses still need the genuine
+# physical total; only a dealer's own "what can I order" number needs to stay clean.
+EXCLUDED_FROM_DEALER_STOCK_BAY_TYPES = DAMAGE_BAY_TYPES | {"display"}
+
+
+def sellable_stock_for_item(item_code: str) -> float:
+	"""total_stock_for_item minus whatever sits in a bay a dealer shouldn't see as
+	regular available stock (see EXCLUDED_FROM_DEALER_STOCK_BAY_TYPES)."""
+	total = frappe.db.sql(
+		"""select sum(b.actual_qty) from `tabBin` b
+		join `tabWarehouse` w on w.name = b.warehouse
+		where b.item_code = %(item)s and (w.custom_bay_type is null or w.custom_bay_type not in %(excluded)s)""",
+		{"item": item_code, "excluded": tuple(EXCLUDED_FROM_DEALER_STOCK_BAY_TYPES)},
+	)[0][0]
+	return float(total or 0)
+
+
+def excluded_stock_for_item(item_code: str) -> list[dict]:
+	"""The "View more" breakdown — how much of an item's total sits in a bay
+	sellable_stock_for_item excluded, grouped by bay type, so staff/the dealer portal
+	can show it exists without folding it into the regular available count."""
+	rows = frappe.db.sql(
+		"""select w.custom_bay_type as bay_type, sum(b.actual_qty) as boxes
+		from `tabBin` b join `tabWarehouse` w on w.name = b.warehouse
+		where b.item_code = %(item)s and w.custom_bay_type in %(excluded)s
+		group by w.custom_bay_type
+		having sum(b.actual_qty) > 0""",
+		{"item": item_code, "excluded": tuple(EXCLUDED_FROM_DEALER_STOCK_BAY_TYPES)},
+		as_dict=True,
+	)
+	return [{"bayType": r.bay_type, "boxes": float(r.boxes)} for r in rows]
+
+
 def bay_used_boxes(bay_name: str) -> float:
 	total = frappe.db.sql(
 		"select sum(actual_qty) from `tabBin` where warehouse=%s", (bay_name,)

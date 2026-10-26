@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import add_days, today
 
 from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
@@ -7,7 +8,17 @@ from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_bay,
+	make_dealer,
+	make_item,
+	make_supplier,
+)
+
+# Relative to today: a fixed date rotted into the past, and ERPNext then refuses the order
+# ("Expected Delivery Date should be after Sales Order Date").
+DISPATCH = str(add_days(today(), 30))
 
 
 class TestPickingApi(FrappeTestCase):
@@ -31,7 +42,7 @@ class TestPickingApi(FrappeTestCase):
 	def _make_order_in_picking(self, qty):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch="2026-09-01", inquiry=inquiry["id"]
+			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 		order_api.advance_order_stage(order["id"], "Picking")
 		return order
@@ -75,7 +86,7 @@ class TestPickingApi(FrappeTestCase):
 		order = order_api.create_order(
 			dealer=self.dealer,
 			lines=[{"item": item, "qty": 5} for item in items],
-			expected_dispatch="2026-09-01",
+			expected_dispatch=DISPATCH,
 			inquiry=inquiry["id"],
 		)
 		order_api.advance_order_stage(order["id"], "Picking")
