@@ -592,7 +592,17 @@ def create_dealer_opportunity(lead=None, **kwargs):
 
 		qty = _resolve_order_qty(variables.get("order_qty_band"))
 		lines = [{"item": item_code, "qty": qty}]
-		create_kwargs = dict(dealer=dealer, lines=lines, expected_dispatch=add_days(today(), 7), customer_po=po_number)
+		from dms_erp.sales.utils import default_billing_shipping_for
+
+		customer_address, shipping_address_name = default_billing_shipping_for(dealer)
+		create_kwargs = dict(
+			dealer=dealer,
+			lines=lines,
+			expected_dispatch=add_days(today(), 7),
+			customer_address=customer_address,
+			shipping_address_name=shipping_address_name,
+			customer_po=po_number,
+		)
 
 		try:
 			# BRD C.11 trigger #1: a WhatsApp-placed order is never itself an
@@ -753,12 +763,17 @@ def create_whatsapp_quotation(lead=None, **kwargs):
 		)
 
 	lines = [{"item": item_code, "qty": qty}]
+	from dms_erp.sales.utils import default_billing_shipping_for
+
+	customer_address, shipping_address_name = default_billing_shipping_for(dealer)
 	try:
 		inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=qty, source="WhatsApp", remarks=note)
 		quotation = _create_quotation(
 			dealer,
 			lines,
 			markup_pct=0,
+			customer_address=customer_address,
+			shipping_address_name=shipping_address_name,
 			validity_days=WHATSAPP_QUOTATION_VALIDITY_DAYS,
 			inquiries=[inquiry["id"]],
 			channel=auto_classify_channel(dealer, lines),

@@ -10,7 +10,15 @@ from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, picking_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.sales import utils as sales_utils
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+from dms_erp.sales.dealer_address_api import create_dealer_address
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_bay,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 # Relative to today: fixed dates rot into the past, and ERPNext then refuses the order
@@ -28,6 +36,7 @@ class TestOrderApi(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Order Test Supplier")
 		cls.dealer = make_dealer("Order Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.item = make_item("ORDER-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
@@ -64,7 +73,12 @@ class TestOrderApi(FrappeTestCase):
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=qty, source="Phone")
 		return order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": qty}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": qty}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
 		)
 
 	def test_create_order_exposes_created_at_timestamp(self):
@@ -77,7 +91,12 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_order_from_inquiry_uses_approved_price_directly(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 40}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 40}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
 		)
 
 		self.assertEqual(order["lines"][0]["rate"], 360)
@@ -98,12 +117,18 @@ class TestOrderApi(FrappeTestCase):
 		frappe.db.set_value("Item", item, "custom_series_ref", "Order Test Series")
 		master_dealer = make_dealer("Order Tier Master Dealer")
 		frappe.db.set_value("Customer", master_dealer, "custom_dealer_classification", DEALER_CLASSIFICATION_MASTER)
+		master_billing, master_shipping = make_dealer_addresses(master_dealer)
 		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
 		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
 
 		inquiry = inquiry_api.create_inquiry(dealer=master_dealer, item=item, qty=10, source="Phone")
 		order = order_api.create_order(
-			dealer=master_dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
+			dealer=master_dealer,
+			lines=[{"item": item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=master_billing,
+			shipping_address_name=master_shipping,
+			inquiry=inquiry["id"],
 		)
 
 		# Flat "Dealer" list price is 500; this dealer's Master Dealer tier rate is
@@ -130,7 +155,13 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_order_accepts_bulk_channel(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=500, source="Phone")
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 500}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Bulk"
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 500}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+			channel="Bulk",
 		)
 		self.assertEqual(order["channel"], "Bulk")
 
@@ -138,7 +169,13 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 		with self.assertRaises(frappe.ValidationError):
 			order_api.create_order(
-				dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Wholesale"
+				dealer=self.dealer,
+				lines=[{"item": self.item, "qty": 10}],
+				expected_dispatch=DISPATCH,
+				customer_address=self.billing_address,
+				shipping_address_name=self.shipping_address,
+				inquiry=inquiry["id"],
+				channel="Wholesale",
 			)
 
 	def test_create_order_channel_override_by_an_unauthorized_user_is_queued_not_applied(self):
@@ -160,7 +197,13 @@ class TestOrderApi(FrappeTestCase):
 
 		frappe.set_user(email)
 		result = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"], channel="Bulk"
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+			channel="Bulk",
 		)
 
 		self.assertTrue(result["approvalRequired"])
@@ -170,10 +213,16 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_order_auto_classifies_bulk_from_the_dealers_type(self):
 		bulk_dealer = make_dealer("Order Bulk-Type Dealer")
 		frappe.db.set_value("Customer", bulk_dealer, "custom_dealer_type", "Project")
+		bulk_billing, bulk_shipping = make_dealer_addresses(bulk_dealer)
 		inquiry = inquiry_api.create_inquiry(dealer=bulk_dealer, item=self.item, qty=10, source="Phone")
 
 		order = order_api.create_order(
-			dealer=bulk_dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
+			dealer=bulk_dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=bulk_billing,
+			shipping_address_name=bulk_shipping,
+			inquiry=inquiry["id"],
 		)
 		self.assertEqual(order["channel"], "Project")
 
@@ -253,7 +302,13 @@ class TestOrderApi(FrappeTestCase):
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 		self._stock(item, 10)
 
-		order = order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH)
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 		order_api.confirm_advance_payment(order["id"])
 		order_api.advance_order_stage(order["id"], "Picking")
 		order_api.advance_order_stage(order["id"], "Ready to Dispatch")
@@ -278,7 +333,13 @@ class TestOrderApi(FrappeTestCase):
 
 		self.assertEqual(total_stock_for_item(item), 10)
 
-		order = order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH)
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 		order_api.advance_order_stage(order["id"], "Picking")
 		task = picking_api.list_pick_tasks(order["id"])["items"][0]
 		picking_api.auto_allocate(task["id"])
@@ -302,7 +363,12 @@ class TestOrderApi(FrappeTestCase):
 	def test_create_sales_invoice_carries_the_orders_channel(self):
 		# BRD C.4.3 -- the retail/bulk tag follows the order onto its invoice.
 		bulk_order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 3}], expected_dispatch=DISPATCH, channel="Bulk"
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 3}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			channel="Bulk",
 		)
 		frappe.db.set_value("Sales Order", bulk_order["id"], "custom_fulfillment_stage", "Dispatched")
 		invoice = order_api.create_sales_invoice(bulk_order["id"])
@@ -319,10 +385,18 @@ class TestOrderApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=1, source="Phone")
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
-			order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
+			order_api.create_order(
+				dealer=self.dealer,
+				lines=[{"item": self.item, "qty": 1}],
+				expected_dispatch=DISPATCH,
+				customer_address=self.billing_address,
+				shipping_address_name=self.shipping_address,
+				inquiry=inquiry["id"],
+			)
 
 	def test_list_orders_is_paginated_and_searchable(self):
 		dealer = make_dealer("Order Pagination Dealer")
+		billing, shipping = make_dealer_addresses(dealer)
 		item = make_item("ORDER-PAGINATION-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
@@ -331,7 +405,14 @@ class TestOrderApi(FrappeTestCase):
 		for _ in range(3):
 			inquiry = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="Phone")
 			created.append(
-				order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
+				order_api.create_order(
+					dealer=dealer,
+					lines=[{"item": item, "qty": 10}],
+					expected_dispatch=DISPATCH,
+					customer_address=billing,
+					shipping_address_name=shipping,
+					inquiry=inquiry["id"],
+				)
 			)
 
 		page = order_api.list_orders(dealer=dealer, limit=2, offset=0)
@@ -359,6 +440,8 @@ class TestOrderApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 10, "discount_percentage": 10}],
 			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			inquiry=inquiry["id"],
 		)
 		line = order["lines"][0]
@@ -373,6 +456,8 @@ class TestOrderApi(FrappeTestCase):
 				dealer=self.dealer,
 				lines=[{"item": self.item, "qty": 10, "discount_percentage": 150}],
 				expected_dispatch=DISPATCH,
+				customer_address=self.billing_address,
+				shipping_address_name=self.shipping_address,
 				inquiry=inquiry["id"],
 			)
 
@@ -382,6 +467,8 @@ class TestOrderApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 10, "delivery_date": LINE_DELIVERY}],
 			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			inquiry=inquiry["id"],
 		)
 		self.assertEqual(order["lines"][0]["deliveryDate"], LINE_DELIVERY)
@@ -432,6 +519,8 @@ class TestOrderApi(FrappeTestCase):
 			dealer=self.dealer,
 			lines=[{"item": self.item, "qty": 10}],
 			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 			inquiry=inquiry["id"],
 			taxes_and_charges=template_name,
 		)
@@ -472,25 +561,34 @@ class TestOrderApi(FrappeTestCase):
 
 	def test_same_items_and_quantities_again_are_flagged_as_a_possible_duplicate(self):
 		# BRD C.2.4: same dealer, same material and quantity, different PO number.
-		from dms_erp.warehouse.test_fixtures import make_dealer
+		from dms_erp.warehouse.test_fixtures import make_dealer, make_dealer_addresses
 
 		dealer = make_dealer("Duplicate PO Test Dealer")
+		billing, shipping = make_dealer_addresses(dealer)
 		lines = [{"item": self.item, "qty": 7}]
-		first = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_po="PO-A")
+		first = order_api.create_order(
+			dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_address=billing, shipping_address_name=shipping, customer_po="PO-A"
+		)
 		self.assertEqual(first["possibleDuplicates"], [])
 
-		second = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_po="PO-B")
+		second = order_api.create_order(
+			dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_address=billing, shipping_address_name=shipping, customer_po="PO-B"
+		)
 		self.assertEqual(second["possibleDuplicates"], [first["id"]])
 		self.assertTrue(any("Possible duplicate" in (e.get("note") or "") for e in second["history"]))
 
 		# A different quantity is a different order, not a duplicate.
-		third = order_api.create_order(dealer=dealer, lines=[{"item": self.item, "qty": 8}], expected_dispatch=DISPATCH)
+		third = order_api.create_order(
+			dealer=dealer, lines=[{"item": self.item, "qty": 8}], expected_dispatch=DISPATCH, customer_address=billing, shipping_address_name=shipping
+		)
 		self.assertEqual(third["possibleDuplicates"], [])
 
 		# A cancelled order no longer counts.
 		order_api.advance_order_stage(first["id"], "Cancelled")
 		order_api.advance_order_stage(second["id"], "Cancelled")
-		fourth = order_api.create_order(dealer=dealer, lines=lines, expected_dispatch=DISPATCH)
+		fourth = order_api.create_order(
+			dealer=dealer, lines=lines, expected_dispatch=DISPATCH, customer_address=billing, shipping_address_name=shipping
+		)
 		self.assertEqual(fourth["possibleDuplicates"], [])
 
 	def _make_uom_item(self):
@@ -507,7 +605,11 @@ class TestOrderApi(FrappeTestCase):
 	def test_order_line_entered_in_sqft_is_converted_to_boxes(self):
 		item = self._make_uom_item()
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": item, "qty": 50, "uom": "Sqft"}], expected_dispatch=DISPATCH
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 50, "uom": "Sqft"}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 		)
 		line = order["lines"][0]
 		self.assertEqual(line["qty"], 4)  # ceil(50 / 15.5) = 4 boxes
@@ -528,7 +630,11 @@ class TestOrderApi(FrappeTestCase):
 		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 		with self.assertRaises(frappe.ValidationError):
 			order_api.create_order(
-				dealer=self.dealer, lines=[{"item": item, "qty": 10, "uom": "Pcs"}], expected_dispatch=DISPATCH
+				dealer=self.dealer,
+				lines=[{"item": item, "qty": 10, "uom": "Pcs"}],
+				expected_dispatch=DISPATCH,
+				customer_address=self.billing_address,
+				shipping_address_name=self.shipping_address,
 			)
 
 	def test_uom_conversion_happens_before_channel_classification(self):
@@ -538,7 +644,139 @@ class TestOrderApi(FrappeTestCase):
 		item = self._make_uom_item()
 		frappe.db.set_value("Item", item, "custom_bulk_qty_threshold", 500)
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": item, "qty": 2000, "uom": "Sqft"}], expected_dispatch=DISPATCH
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 2000, "uom": "Sqft"}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 		)
 		self.assertEqual(order["lines"][0]["qty"], 130)  # ceil(2000 / 15.5)
 		self.assertEqual(order["channel"], "Retail")  # 130 boxes stays under the 500-box threshold
+
+	# -- BRD C.3.3: bill-to/ship-to mandatory addresses, interstate/e-Way Bill signals --
+
+	def _make_company_address(self, state: str) -> str:
+		"""Only the interstate/ewayBillLikely tests below need a real Company Address
+		on file -- without one, sales.utils.company_gst_state returns None and
+		is_interstate_delivery stays unknown (its own tri-state contract), which is
+		exactly what every other test in this suite relies on by not setting one up."""
+		company = ensure_company()
+		existing = frappe.db.get_value(
+			"Dynamic Link", {"link_doctype": "Company", "link_name": company, "parenttype": "Address"}, "parent"
+		)
+		if existing:
+			frappe.db.set_value("Address", existing, "state", state)
+			return existing
+		address = frappe.get_doc(
+			{
+				"doctype": "Address",
+				"address_type": "Billing",
+				"address_line1": "1 Company Address",
+				"city": "Company City",
+				"state": state,
+				"pincode": "360001",
+				"country": "India",
+				"links": [{"link_doctype": "Company", "link_name": company}],
+			}
+		)
+		address.insert(ignore_permissions=True)
+		return address.name
+
+	def test_create_order_rejects_an_address_not_on_file_for_the_dealer(self):
+		other_dealer = make_dealer("Order Foreign Address Dealer")
+		other_billing, _ = make_dealer_addresses(other_dealer)
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.create_order(
+				dealer=self.dealer,
+				lines=[{"item": self.item, "qty": 10}],
+				expected_dispatch=DISPATCH,
+				customer_address=other_billing,
+				shipping_address_name=self.shipping_address,
+				inquiry=inquiry["id"],
+			)
+
+	def test_create_order_rejects_a_missing_address(self):
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.create_order(
+				dealer=self.dealer,
+				lines=[{"item": self.item, "qty": 10}],
+				expected_dispatch=DISPATCH,
+				customer_address="",
+				shipping_address_name=self.shipping_address,
+				inquiry=inquiry["id"],
+			)
+
+	def test_order_is_not_interstate_when_shipping_and_company_share_the_same_state(self):
+		self._make_company_address("Gujarat")  # make_dealer_addresses' own dealer addresses are also Gujarat
+		order = self._make_order()
+		self.assertFalse(order["isInterstate"])
+
+	def test_order_is_interstate_when_shipping_state_differs_from_the_companys(self):
+		self._make_company_address("Gujarat")
+		far_shipping = create_dealer_address(
+			dealer=self.dealer,
+			address_type="Shipping",
+			address_line1="2 Far Shipping St",
+			city="Mumbai",
+			state="Maharashtra",
+			pincode="400001",
+		)["id"]
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=far_shipping,
+			inquiry=inquiry["id"],
+		)
+		self.assertTrue(order["isInterstate"])
+		self.assertTrue(order["isSiteDelivery"])
+		# Under the default 50000 threshold (this order's total is well below it), so
+		# ewayBillLikely falls through to the now-True interstate signal.
+		self.assertTrue(order["ewayBillLikely"])
+
+	def test_order_is_site_delivery_when_shipping_differs_from_billing_even_same_state(self):
+		other_shipping = create_dealer_address(
+			dealer=self.dealer,
+			address_type="Shipping",
+			address_line1="3 Other Shipping St",
+			city="Test City",
+			state="Gujarat",
+			pincode="360002",
+		)["id"]
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=other_shipping,
+			inquiry=inquiry["id"],
+		)
+		self.assertTrue(order["isSiteDelivery"])
+
+	def test_eway_bill_likely_true_when_total_crosses_the_threshold_regardless_of_state(self):
+		# No Company Address set up in this test -- isInterstate stays None (unknown),
+		# proving the threshold crossing is its own independent trigger, not routed
+		# through interstate-ness.
+		frappe.db.set_single_value("DMS Sales Settings", "eway_bill_threshold_amount", 1000)
+		try:
+			order = self._make_order(qty=10)  # 10 * 360 = 3600, well over the lowered threshold
+		finally:
+			frappe.db.set_single_value("DMS Sales Settings", "eway_bill_threshold_amount", 50000)
+		self.assertIsNone(order["isInterstate"])
+		self.assertTrue(order["ewayBillLikely"])
+
+	def test_create_sales_invoice_carries_the_orders_addresses(self):
+		order = self._make_order()
+		order_api.confirm_advance_payment(order["id"])
+		for stage in ("Picking", "Ready to Dispatch", "Dispatched"):
+			order_api.advance_order_stage(order["id"], stage)
+
+		invoice = order_api.create_sales_invoice(order["id"])
+		invoice_doc = frappe.get_doc("Sales Invoice", invoice["id"])
+		self.assertEqual(invoice_doc.customer_address, self.billing_address)
+		self.assertEqual(invoice_doc.shipping_address_name, self.shipping_address)

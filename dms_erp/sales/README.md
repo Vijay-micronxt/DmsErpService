@@ -152,6 +152,37 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   otherwise go stale against the new qty. `add_quotation_line`/`remove_quotation_line`
   and `order_api`'s own line-level patches are deliberately NOT extended to accept a
   `uom` — only the two creation entry points are, for now.
+- **Structured dealer addresses** (`dealer_address_api.py`, BRD C.3.3) — real ERPNext
+  `Address` records (Dynamic-Linked to `Customer`), not a new custom field:
+  `create_dealer_address`/`update_dealer_address`/`list_dealer_addresses`, scoped to
+  `address_type` "Billing"/"Shipping" (this clause's own scope, though the native field
+  allows more). `Customer.custom_address`/`custom_gstin` are unrelated free-text fields
+  and stay exactly as they are — two mechanisms coexisting, same precedent as
+  `dealer_api.py`'s own docstring on `Customer.default_price_list`. `customer_address`/
+  `shipping_address_name` are now mandatory on every `create_order`/`create_quotation`
+  call (BRD says "mandatory," unqualified — and an order can't be known to be
+  interstate without the address already captured), validated against the dealer via
+  `sales.utils.assert_address_belongs_to`. The three self-service creation paths with
+  no address-picker UI (dealer-portal Inquiry→Order/`convert_to_order`, WhatsApp
+  order/quotation) fall back to `sales.utils.default_billing_shipping_for`, which
+  resolves a dealer's primary (or sole) Billing/Shipping Address; a dealer with none on
+  file still hits the same rejection a staff caller would — **every active dealer needs
+  at least one Billing + Shipping Address backfilled via `create_dealer_address` before
+  this ships**, or self-service ordering breaks for them. `order_api._serialize` also
+  reports `customerAddress`/`shippingAddressName`, `isSiteDelivery` (ship ≠ bill
+  address on the same order), the tri-state `isInterstate` (`sales.utils.
+  is_interstate_delivery` — `None` when the Company's own Address or the chosen
+  Address has no state, never guessed `False`), and the tri-state `ewayBillLikely` (a
+  total ≥ `DMS Sales Settings.eway_bill_threshold_amount` is `True` regardless of
+  state; otherwise falls through to `isInterstate`). This is purely informational —
+  `dms_erp` makes no GSP/NIC call and stores no e-Way Bill number anywhere; actual
+  e-Way Bill generation/cancellation is `india_compliance`'s own already-configured
+  module, reading off these same native `customer_address`/`shipping_address_name`
+  fields once a Sales Invoice exists. `create_sales_invoice` carries both addresses
+  onto the invoice unchanged. Known, deliberate gap: `print_api._dealer_lines` still
+  prints the old free-text `custom_address`/`custom_gstin` on document headers
+  regardless of which structured address was chosen on a given order — out of scope
+  this round, since print rendering isn't part of C.3.3's literal text.
 - **Pick Task** (`picking_api.py`, `doctype/pick_task`) — a genuine custom doctype.
   ERPNext's native Pick List exists but is a coarser, all-or-nothing document per
   pick run; Pacific wants one row per order line with a suggested bay, a partially-

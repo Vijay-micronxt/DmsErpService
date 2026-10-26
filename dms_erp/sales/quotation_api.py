@@ -55,7 +55,11 @@ from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.setup import ORDER_CHANNELS
-from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
+from dms_erp.sales.utils import (
+	apply_tax_template,
+	assert_address_belongs_to,
+	clear_unrequested_default_tax,
+)
 from dms_erp.warehouse.utils import default_company
 
 QUOTATION_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -80,6 +84,8 @@ def _serialize(doc) -> dict:
 		"deliveryPincode": doc.get("custom_delivery_pincode"),
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
+		"customerAddress": doc.customer_address,
+		"shippingAddressName": doc.shipping_address_name,
 		"lines": [_serialize_line(row) for row in doc.items],
 		"total": doc.grand_total,
 		"netTotal": doc.net_total,
@@ -341,6 +347,8 @@ def create_quotation(
 	dealer: str,
 	lines: list[dict],
 	markup_pct: float,
+	customer_address: str,
+	shipping_address_name: str,
 	freight: float = 0,
 	delivery_pincode: str | None = None,
 	validity_days: int = 7,
@@ -353,6 +361,13 @@ def create_quotation(
 	Sales Taxes and Charges Template; see sales.utils.apply_tax_template. Both
 	carry forward automatically into the resulting Sales Order on
 	convert_to_order, via ERPNext's own make_sales_order field mapper.
+
+	`customer_address`/`shipping_address_name` (BRD C.3.3) are mandatory, same as
+	order_api.create_order -- must already be a real Address on file for `dealer`
+	(sales.utils.assert_address_belongs_to). These are native Quotation fields
+	too, identically named to Sales Order's, so convert_to_order's own field
+	mapper carries them forward with no extra glue (unlike custom_delivery_date
+	below, which Quotation Item doesn't natively have).
 
 	`delivery_pincode` (ISS-2026-00633) is free text, stored as-is -- it's what
 	suggest_transport_rate looks a freight SUGGESTION up against (see that
@@ -378,6 +393,12 @@ def create_quotation(
 
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if not customer_address:
+		frappe.throw(_("A bill-to (billing) address is required."), frappe.ValidationError)
+	if not shipping_address_name:
+		frappe.throw(_("A ship-to (shipping) address is required."), frappe.ValidationError)
+	assert_address_belongs_to(customer_address, "Customer", dealer)
+	assert_address_belongs_to(shipping_address_name, "Customer", dealer)
 	lines = normalize_order_line_uoms(lines)
 	if inquiries:
 		mismatched = [
@@ -404,6 +425,8 @@ def create_quotation(
 		dealer=dealer,
 		lines=lines,
 		markup_pct=markup_pct,
+		customer_address=customer_address,
+		shipping_address_name=shipping_address_name,
 		freight=freight,
 		delivery_pincode=delivery_pincode,
 		validity_days=validity_days,
@@ -441,6 +464,8 @@ def _create_quotation(
 	dealer: str,
 	lines: list[dict],
 	markup_pct: float,
+	customer_address: str,
+	shipping_address_name: str,
 	freight: float = 0,
 	delivery_pincode: str | None = None,
 	validity_days: int = 7,
@@ -468,6 +493,8 @@ def _create_quotation(
 			"custom_delivery_pincode": delivery_pincode,
 			"custom_inquiry": inquiries[0] if inquiries else None,
 			"custom_order_channel": channel,
+			"customer_address": customer_address,
+			"shipping_address_name": shipping_address_name,
 			"items": items,
 		}
 	)

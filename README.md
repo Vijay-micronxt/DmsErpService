@@ -145,6 +145,17 @@ default route to fall back to. The route's fixed start/end point (the
 Morbi/Bengaluru warehouse's own GPS pin) is business data, not a credential,
 and lives on `DMS Purchase Settings` instead of here.
 
+**e-Way Bill generation is never this app's job.** BRD C.3.3's bill-to/ship-to
+validation, interstate detection and drop-ship PO↔Sales Order linking
+(`dms_erp/sales/dealer_address_api.py`, `sales/utils.py`, `purchase/po_api.py`) all
+exist to get correct, structured, GST-relevant addresses onto the Sales Order and
+Invoice — no more. Actually generating, amending or cancelling an e-Way Bill against
+the government NIC portal is `india_compliance`'s own already-configured module
+(confirmed set up and licensed on the real site), reading those same native
+`customer_address`/`shipping_address_name` fields once a Sales Invoice exists.
+`dms_erp` makes no GSP/NIC API call anywhere and stores no e-Way Bill number; no new
+`site_config.json` key is needed here for it.
+
 ## Roles
 
 Four Frappe Roles are created automatically on install/migrate, all with

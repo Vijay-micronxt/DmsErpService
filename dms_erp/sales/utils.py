@@ -18,6 +18,7 @@ any other ERPNext site with no GST setup; nothing here assumes one exists.
 import re
 
 import frappe
+from frappe import _
 from frappe.utils import add_days, getdate
 
 from dms_erp.warehouse.utils import default_company
@@ -201,3 +202,71 @@ def clear_unrequested_default_tax(doc) -> None:
 	doc.set("taxes", [])
 	doc.taxes_and_charges = None
 	doc.save(ignore_permissions=True)
+
+
+def assert_address_belongs_to(address: str, party_doctype: str, party_name: str) -> None:
+	"""BRD C.3.3 -- order_api/quotation_api's mandatory customer_address/
+	shipping_address_name must actually belong to the dealer the order is for,
+	not just be any Address that happens to exist (a copy-pasted id from a
+	different dealer's record would otherwise silently attach the wrong GST
+	state to this order)."""
+	if not frappe.db.exists(
+		"Dynamic Link", {"parent": address, "parenttype": "Address", "link_doctype": party_doctype, "link_name": party_name}
+	):
+		frappe.throw(_("{0} is not an address on file for {1}.").format(address, party_name), frappe.ValidationError)
+
+
+def default_billing_shipping_for(customer: str) -> tuple[str | None, str | None]:
+	"""BRD C.3.3's mandatory customer_address/shipping_address_name has no
+	address-picker UI yet on the self-service channels (dealer portal, WhatsApp)
+	-- this resolves a sane default so those flows keep working rather than
+	hard-failing the moment every dealer needs a real Address on file. Prefers
+	the dealer's own primary Billing/primary Shipping Address; falls back to
+	their only Billing/Shipping Address if exactly one exists; (None, None) if
+	neither can be resolved -- the caller still gets the same mandatory-field
+	throw a staff caller would, this just narrows how often that happens."""
+
+	def _pick(address_type: str, primary_field: str) -> str | None:
+		names = frappe.get_all(
+			"Dynamic Link",
+			filters={"link_doctype": "Customer", "link_name": customer, "parenttype": "Address"},
+			pluck="parent",
+		)
+		if not names:
+			return None
+		rows = frappe.get_all(
+			"Address", filters={"name": ["in", names], "address_type": address_type}, fields=["name", primary_field]
+		)
+		if not rows:
+			return None
+		primary = next((r.name for r in rows if r.get(primary_field)), None)
+		if primary:
+			return primary
+		return rows[0].name if len(rows) == 1 else None
+
+	return _pick("Billing", "is_primary_address"), _pick("Shipping", "is_shipping_address")
+
+
+def company_gst_state(company: str | None = None) -> str | None:
+	"""Generalizes print_api._company_block's Dynamic-Link-to-Address lookup to
+	just the state, for is_interstate_delivery below."""
+	company = company or default_company()
+	address_name = frappe.db.get_value(
+		"Dynamic Link", {"link_doctype": "Company", "link_name": company, "parenttype": "Address"}, "parent"
+	)
+	return frappe.db.get_value("Address", address_name, "state") if address_name else None
+
+
+def is_interstate_delivery(shipping_address_name: str | None, company: str | None = None) -> bool | None:
+	"""BRD C.3.3 -- tri-state on purpose: None (unknown -- no Company Address on
+	file, or the chosen Address has no state) must never silently collapse to
+	False. Purely informational (order_api._serialize's isInterstate/
+	ewayBillLikely) -- never gates whether an address is required; that's
+	unconditional regardless of interstate-ness."""
+	if not shipping_address_name:
+		return None
+	ship_state = frappe.db.get_value("Address", shipping_address_name, "state")
+	co_state = company_gst_state(company)
+	if not ship_state or not co_state:
+		return None
+	return ship_state.strip().lower() != co_state.strip().lower()

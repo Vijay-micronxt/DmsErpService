@@ -4,10 +4,19 @@ from frappe.utils import add_days, today
 
 from dms_erp.catalog import series_api
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.setup import setup_pricing
 from dms_erp.purchase import po_api
 from dms_erp.purchase.setup import setup_purchase
+from dms_erp.sales import order_api
 from dms_erp.warehouse.inward_api import add_truck
-from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 # Relative to today: a fixed date rotted into the past, and ERPNext then refuses the PO
 # ("Reqd by Date cannot be before Transaction Date").
@@ -21,11 +30,29 @@ class TestPoApi(FrappeTestCase):
 		ensure_company()
 		setup_catalog()
 		setup_purchase()
+		setup_pricing()
 		cls.item = make_item("PO-TEST-ITEM", "Vitrified")
 		cls.supplier = make_supplier("PO Test Supplier")
+		cls.dealer = make_dealer("PO Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+
+	def _submitted_sales_order(self):
+		"""A real submitted Sales Order to drop-ship against -- create_purchase_order's
+		drop_ship_sales_order validation has no item/qty cross-check (house convention,
+		same as vendor_enquiry/reorder_plan), so any priced item works."""
+		item = make_item("PO-DROPSHIP-SO-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		return order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 5}],
+			expected_dispatch=READY_BY,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 
 	def test_create_purchase_order_is_submitted_with_one_line(self):
 		po = po_api.create_purchase_order(
@@ -172,3 +199,98 @@ class TestPoApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			po_api.get_po_sticker_data(po["id"])
+
+	# -- BRD C.3.3: drop-ship --
+
+	def test_drop_ship_purchase_order_snapshots_the_sales_orders_addresses(self):
+		so = self._submitted_sales_order()
+		po = po_api.create_purchase_order(
+			item=self.item,
+			ordered_qty=50,
+			supplier=self.supplier,
+			expected_ready_date=READY_BY,
+			drop_ship_sales_order=so["id"],
+		)
+		self.assertEqual(po["dropShipSalesOrder"], so["id"])
+		self.assertEqual(po["customerBillingAddress"], self.billing_address)
+		self.assertEqual(po["customerShippingAddress"], self.shipping_address)
+
+		# A later edit to the Sales Order's own address must not rewrite the PO's
+		# already-taken snapshot (same "snapshot not live link" convention as Route
+		# Plan Stop's Supplier GPS capture).
+		other_shipping = make_dealer_addresses(make_dealer("PO Dropship Other Dealer"))[1]
+		frappe.db.set_value("Sales Order", so["id"], "shipping_address_name", other_shipping)
+		refreshed = po_api.get_purchase_order(po["id"])
+		self.assertEqual(refreshed["customerShippingAddress"], self.shipping_address)
+
+	def test_drop_ship_purchase_order_rejects_an_unsubmitted_sales_order(self):
+		item = make_item("PO-DROPSHIP-DRAFT-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		draft = frappe.get_doc(
+			{
+				"doctype": "Sales Order",
+				"customer": self.dealer,
+				"company": ensure_company(),
+				"transaction_date": today(),
+				"delivery_date": READY_BY,
+				"customer_address": self.billing_address,
+				"shipping_address_name": self.shipping_address,
+				"items": [{"item_code": item, "qty": 5, "rate": 360}],
+			}
+		)
+		draft.insert(ignore_permissions=True)  # deliberately not submitted
+
+		with self.assertRaises(frappe.ValidationError):
+			po_api.create_purchase_order(
+				item=self.item,
+				ordered_qty=50,
+				supplier=self.supplier,
+				expected_ready_date=READY_BY,
+				drop_ship_sales_order=draft.name,
+			)
+
+	def test_drop_ship_purchase_order_rejects_a_sales_order_with_no_addresses(self):
+		# Simulates a pre-C.3.3 Sales Order that predates mandatory addresses --
+		# order_api.create_order itself can no longer produce one with no address.
+		so = self._submitted_sales_order()
+		frappe.db.set_value("Sales Order", so["id"], "customer_address", None)
+
+		with self.assertRaises(frappe.ValidationError):
+			po_api.create_purchase_order(
+				item=self.item,
+				ordered_qty=50,
+				supplier=self.supplier,
+				expected_ready_date=READY_BY,
+				drop_ship_sales_order=so["id"],
+			)
+
+	def test_drop_ship_purchase_order_is_excluded_from_materials_ready_for_pickup(self):
+		so = self._submitted_sales_order()
+		po = po_api.create_purchase_order(
+			item=self.item,
+			ordered_qty=50,
+			supplier=self.supplier,
+			expected_ready_date=READY_BY,
+			drop_ship_sales_order=so["id"],
+		)
+		line_id = po["lines"][0]["id"]
+		po_api.set_line_ready(po["id"], line_id, 50)
+
+		ready = po_api.list_materials_ready_for_pickup()
+		self.assertNotIn(line_id, [row["line"] for row in ready])
+
+	def test_drop_ship_purchase_order_still_appears_in_pending_po_lines_flagged(self):
+		so = self._submitted_sales_order()
+		po = po_api.create_purchase_order(
+			item=self.item,
+			ordered_qty=50,
+			supplier=self.supplier,
+			expected_ready_date=READY_BY,
+			drop_ship_sales_order=so["id"],
+		)
+		line_id = po["lines"][0]["id"]
+
+		pending = {row["line"]: row for row in po_api.list_pending_po_lines()}
+		self.assertIn(line_id, pending)
+		self.assertTrue(pending[line_id]["dropShip"])

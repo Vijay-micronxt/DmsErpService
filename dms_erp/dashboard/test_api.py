@@ -11,7 +11,14 @@ from dms_erp.sales import inquiry_api, order_api
 from dms_erp.purchase import po_api
 from dms_erp.warehouse import allocation_api, inward_api, transfer_api
 from dms_erp.warehouse.setup import setup_warehouse
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_bay,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 from dms_erp.warehouse.utils import default_company
 
 
@@ -111,8 +118,16 @@ class TestDashboardApi(FrappeTestCase):
 		dealer_doc.append("credit_limits", {"company": default_company(), "credit_limit": 500})
 		dealer_doc.save(ignore_permissions=True)
 
+		billing, shipping = make_dealer_addresses(dealer)
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="Phone")
-		order_api.create_order(dealer=dealer, lines=[{"item": item, "qty": 10}], expected_dispatch=today(), inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": item, "qty": 10}],
+			expected_dispatch=today(),
+			customer_address=billing,
+			shipping_address_name=shipping,
+			inquiry=inquiry["id"],
+		)
 
 		result = dashboard_api.management_dashboard()
 

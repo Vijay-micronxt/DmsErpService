@@ -456,6 +456,78 @@ Thin read layer over native Customer — every other module already treats a dea
 
 ---
 
+## Dealer Addresses (BRD C.3.3)
+
+Real ERPNext `Address` records, Dynamic-Linked to the dealer's `Customer` —
+unrelated to the free-text `Customer.custom_address`/`custom_gstin` fields above.
+Scoped to `address_type` "Billing"/"Shipping" only. `customer_address`/
+`shipping_address_name` on Quotations and Sales Orders (see below) are now
+mandatory and must each name a real Address created here for that dealer.
+
+#### POST `dms_erp.sales.dealer_address_api.create_dealer_address`
+
+**Create a dealer address** — Sales/Management only.
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required | Customer id |
+| `address_type` | string | required | `Billing` or `Shipping` only |
+| `address_line1` | string | required |  |
+| `city` | string | required |  |
+| `state` | string | required |  |
+| `pincode` | string | required |  |
+| `address_line2` | string | optional |  |
+| `country` | string | default "India" |  |
+| `is_primary` | bool | default false | sets `is_primary_address` (Billing) or `is_shipping_address` (Shipping) — the two flags are independent |
+
+**Response**
+
+```json
+{ "message": { "id": "Sharma Tiles-Billing-1", "addressType": "Billing", "addressLine1": "12 Industrial Estate",
+  "addressLine2": null, "city": "Morbi", "state": "Gujarat", "pincode": "363641", "country": "India",
+  "isPrimary": true, "isShipping": false } }
+```
+
+
+#### GET `dms_erp.sales.dealer_address_api.list_dealer_addresses`
+
+**List a dealer's addresses**
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `dealer` | string | required |  |
+
+**Response**
+
+```json
+(array of the same shape create_dealer_address returns)
+```
+
+
+#### POST `dms_erp.sales.dealer_address_api.update_dealer_address`
+
+**Edit a dealer address** — Sales/Management only. No ownership/dealer param — any Sales/Management staff can edit any address (this is a staff-only tool; a hypothetical dealer-self-service version is out of scope this round).
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `address` | string | required | Address id |
+| `...fields` | — | optional | any of address_type, address_line1, address_line2, city, state, pincode, country, is_primary |
+
+**Response**
+
+```json
+(same shape as create_dealer_address)
+```
+
+
+---
+
 ## Suppliers
 
 Thin layer over native Supplier — every other module already treats a supplier as a bare Supplier id. `latitude`/`longitude` (BRD C.1.6) are the only custom fields (purchase/setup.py).
@@ -1280,6 +1352,8 @@ Native ERPNext Quotation, submitted immediately (no draft step). Line editing go
 | `dealer` | string | required |  |
 | `lines` | array | required | [{ item, qty }] |
 | `markup_pct` | number | required |  |
+| `customer_address` | string | required | BRD C.3.3 — a Billing Address already on file for `dealer` (`dealer_address_api.create_dealer_address`); rejected if missing or not actually linked to this dealer. |
+| `shipping_address_name` | string | required | BRD C.3.3 — same rule, a Shipping Address on file for `dealer`. Differing from `customer_address` on the same quotation is a site delivery. |
 | `freight` | number | default 0 |  |
 | `validity_days` | int | default 7 |  |
 | `inquiry` | string | optional | links back, and flips that Inquiry to "Quoted" |
@@ -1445,7 +1519,9 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 **Response**
 
 ```json
-(same shape as one list row)
+(same shape as one list row — BRD C.3.3 adds customerAddress, shippingAddressName,
+isSiteDelivery, the tri-state isInterstate, the tri-state ewayBillLikely, and
+dropShipPurchaseOrders)
 ```
 
 
@@ -1460,6 +1536,8 @@ Native ERPNext Sales Order. Warehouse-fulfillment stages are layered on top via 
 | `dealer` | string | required |  |
 | `lines` | array | required | [{ item, qty }] |
 | `expected_dispatch` | date | required |  |
+| `customer_address` | string | required | BRD C.3.3 — same rule as create_quotation above. The 3 self-service paths with no address picker (dealer-portal convert_to_order, WhatsApp order/quotation) resolve this automatically via `sales.utils.default_billing_shipping_for`; a staff caller must pass it explicitly. |
+| `shipping_address_name` | string | required | BRD C.3.3 — same rule as create_quotation above. |
 | `inquiry` | string | required |  |
 | `channel` | string | optional | same auto-classification/manual-override rule as create_quotation above (BRD C.4.3) |
 
@@ -2626,11 +2704,13 @@ Native ERPNext Purchase Order, submitted immediately ("Raise PO" is one action).
 | `expected_ready_date` | date | required |  |
 | `remarks` | string | optional |  |
 | `source_inquiry` | string | optional | set when raised via Inquiries' convert_to_purchase_requirement |
+| `drop_ship_sales_order` | string | optional | BRD C.3.3 — a submitted Sales Order (with both addresses set) this PO ships straight to, bypassing this app's own warehouse. Snapshots that order's addresses onto the PO; the PO is then excluded from reorder/pickup-availability math and can't be booked onto a Pickup Run, Route Plan or Inward Truck. |
 
 **Response**
 
 ```json
-(same shape as one list row)
+(same shape as one list row — BRD C.3.3 adds dropShipSalesOrder,
+customerBillingAddress, customerShippingAddress)
 ```
 
 

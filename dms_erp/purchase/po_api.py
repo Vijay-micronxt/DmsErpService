@@ -72,6 +72,9 @@ def _serialize(doc) -> dict:
 		"sourceInquiry": doc.custom_source_inquiry,
 		"vendorEnquiry": doc.custom_vendor_enquiry,
 		"reorderPlan": doc.custom_reorder_plan,
+		"dropShipSalesOrder": doc.custom_drop_ship_sales_order,
+		"customerBillingAddress": doc.custom_customer_billing_address,
+		"customerShippingAddress": doc.custom_customer_shipping_address,
 		# Client requirement 8.4 -- see custom_payment_status's own field description
 		# in purchase/setup.py for why this is manually set rather than derived.
 		"paymentStatus": doc.custom_payment_status or "Unpaid",
@@ -112,13 +115,20 @@ def create_purchase_order(
 	lines: list[dict] | None = None,
 	vendor_enquiry: str | None = None,
 	reorder_plan: str | None = None,
+	drop_ship_sales_order: str | None = None,
 ):
 	"""BRD C.3.1's "item-wise, multi-item" order pattern applies equally to a PO --
 	ERPNext's own Purchase Order was never single-item, only this API's original
 	shape was. `lines` (each `{item, qty, expected_ready_date?}`) is the multi-item
 	path; the single `item`/`ordered_qty`/`expected_ready_date` kwargs remain as a
 	shorthand for the common one-item case and every existing caller, translated
-	into a single-row `lines` list internally so both paths share one code path."""
+	into a single-row `lines` list internally so both paths share one code path.
+
+	BRD C.3.3 -- `drop_ship_sales_order` marks this PO as shipping straight from
+	the supplier to the end customer (never into this app's own warehouse stock).
+	No item/qty cross-check against that Sales Order, same as vendor_enquiry/
+	reorder_plan above -- a drop-ship arrangement can legitimately have a
+	different pack breakdown."""
 	_assert_can_manage_purchase()
 
 	if not lines:
@@ -150,6 +160,22 @@ def create_purchase_order(
 			frappe.ValidationError,
 		)
 
+	customer_billing_address = None
+	customer_shipping_address = None
+	if drop_ship_sales_order:
+		so = frappe.get_doc("Sales Order", drop_ship_sales_order)
+		if so.docstatus != 1:
+			frappe.throw(_("{0} must be submitted before it can be drop-shipped.").format(drop_ship_sales_order), frappe.ValidationError)
+		if not so.customer_address or not so.shipping_address_name:
+			frappe.throw(
+				_("{0} has no billing/shipping address set — cannot create a drop-ship PO against it.").format(
+					drop_ship_sales_order
+				),
+				frappe.ValidationError,
+			)
+		customer_billing_address = so.customer_address
+		customer_shipping_address = so.shipping_address_name
+
 	overall_ready_date = expected_ready_date or po_lines[0]["schedule_date"]
 	po = frappe.get_doc(
 		{
@@ -162,6 +188,9 @@ def create_purchase_order(
 			"custom_source_inquiry": source_inquiry,
 			"custom_vendor_enquiry": vendor_enquiry,
 			"custom_reorder_plan": reorder_plan,
+			"custom_drop_ship_sales_order": drop_ship_sales_order,
+			"custom_customer_billing_address": customer_billing_address,
+			"custom_customer_shipping_address": customer_shipping_address,
 			"items": po_lines,
 		}
 	)
@@ -236,12 +265,19 @@ def list_pending_po_lines() -> list[dict]:
 	own expected-ready date it's now sitting (0 if not yet due, or not yet set).
 	Line-level rather than summed-per-PO, so a partially-received line inside an
 	otherwise-complete-looking PO still surfaces. Shared by the Phase 8 purchase
-	dashboard's pendingPOs/supplierDelays counts and the Phase 17 PO Pending Report."""
+	dashboard's pendingPOs/supplierDelays counts and the Phase 17 PO Pending Report.
+
+	BRD C.3.3 -- a drop-ship PO is deliberately NOT excluded here (unlike
+	reorder_api._grouped_open_purchase_orders and list_materials_ready_for_pickup
+	below): it's still a real thing Purchase needs to follow up on with the
+	supplier, just flagged so consumers can tell it apart from warehouse-bound
+	stock rather than have it silently vanish from a report they still need."""
 	rows = frappe.db.sql(
 		"""
 		select poi.name as line, poi.parent as po, po.supplier as supplier,
 			po.schedule_date as expected_ready_date, poi.item_code as item_code,
-			poi.qty as ordered_qty, coalesce(poi.received_qty, 0) as received_qty
+			poi.qty as ordered_qty, coalesce(poi.received_qty, 0) as received_qty,
+			po.custom_drop_ship_sales_order as drop_ship_sales_order
 		from `tabPurchase Order Item` poi
 		inner join `tabPurchase Order` po on po.name = poi.parent
 		where po.docstatus = 1
@@ -266,6 +302,7 @@ def list_pending_po_lines() -> list[dict]:
 				"pendingQty": pending_qty,
 				"expectedReadyDate": row.expected_ready_date,
 				"daysOverdue": (today_date - getdate(row.expected_ready_date)).days if is_overdue else 0,
+				"dropShip": bool(row.drop_ship_sales_order),
 			}
 		)
 	return out
@@ -334,11 +371,22 @@ def list_materials_ready_for_pickup() -> list[dict]:
 	haven't all been booked onto an Inward Truck or reserved by an open Pickup
 	Run yet. Shared by the Phase 8 purchase dashboard's materialsReadyForPickup,
 	the Phase 16 Purchase Pickup Plan report, and Pickup Run's own capacity
-	validation (remaining_ready_qty_for_line, above — same underlying math)."""
+	validation (remaining_ready_qty_for_line, above — same underlying math).
+
+	BRD C.3.3 -- a drop-ship PO's material ships straight from the supplier to
+	the end customer, never through this app's own pickup/inward flow, so it's
+	excluded here (unlike list_pending_po_lines, which still needs to surface it
+	for supplier follow-up)."""
+	drop_ship_pos = frappe.get_all(
+		"Purchase Order", filters={"custom_drop_ship_sales_order": ["is", "set"]}, pluck="name"
+	)
+	filters = {"custom_ready_qty": [">", 0], "docstatus": 1}
+	if drop_ship_pos:
+		filters["parent"] = ["not in", drop_ship_pos]
 	out = []
 	for row in frappe.get_all(
 		"Purchase Order Item",
-		filters={"custom_ready_qty": [">", 0], "docstatus": 1},
+		filters=filters,
 		fields=["name", "parent as po", "item_code", "custom_ready_qty as ready_qty"],
 	):
 		remaining = remaining_ready_qty_for_line(row.name, ready_qty=row.ready_qty)

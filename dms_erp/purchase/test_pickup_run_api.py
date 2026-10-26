@@ -3,9 +3,18 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, today
 
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.setup import setup_pricing
 from dms_erp.purchase import pickup_run_api, po_api
 from dms_erp.purchase.setup import setup_purchase
-from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+from dms_erp.sales import order_api
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestPickupRunApi(FrappeTestCase):
@@ -20,20 +29,36 @@ class TestPickupRunApi(FrappeTestCase):
 		cls.other_supplier = make_supplier("Pickup Run Other Supplier")
 		cls.small_truck = pickup_run_api.create_vehicle_type("Small Truck", 100)
 		cls.big_truck = pickup_run_api.create_vehicle_type("Big Truck", 900)
+		setup_pricing()
+		cls.dealer = make_dealer("Pickup Run Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
-	def _ready_line(self, supplier=None, ordered_qty=1000, ready_qty=500):
+	def _ready_line(self, supplier=None, ordered_qty=1000, ready_qty=500, drop_ship_sales_order=None):
 		po = po_api.create_purchase_order(
 			item=self.item, ordered_qty=ordered_qty, supplier=supplier or self.supplier,
 			# Relative, not a fixed date: a fixed one rots into the past and ERPNext then
 			# refuses the PO ("Reqd by Date cannot be before Transaction Date").
 			expected_ready_date=add_days(today(), 30),
+			drop_ship_sales_order=drop_ship_sales_order,
 		)
 		line_id = po["lines"][0]["id"]
 		po_api.set_line_ready(po["id"], line_id, ready_qty)
 		return line_id
+
+	def _submitted_sales_order(self):
+		item = make_item("PICKUP-DROPSHIP-SO-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		return order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 5}],
+			expected_dispatch=add_days(today(), 30),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 
 	def test_create_vehicle_type_and_list(self):
 		vt = pickup_run_api.create_vehicle_type("Mini Truck", 250)
@@ -241,3 +266,24 @@ class TestPickupRunApi(FrappeTestCase):
 	def test_vehicle_type_needs_some_capacity(self):
 		with self.assertRaises(frappe.ValidationError):
 			pickup_run_api.create_vehicle_type("No Capacity Truck")
+
+	def test_create_pickup_run_rejects_a_drop_ship_po_line(self):
+		# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the end
+		# customer and never passes through this app's own pickup flow.
+		so = self._submitted_sales_order()
+		line = self._ready_line(ready_qty=200, drop_ship_sales_order=so["id"])
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.create_pickup_run(
+				supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line, "qty": 100}]
+			)
+
+	def test_add_pickup_run_line_rejects_a_drop_ship_po_line(self):
+		line1 = self._ready_line(ready_qty=300)
+		run = pickup_run_api.create_pickup_run(
+			supplier=self.supplier, vehicle_type=self.big_truck["id"], lines=[{"purchase_order_item": line1, "qty": 100}]
+		)
+
+		so = self._submitted_sales_order()
+		drop_ship_line = self._ready_line(ready_qty=200, drop_ship_sales_order=so["id"])
+		with self.assertRaises(frappe.ValidationError):
+			pickup_run_api.add_pickup_run_line(run["id"], drop_ship_line, 50)

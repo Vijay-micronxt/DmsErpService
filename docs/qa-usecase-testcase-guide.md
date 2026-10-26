@@ -385,11 +385,15 @@ Inquiry workflow it says is in scope), Wave 1.*
 | TC-SO-12g | A delay on stock already covering an order doesn't flag it | Same delayed PO as TC-SO-12f, but the order's own delivery date is still far out. | The line is not flagged — a delay alone isn't enough; it must actually threaten that order's own date. | C.3.2 | M2 / Wave 1 |
 | TC-SO-12h | Two orders for the same item, only enough on-track supply for the first | Raise one on-track PO sized to exactly cover an earlier order and one delayed PO as the only remaining supply, with a later order for the rest. | The earlier order is unaffected; the later order is the one flagged at-risk — it's the delayed supply specifically, not a shortage in general, that puts it at risk. | C.3.2 | M2 / Wave 1 |
 | TC-SO-12i | Delivery risk window report, groupable by customer/item/supplier | Open the forecasting/stock window (`reports.delivery_risk.delivery_risk_window`) with each of `customer=`, `item=` and `supplier=` in turn. | Each filter narrows to that axis correctly; every open order line shows its stock-in-hand/in-transit/factory-dispatch coverage, not just the at-risk ones; the summary rollups count only at-risk lines per axis. | C.3.2 | M2 / Wave 1 |
-| TC-SO-12j | Retail/bulk tag carries onto the invoice | Raise a Sales Invoice (C.3.1) for a Bulk-channel order, then a Retail one. | Each invoice carries the same channel as its order (BRD C.4.3); shown on the order detail next to the invoice. Reorder (C.4.1) and Top Dealers (C.10.4) keep excluding Bulk/Project the same way once invoices from this app carry the tag. | C.4.3 | M2 / Wave 1 |
-| TC-SO-13 | Order a line in a unit other than Box | New order/quotation → add a line → switch its unit to Sq Ft → enter a quantity that doesn't divide evenly into a whole box (e.g. 50 Sq Ft on an item with 15.5 Sq Ft per box). | A "≈ 4 box(es)" hint appears under the line (always rounded UP, never down) and the line total prices off that box count. After creating the order/quotation, the line shows "entered as 50 Sqft" next to its (box) qty. | Sheet 7.8 | M2 / Wave 1 |
-| TC-SO-13b | Unit entry on an item with no conversion factor | Switch a line's unit to Sq Ft (or Pcs/Sq M/Kg/Gram) for an item that has no Sqft per Box (or the matching figure) set. | The hint reads "No Sqft-per-box figure set for this item — switch to Box" and submitting the order/quotation is refused with that same message until the unit is switched back to Box or the item's figure is set. | Sheet 7.8 | M2 / Wave 1 |
-| TC-SO-13c | Unit entry doesn't skew Bulk/Retail classification | For an item with a 500-box Bulk threshold, order 2000 Sq Ft of it (≈ 130 boxes on a 15.5 Sq Ft/box item). | The order classifies as Retail (130 boxes is under the 500-box threshold) — not Bulk, which it would wrongly become if the raw 2000 were compared against the threshold instead of the converted box count. | Sheet 7.8 | M2 / Wave 1 |
-| TC-SO-13d | A box-qty edit on a quotation clears its unit annotation | Create a quotation line entered in Sq Ft, then use the quotation's own line-qty editor to set its qty directly in boxes. | The line's qty updates normally; the "entered as N Sqft" annotation disappears (it would otherwise read against the wrong qty). Everything else about the amend (re-pricing, other lines) behaves as before. | Sheet 7.8 | M2 / Wave 1 |
+| TC-SO-12j | Bill-to/ship-to is mandatory on every order and quotation (BRD C.3.3) | Build a quotation or order (Quotation Builder / Orders → New / `create_quotation` / `create_order`) with no billing or shipping address selected, or with an Address that belongs to a different dealer. | Blocked — "A bill-to (billing) address is required." / "A ship-to (shipping) address is required." / "{address} is not an address on file for {dealer}." A dealer first needs at least one Billing + Shipping Address on file (Settings/Desk → `create_dealer_address`) before any order can be raised for them. | C.3.3 | M2 / Wave 1 |
+| TC-SO-12k | Interstate / site-delivery / e-Way Bill signal | Create an order where the shipping address's state differs from the Company's own Address state, and another where shipping ≠ billing address on the same order, and a third whose total crosses `DMS Sales Settings.eway_bill_threshold_amount`. | First order shows `isInterstate: true`; second shows `isSiteDelivery: true`; third shows `ewayBillLikely: true` regardless of state. With no Company Address on file, `isInterstate`/`ewayBillLikely` read `null` (unknown), never a guessed `false`. This is read-only staff guidance — `dms_erp` makes no GSP/NIC call itself; actual e-Way Bill generation is `india_compliance`'s own already-configured module. | C.3.3 | M2 / Wave 1 |
+| TC-SO-12l | Drop-ship Purchase Order ships straight to the customer | Raise a Purchase Order with `drop_ship_sales_order` set to a submitted, address-bearing Sales Order. Then try to book that PO's line onto a Pickup Run, Route Plan or Inward Truck directly, and check `reorder_api.reorder_suggestions`/`list_materials_ready_for_pickup`/`list_pending_po_lines`. | The PO snapshots the Sales Order's own billing/shipping address at creation time (a later edit to the order's address doesn't rewrite it). Booking it onto any pickup/route/inward flow is refused. It's excluded from reorder's open-PO netting and from materials-ready-for-pickup, but still appears in Pending PO Lines, flagged `dropShip: true`, so Purchase can still follow up with the supplier. | C.3.3 | M2 / Wave 1 |
+| TC-SO-12m | Invoice carries the order's own addresses | Raise a Sales Invoice (`order_api.create_sales_invoice`) against a Dispatched/Delivered order. | The Sales Invoice's own `customer_address`/`shipping_address_name` match the Sales Order's — including for a drop-ship order, where the invoice still carries the end customer's address, not the supplier's. | C.3.3 | M2 / Wave 1 |
+| TC-SO-12n | Retail/bulk tag carries onto the invoice | Raise a Sales Invoice (C.3.1) for a Bulk-channel order, then a Retail one. | Each invoice carries the same channel as its order (BRD C.4.3); shown on the order detail next to the invoice. Reorder (C.4.1) and Top Dealers (C.10.4) keep excluding Bulk/Project the same way once invoices from this app carry the tag. | C.4.3 | M2 / Wave 1 |
+| TC-SO-15 | Order a line in a unit other than Box | New order/quotation → add a line → switch its unit to Sq Ft → enter a quantity that doesn't divide evenly into a whole box (e.g. 50 Sq Ft on an item with 15.5 Sq Ft per box). | A "≈ 4 box(es)" hint appears under the line (always rounded UP, never down) and the line total prices off that box count. After creating the order/quotation, the line shows "entered as 50 Sqft" next to its (box) qty. | Sheet 7.8 | M2 / Wave 1 |
+| TC-SO-15b | Unit entry on an item with no conversion factor | Switch a line's unit to Sq Ft (or Pcs/Sq M/Kg/Gram) for an item that has no Sqft per Box (or the matching figure) set. | The hint reads "No Sqft-per-box figure set for this item — switch to Box" and submitting the order/quotation is refused with that same message until the unit is switched back to Box or the item's figure is set. | Sheet 7.8 | M2 / Wave 1 |
+| TC-SO-15c | Unit entry doesn't skew Bulk/Retail classification | For an item with a 500-box Bulk threshold, order 2000 Sq Ft of it (≈ 130 boxes on a 15.5 Sq Ft/box item). | The order classifies as Retail (130 boxes is under the 500-box threshold) — not Bulk, which it would wrongly become if the raw 2000 were compared against the threshold instead of the converted box count. | Sheet 7.8 | M2 / Wave 1 |
+| TC-SO-15d | A box-qty edit on a quotation clears its unit annotation | Create a quotation line entered in Sq Ft, then use the quotation's own line-qty editor to set its qty directly in boxes. | The line's qty updates normally; the "entered as N Sqft" annotation disappears (it would otherwise read against the wrong qty). Everything else about the amend (re-pricing, other lines) behaves as before. | Sheet 7.8 | M2 / Wave 1 |
 
 ### 5.3 Orders created directly by the dealer (WhatsApp / Dealer Portal)
 
@@ -400,10 +404,18 @@ Inquiry workflow it says is in scope), Wave 1.*
 
 ### Known gaps — not yet built
 
-- **C.3.3** Bill-to/Ship-to validation, drop-ship (Sales Order linked to a PO shipping
-  direct to the customer), and automatic e-Way Bill generation — **confirmed not built at
-  all** (no `drop_ship`/`bill_to`/`ship_to`/`eway` references anywhere in `sales/*.py`).
-  Do not assume this is silently covered — it genuinely isn't.
+- **C.3.3** Bill-to/ship-to mandatory validation, drop-ship (PO↔Sales Order link with
+  address snapshotting), and the read-only e-Way Bill signal are now built — see
+  TC-SO-12j through TC-SO-12m. What remains out of scope, by design, not oversight:
+  **actual e-Way Bill generation/cancellation is never `dms_erp`'s job** — it makes no
+  GSP/NIC API call and stores no e-Way Bill number anywhere; that's `india_compliance`'s
+  own already-configured module, reading off the native `customer_address`/
+  `shipping_address_name` fields this round put on the Sales Order/Invoice. Also still
+  out: no dealer-portal/WhatsApp address-picker UI (those self-service paths fall back
+  to a dealer's primary address, same as before an address picker existed); no PIN-to-
+  PIN distance computation of any kind; `print_api`'s document headers still print the
+  old free-text `Customer.custom_address`, not whichever structured address a given
+  order actually used.
 - **C.3.4** The real India Banking / VALS API integration — only the interim manual
   advance-confirmation gate (TC-SO-10) exists; the receipt-triggered automatic release
   is not built.
@@ -889,8 +901,10 @@ For quick reference — do not file these as bugs, and don't spend QA time hunti
 - **C.2.6** Proactive WhatsApp follow-up reminders (dealer or staff CRM) — genuinely new
   capability, deliberately blocked on confirming whats91's real template/button-reply API.
   Milestone 3, Wave 1 (not built, not a Wave-2 deferral).
-- **C.3.3** Bill-to/Ship-to validation, drop-ship, and automatic e-Way Bill generation —
-  confirmed absent from the codebase entirely, not merely untested.
+- **C.3.3** Bill-to/ship-to mandatory validation, drop-ship, and the read-only e-Way
+  Bill signal are now built (see §5.2's TC-SO-12j–12m); actual e-Way Bill generation
+  stays `india_compliance`'s own already-configured job, never `dms_erp`'s — see that
+  section's full gap note for exactly what is and isn't built.
 - **C.3.4** The real India Banking / VALS API integration (only an interim manual gate
   exists).
 - **C.4.2/C.4.4** Full MOQ-hierarchy enforcement; purchase-receipt shortage/claim capture

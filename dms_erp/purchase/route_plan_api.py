@@ -128,10 +128,20 @@ def _validate_lines(stop_suppliers: set[str], lines: list[dict], exclude_route_p
 	for line in lines:
 		po_item_name = line["purchase_order_item"]
 		po_item = frappe.get_doc("Purchase Order Item", po_item_name)
-		po_supplier = frappe.db.get_value("Purchase Order", po_item.parent, "supplier")
+		po = frappe.db.get_value("Purchase Order", po_item.parent, ["supplier", "custom_drop_ship_sales_order"], as_dict=True)
+		po_supplier = po.supplier
 		if po_supplier not in stop_suppliers:
 			frappe.throw(
 				_("Purchase Order Item {0} belongs to supplier {1}, which has no stop on this route.").format(po_item_name, po_supplier),
+				frappe.ValidationError,
+			)
+		if po.custom_drop_ship_sales_order:
+			# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the
+			# end customer and never passes through this app's own route plan.
+			frappe.throw(
+				_("Purchase Order Item {0} is on a drop-ship Purchase Order ({1}) and cannot be booked onto a Route Plan.").format(
+					po_item_name, po_item.parent
+				),
 				frappe.ValidationError,
 			)
 

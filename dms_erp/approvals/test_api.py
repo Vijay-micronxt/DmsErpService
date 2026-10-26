@@ -7,7 +7,13 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import inquiry_api, order_api, quotation_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 from dms_erp.warehouse.utils import default_company
 
 TEST_PASSWORD = "Pa$$w0rd123!"
@@ -54,16 +60,37 @@ class TestApprovalsApi(FrappeTestCase):
 		pricing_api.approve_price(item=cls.second_item, final_price=250, reason="Launch")
 
 		cls.sales_user = _make_sales_only_user("approvals.sales@pacific.test")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+
+	def _create_quotation(self, dealer=None, **kwargs):
+		"""BRD C.3.3 made customer_address/shipping_address_name mandatory on
+		create_quotation -- every test below that isn't specifically exercising
+		that validation goes through here instead of calling create_quotation
+		directly, so a real Billing + Shipping Address is always on file for
+		whichever dealer is quoting."""
+		dealer = dealer or self.dealer
+		billing, shipping = make_dealer_addresses(dealer)
+		kwargs.setdefault("customer_address", billing)
+		kwargs.setdefault("shipping_address_name", shipping)
+		return quotation_api.create_quotation(dealer=dealer, **kwargs)
+
+	def _create_order(self, dealer=None, **kwargs):
+		"""Same as _create_quotation, for order_api.create_order."""
+		dealer = dealer or self.dealer
+		billing, shipping = make_dealer_addresses(dealer)
+		kwargs.setdefault("customer_address", billing)
+		kwargs.setdefault("shipping_address_name", shipping)
+		return order_api.create_order(dealer=dealer, **kwargs)
 
 	# ---------------- gate_channel_override, exercised via create_quotation ----------------
 
 	def test_authorized_user_override_applies_immediately_and_logs_an_approved_request(self):
 		before = frappe.db.count("Approval Request")
 
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12, channel="Bulk"
 		)
 		self.assertEqual(quotation["channel"], "Bulk")
@@ -82,7 +109,7 @@ class TestApprovalsApi(FrappeTestCase):
 		frappe.set_user(self.sales_user)
 		before = frappe.db.count("Quotation")
 
-		result = quotation_api.create_quotation(
+		result = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12, channel="Bulk"
 		)
 
@@ -95,7 +122,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_matching_channel_never_raises_an_approval_request(self):
 		before = frappe.db.count("Approval Request")
-		quotation_api.create_quotation(
+		self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)  # channel left unset -> auto-classifies to Retail, no override at all
 		self.assertEqual(frappe.db.count("Approval Request"), before)
@@ -104,7 +131,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_approving_a_queued_channel_override_creates_the_quotation(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 11}], markup_pct=12, channel="Bulk"
 		)
 		approval_id = queued["approval"]["id"]
@@ -121,7 +148,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_rejecting_a_queued_channel_override_creates_nothing(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 12}], markup_pct=12, channel="Bulk"
 		)
 		approval_id = queued["approval"]["id"]
@@ -136,7 +163,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_deciding_twice_is_rejected(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 13}], markup_pct=12, channel="Bulk"
 		)
 		approval_id = queued["approval"]["id"]
@@ -148,7 +175,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_only_management_can_decide(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 14}], markup_pct=12, channel="Bulk"
 		)
 		approval_id = queued["approval"]["id"]
@@ -165,7 +192,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_list_pending_approvals_filters_by_status_and_trigger_type(self):
 		frappe.set_user(self.sales_user)
-		quotation_api.create_quotation(
+		self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 15}], markup_pct=12, channel="Bulk"
 		)
 		frappe.set_user("Administrator")
@@ -178,7 +205,7 @@ class TestApprovalsApi(FrappeTestCase):
 	# ---------------- gate_authorized_action, exercised via quotation line edits (trigger #5) ----------------
 
 	def _make_quotation(self, qty=10):
-		return quotation_api.create_quotation(
+		return self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], markup_pct=12
 		)
 
@@ -299,7 +326,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def _make_order(self, qty=10):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=qty, source="Phone")
-		return order_api.create_order(
+		return self._create_order(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": qty}], expected_dispatch=DISPATCH, inquiry=inquiry["id"]
 		)
 
@@ -353,7 +380,7 @@ class TestApprovalsApi(FrappeTestCase):
 	def test_authorized_user_discount_applies_immediately_and_logs_an_approved_request(self):
 		before = frappe.db.count("Approval Request")
 
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
 			markup_pct=12,
@@ -374,7 +401,7 @@ class TestApprovalsApi(FrappeTestCase):
 		frappe.set_user(self.sales_user)
 		before = frappe.db.count("Quotation")
 
-		result = quotation_api.create_quotation(
+		result = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 1}],
 			markup_pct=12,
@@ -389,10 +416,10 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_zero_discount_never_raises_an_approval_request(self):
 		before = frappe.db.count("Approval Request")
-		quotation_api.create_quotation(
+		self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 0}], markup_pct=12
 		)
-		quotation_api.create_quotation(
+		self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)  # discount_percentage omitted entirely
 		self.assertEqual(frappe.db.count("Approval Request"), before)
@@ -407,14 +434,14 @@ class TestApprovalsApi(FrappeTestCase):
 		try:
 			frappe.set_user(self.sales_user)
 
-			within_threshold = quotation_api.create_quotation(
+			within_threshold = self._create_quotation(
 				dealer=self.dealer,
 				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
 				markup_pct=12,
 			)
 			self.assertEqual(within_threshold["lines"][0]["discountPercentage"], 5)
 
-			over_threshold = quotation_api.create_quotation(
+			over_threshold = self._create_quotation(
 				dealer=self.dealer,
 				lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 15}],
 				markup_pct=12,
@@ -427,7 +454,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_approving_a_queued_discount_creates_the_quotation(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
 			markup_pct=12,
@@ -446,7 +473,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_rejecting_a_queued_discount_creates_nothing(self):
 		frappe.set_user(self.sales_user)
-		queued = quotation_api.create_quotation(
+		queued = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 10}],
 			markup_pct=12,
@@ -464,7 +491,7 @@ class TestApprovalsApi(FrappeTestCase):
 	def test_authorized_user_doing_both_channel_and_discount_overrides_logs_two_approved_requests(self):
 		before = frappe.db.count("Approval Request")
 
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
 			markup_pct=12,
@@ -487,7 +514,7 @@ class TestApprovalsApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.priced_item, qty=10, source="Phone")
 		before = frappe.db.count("Approval Request")
 
-		order = order_api.create_order(
+		order = self._create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 5}],
 			expected_dispatch=DISPATCH,
@@ -507,7 +534,7 @@ class TestApprovalsApi(FrappeTestCase):
 		before = frappe.db.count("Sales Order")
 
 		frappe.set_user(self.sales_user)
-		result = order_api.create_order(
+		result = self._create_order(
 			dealer=self.dealer,
 			lines=[{"item": self.priced_item, "qty": 10, "discount_percentage": 2}],
 			expected_dispatch=DISPATCH,
@@ -532,7 +559,7 @@ class TestApprovalsApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=5, source="Phone")
 		before = frappe.db.count("Approval Request")
 
-		order_api.create_order(
+		self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 5}],
 			expected_dispatch=DISPATCH,
@@ -546,7 +573,7 @@ class TestApprovalsApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=1000, source="Phone")
 		before = frappe.db.count("Approval Request")
 
-		order_api.create_order(
+		self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 1000}],
 			expected_dispatch=DISPATCH,
@@ -560,7 +587,7 @@ class TestApprovalsApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
 		before = frappe.db.count("Approval Request")
 
-		order = order_api.create_order(
+		order = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
 			expected_dispatch=DISPATCH,
@@ -582,7 +609,7 @@ class TestApprovalsApi(FrappeTestCase):
 		before = frappe.db.count("Sales Order")
 
 		frappe.set_user(self.sales_user)
-		result = order_api.create_order(
+		result = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
 			expected_dispatch=DISPATCH,
@@ -600,7 +627,7 @@ class TestApprovalsApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=self.priced_item, qty=10, source="Phone")
 
 		frappe.set_user(self.sales_user)
-		queued = order_api.create_order(
+		queued = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
 			expected_dispatch=DISPATCH,
@@ -622,7 +649,7 @@ class TestApprovalsApi(FrappeTestCase):
 		before = frappe.db.count("Sales Order")
 
 		frappe.set_user(self.sales_user)
-		queued = order_api.create_order(
+		queued = self._create_order(
 			dealer=dealer,
 			lines=[{"item": self.priced_item, "qty": 10}],
 			expected_dispatch=DISPATCH,
@@ -637,7 +664,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_authorized_user_quotation_conversion_over_credit_limit_logs_an_approved_request(self):
 		dealer = self._make_credit_dealer("Credit Test Dealer Authorized Convert", limit=1000)
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)  # priced well over the 1000 limit
 		before = frappe.db.count("Approval Request")
@@ -653,7 +680,7 @@ class TestApprovalsApi(FrappeTestCase):
 
 	def test_unauthorized_user_quotation_conversion_over_credit_limit_is_queued_instead_of_applied(self):
 		dealer = self._make_credit_dealer("Credit Test Dealer Unauthorized Convert", limit=1000)
-		quotation = quotation_api.create_quotation(
+		quotation = self._create_quotation(
 			dealer=dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
 		)
 		before = frappe.db.count("Sales Order")

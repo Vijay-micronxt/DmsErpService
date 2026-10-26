@@ -8,7 +8,13 @@ from dms_erp.pricing.setup import setup_pricing
 from dms_erp.comms import api as comms_api
 from dms_erp.reports import sales_reports
 from dms_erp.sales import dealer_api, inquiry_api, order_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 # Relative to today: a fixed date rots into the past, and ERPNext then refuses the order
@@ -25,6 +31,7 @@ class TestSalesReports(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Sales Reports Test Supplier")
 		cls.dealer = make_dealer("Sales Reports Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.item = make_item("SREPORT-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=400, reason="Launch")
@@ -70,11 +77,24 @@ class TestSalesReports(FrappeTestCase):
 
 	def test_retail_vs_bulk_report_groups_by_channel(self):
 		retail_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
-		order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 10}], expected_dispatch=DISPATCH, inquiry=retail_inquiry["id"])
+		order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 10}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=retail_inquiry["id"],
+		)
 
 		bulk_inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=800, source="Phone")
 		order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 800}], expected_dispatch=DISPATCH, inquiry=bulk_inquiry["id"], channel="Bulk"
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 800}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=bulk_inquiry["id"],
+			channel="Bulk",
 		)
 
 		result = sales_reports.retail_vs_bulk_report()
@@ -84,10 +104,16 @@ class TestSalesReports(FrappeTestCase):
 
 	def test_dealer_activity_report_rolls_up_inquiries_orders_and_messages(self):
 		activity_dealer = make_dealer("Sales Reports Activity Dealer")
+		activity_billing, activity_shipping = make_dealer_addresses(activity_dealer)
 		inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=10, source="Phone")
 		order_inquiry = inquiry_api.create_inquiry(dealer=activity_dealer, item=self.item, qty=20, source="Phone")
 		order_api.create_order(
-			dealer=activity_dealer, lines=[{"item": self.item, "qty": 20}], expected_dispatch=DISPATCH, inquiry=order_inquiry["id"]
+			dealer=activity_dealer,
+			lines=[{"item": self.item, "qty": 20}],
+			expected_dispatch=DISPATCH,
+			customer_address=activity_billing,
+			shipping_address_name=activity_shipping,
+			inquiry=order_inquiry["id"],
 		)
 		comms_api.send_message(dealer=activity_dealer, text="Following up on your order")
 
@@ -102,10 +128,16 @@ class TestSalesReports(FrappeTestCase):
 
 	def test_salesperson_assignment_report_groups_dealers_by_assigned_salesperson(self):
 		assigned_dealer = make_dealer("Sales Reports Assigned Dealer")
+		assigned_billing, assigned_shipping = make_dealer_addresses(assigned_dealer)
 		dealer_api.set_dealer_salesperson(assigned_dealer, "priya@pacific.example")
 		order_inquiry = inquiry_api.create_inquiry(dealer=assigned_dealer, item=self.item, qty=15, source="Phone")
 		order_api.create_order(
-			dealer=assigned_dealer, lines=[{"item": self.item, "qty": 15}], expected_dispatch=DISPATCH, inquiry=order_inquiry["id"]
+			dealer=assigned_dealer,
+			lines=[{"item": self.item, "qty": 15}],
+			expected_dispatch=DISPATCH,
+			customer_address=assigned_billing,
+			shipping_address_name=assigned_shipping,
+			inquiry=order_inquiry["id"],
 		)
 
 		unassigned_dealer = make_dealer("Sales Reports Unassigned Dealer")
@@ -173,7 +205,11 @@ class TestSalesReports(FrappeTestCase):
 		from frappe.utils import add_days, today
 
 		order = order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 5}], expected_dispatch=add_days(today(), 7)
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 5}],
+			expected_dispatch=add_days(today(), 7),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 		)
 		order_id = order["id"]
 

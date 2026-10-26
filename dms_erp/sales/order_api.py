@@ -31,7 +31,12 @@ from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.reservation import reservation_summary
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
-from dms_erp.sales.utils import apply_tax_template, clear_unrequested_default_tax
+from dms_erp.sales.utils import (
+	apply_tax_template,
+	assert_address_belongs_to,
+	clear_unrequested_default_tax,
+	is_interstate_delivery,
+)
 from dms_erp.warehouse.utils import default_company
 
 ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -93,6 +98,16 @@ def _serialize(doc) -> dict:
 		"deliveryNotes": _order_delivery_notes(doc.name),
 		# ISS-2026-00635 -- 21-day reservation timeline; see sales.reservation.
 		"reservation": reservation_summary(doc),
+		# BRD C.3.3 -- mandatory bill-to/ship-to; isInterstate/ewayBillLikely are
+		# tri-state (None = unknown, never guessed False) and purely informational
+		# -- dms_erp makes no GSP/NIC call itself, india_compliance's own already-
+		# configured e-Way Bill module owns actual generation.
+		"customerAddress": doc.customer_address,
+		"shippingAddressName": doc.shipping_address_name,
+		"isSiteDelivery": bool(doc.shipping_address_name) and doc.shipping_address_name != doc.customer_address,
+		"isInterstate": is_interstate_delivery(doc.shipping_address_name, doc.company),
+		"ewayBillLikely": _eway_bill_likely(doc),
+		"dropShipPurchaseOrders": _drop_ship_purchase_orders(doc.name),
 	}
 
 
@@ -116,6 +131,26 @@ def _order_delivery_notes(order: str) -> list[dict]:
 				}
 			)
 	return notes
+
+
+DEFAULT_EWAY_BILL_THRESHOLD = 50000
+
+
+def _eway_bill_likely(doc) -> bool | None:
+	"""A value-threshold crossing is its own independent trigger (True regardless
+	of whether interstate-ness is even knowable); only when under threshold does
+	an unresolved interstate state degrade this to unknown rather than False."""
+	threshold = frappe.db.get_single_value("DMS Sales Settings", "eway_bill_threshold_amount") or DEFAULT_EWAY_BILL_THRESHOLD
+	if flt(doc.grand_total) >= threshold:
+		return True
+	return is_interstate_delivery(doc.shipping_address_name, doc.company)
+
+
+def _drop_ship_purchase_orders(order: str) -> list[str]:
+	"""BRD C.3.3 -- the reverse of Purchase Order.custom_drop_ship_sales_order
+	(purchase/po_api.py), computed read-only here rather than a stored field on
+	Sales Order -- the link is one-directional (PO -> SO)."""
+	return frappe.get_all("Purchase Order", filters={"custom_drop_ship_sales_order": order, "docstatus": ["!=", 2]}, pluck="name")
 
 
 def _order_invoices(order: str) -> list[dict]:
@@ -334,6 +369,8 @@ def _create_order(
 	dealer: str,
 	lines: list[dict],
 	expected_dispatch,
+	customer_address: str,
+	shipping_address_name: str,
 	inquiry: str | None = None,
 	channel: str | None = None,
 	customer_po: str | None = None,
@@ -351,6 +388,14 @@ def _create_order(
 	Template -- see sales.utils.apply_tax_template; left unset, the order is
 	simply untaxed, same as any ERPNext site with no GST template configured.
 
+	`customer_address`/`shipping_address_name` (BRD C.3.3) are mandatory on every
+	order, not just interstate/site deliveries -- the BRD says "mandatory" with no
+	qualifier, and you can't know an order is interstate without the address
+	already captured, so partial enforcement would be circular. Both must be a
+	real Address already on file for `dealer` (sales.utils.
+	assert_address_belongs_to) -- never silently created here. A "site delivery"
+	is simply shipping_address_name != customer_address; no separate flag needed.
+
 	`channel` here is always already resolved (never None) -- create_order (the
 	whitelisted wrapper) resolves and gates it before this ever runs; only
 	dealer_portal_api.convert_to_order still calls this directly with channel
@@ -358,6 +403,12 @@ def _create_order(
 	candidate in the first place."""
 	if not lines:
 		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	if not customer_address:
+		frappe.throw(_("A bill-to (billing) address is required."), frappe.ValidationError)
+	if not shipping_address_name:
+		frappe.throw(_("A ship-to (shipping) address is required."), frappe.ValidationError)
+	assert_address_belongs_to(customer_address, "Customer", dealer)
+	assert_address_belongs_to(shipping_address_name, "Customer", dealer)
 	if channel is None:
 		channel = auto_classify_channel(dealer, lines)
 
@@ -371,6 +422,8 @@ def _create_order(
 			"transaction_date": today(),
 			"delivery_date": expected_dispatch,
 			"po_no": customer_po,
+			"customer_address": customer_address,
+			"shipping_address_name": shipping_address_name,
 			"items": items,
 		}
 	)
@@ -393,6 +446,8 @@ def create_order(
 	dealer: str,
 	lines: list[dict],
 	expected_dispatch,
+	customer_address: str,
+	shipping_address_name: str,
 	inquiry: str | None = None,
 	channel: str | None = None,
 	customer_po: str | None = None,
@@ -442,6 +497,8 @@ def create_order(
 		dealer=dealer,
 		lines=lines,
 		expected_dispatch=expected_dispatch,
+		customer_address=customer_address,
+		shipping_address_name=shipping_address_name,
 		inquiry=inquiry,
 		channel=resolved_channel,
 		customer_po=customer_po,
@@ -761,6 +818,8 @@ def create_sales_invoice(order: str):
 	invoice = make_sales_invoice(order, ignore_permissions=True)
 	# BRD C.4.3 -- the retail/bulk tag follows the order onto its invoice.
 	invoice.custom_order_channel = doc.custom_order_channel
+	invoice.customer_address = doc.customer_address
+	invoice.shipping_address_name = doc.shipping_address_name
 	invoice.insert(ignore_permissions=True)
 	invoice.submit()
 

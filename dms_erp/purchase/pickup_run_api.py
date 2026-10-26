@@ -121,11 +121,20 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 	for line in lines:
 		po_item_name = line["purchase_order_item"]
 		po_item = frappe.get_doc("Purchase Order Item", po_item_name)
-		po_supplier = frappe.db.get_value("Purchase Order", po_item.parent, "supplier")
-		if po_supplier != supplier:
+		po = frappe.db.get_value("Purchase Order", po_item.parent, ["supplier", "custom_drop_ship_sales_order"], as_dict=True)
+		if po.supplier != supplier:
 			frappe.throw(
 				_("Purchase Order Item {0} belongs to supplier {1}, not {2} — a Pickup Run can only cover one supplier.").format(
-					po_item_name, po_supplier, supplier
+					po_item_name, po.supplier, supplier
+				),
+				frappe.ValidationError,
+			)
+		if po.custom_drop_ship_sales_order:
+			# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the
+			# end customer and never passes through this app's own pickup flow.
+			frappe.throw(
+				_("Purchase Order Item {0} is on a drop-ship Purchase Order ({1}) and cannot be booked onto a Pickup Run.").format(
+					po_item_name, po_item.parent
 				),
 				frappe.ValidationError,
 			)
