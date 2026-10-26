@@ -10,7 +10,13 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import dealer_portal_api, inquiry_api, order_api, quotation_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestDealerPortalApi(FrappeTestCase):
@@ -24,8 +30,10 @@ class TestDealerPortalApi(FrappeTestCase):
 
 		cls.dealer = make_dealer("Dealer Portal Test Dealer")
 		cls.dealer_user = _dealer_portal_user(cls.dealer)
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.other_dealer = make_dealer("Dealer Portal Other Dealer")
 		cls.other_dealer_user = _dealer_portal_user(cls.other_dealer)
+		cls.other_billing_address, cls.other_shipping_address = make_dealer_addresses(cls.other_dealer)
 
 		cls.item = make_item("DP-TEST-ITEM", "Vitrified")
 		dealer_catalog_api.set_product_visibility(cls.dealer, cls.item, True)
@@ -259,7 +267,13 @@ class TestDealerPortalApi(FrappeTestCase):
 		from frappe.utils import add_days, today
 
 		frappe.set_user("Administrator")
-		order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 1}],
+			expected_dispatch=add_days(today(), 5),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 		frappe.set_user(self.dealer_user)
 
 		for o in (dealer_portal_api.get_my_order(order["id"]), *dealer_portal_api.list_my_orders()["items"]):
@@ -418,12 +432,16 @@ class TestDealerPortalApi(FrappeTestCase):
 	# ---- Quotations the dealer receives and accepts ---------------------------------
 
 	def _staff_quotation(self, dealer=None, inquiries=None, validity_days=7, freight=1200):
+		dealer = dealer or self.dealer
 		frappe.set_user("Administrator")
 		try:
+			billing, shipping = make_dealer_addresses(dealer)
 			return quotation_api.create_quotation(
-				dealer=dealer or self.dealer,
+				dealer=dealer,
 				lines=[{"item": self.item, "qty": 10}],
 				markup_pct=12,
+				customer_address=billing,
+				shipping_address_name=shipping,
 				freight=freight,
 				validity_days=validity_days,
 				inquiries=inquiries,
@@ -505,8 +523,13 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.addCleanup(frappe.db.rollback, save_point=savepoint)
 		frappe.set_user("Administrator")
 		try:
+			billing, shipping = make_dealer_addresses(dealer)
 			order = order_api.create_order(
-				dealer=dealer, lines=[{"item": self.item, "qty": 2}], expected_dispatch=add_days(today(), 5)
+				dealer=dealer,
+				lines=[{"item": self.item, "qty": 2}],
+				expected_dispatch=add_days(today(), 5),
+				customer_address=billing,
+				shipping_address_name=shipping,
 			)
 			frappe.db.set_value("Sales Order", order["id"], "custom_fulfillment_stage", "Dispatched")
 			invoice = order_api.create_sales_invoice(order["id"])

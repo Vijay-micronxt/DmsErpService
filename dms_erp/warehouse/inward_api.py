@@ -148,6 +148,16 @@ def add_truck(
 	if batch_no:
 		ensure_batch(item, batch_no)
 
+	if purchase_order and frappe.db.get_value("Purchase Order", purchase_order, "custom_drop_ship_sales_order"):
+		# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the end
+		# customer and never lands in this app's own warehouse, so it can't be
+		# booked onto an Inward Truck (a direct entrypoint, independent of
+		# Pickup Run/Route Plan, which already guard the same thing).
+		frappe.throw(
+			_("{0} is a drop-ship Purchase Order and cannot be booked onto an Inward Truck.").format(purchase_order),
+			frappe.ValidationError,
+		)
+
 	truck = frappe.get_doc(
 		{
 			"doctype": "Inward Truck",

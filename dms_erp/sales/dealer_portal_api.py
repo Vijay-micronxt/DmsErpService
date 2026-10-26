@@ -406,8 +406,15 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		)
 
 	lines = [{"item": doc.item, "qty": doc.qty}]
+	from dms_erp.sales.utils import default_billing_shipping_for
+
+	customer_address, shipping_address_name = default_billing_shipping_for(dealer)
 	try:
-		return _run_as_system(lambda: _create_order(dealer, lines, expected_dispatch, inquiry, customer_po=customer_po))
+		return _run_as_system(
+			lambda: _create_order(
+				dealer, lines, expected_dispatch, customer_address, shipping_address_name, inquiry, customer_po=customer_po
+			)
+		)
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		from dms_erp.sales.utils import safe_customer_message
 

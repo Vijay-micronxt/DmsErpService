@@ -10,7 +10,14 @@ from dms_erp.reports import warehouse_reports
 from dms_erp.sales import inquiry_api, order_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.warehouse.setup import setup_warehouse
-from dms_erp.warehouse.test_fixtures import ensure_company, make_bay, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_bay,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 # Relative to today: a fixed date rots into the past, and ERPNext then refuses the order
@@ -84,6 +91,7 @@ class TestWarehouseReports(FrappeTestCase):
 		# skewed by unrelated Vitrified-category sales created in other test files.
 		make_bay("WREPORT-DISPLAY-01", bay_type="display", categories=["Outdoor / Parking"])
 		dealer = make_dealer("Warehouse Reports Display Dealer")
+		billing, shipping = make_dealer_addresses(dealer)
 
 		slow_item = make_item("WREPORT-DISPLAY-SLOW", "Outdoor / Parking")
 		allocation_api.create_allocation(
@@ -94,7 +102,14 @@ class TestWarehouseReports(FrappeTestCase):
 		pricing_api.ensure_price_record(fast_item, self.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=fast_item, final_price=360, reason="Launch")
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=fast_item, qty=150, source="Phone")
-		order_api.create_order(dealer=dealer, lines=[{"item": fast_item, "qty": 150}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": fast_item, "qty": 150}],
+			expected_dispatch=DISPATCH,
+			customer_address=billing,
+			shipping_address_name=shipping,
+			inquiry=inquiry["id"],
+		)
 
 		result = warehouse_reports.display_replacement_suggestions()
 		row = next(r for r in result if r["currentDisplayItem"] == slow_item)
@@ -104,6 +119,7 @@ class TestWarehouseReports(FrappeTestCase):
 	def test_display_replacement_suggestions_skips_actively_selling_display_item(self):
 		make_bay("WREPORT-DISPLAY-02", bay_type="display", categories=["Outdoor / Parking"])
 		dealer = make_dealer("Warehouse Reports Display Dealer 2")
+		billing, shipping = make_dealer_addresses(dealer)
 
 		selling_item = make_item("WREPORT-DISPLAY-SELLING", "Outdoor / Parking")
 		pricing_api.ensure_price_record(selling_item, self.supplier, 300, 20, "2026-08-01")
@@ -112,7 +128,14 @@ class TestWarehouseReports(FrappeTestCase):
 			item=selling_item, batch_no="WREPORT-DISPLAY-B2", total_qty=10, lines=[{"bay": "WREPORT-DISPLAY-02", "qty": 10}], supplier=self.supplier
 		)
 		inquiry = inquiry_api.create_inquiry(dealer=dealer, item=selling_item, qty=5, source="Phone")
-		order_api.create_order(dealer=dealer, lines=[{"item": selling_item, "qty": 5}], expected_dispatch=DISPATCH, inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=dealer,
+			lines=[{"item": selling_item, "qty": 5}],
+			expected_dispatch=DISPATCH,
+			customer_address=billing,
+			shipping_address_name=shipping,
+			inquiry=inquiry["id"],
+		)
 
 		result = warehouse_reports.display_replacement_suggestions()
 		self.assertFalse(any(r["currentDisplayItem"] == selling_item for r in result))

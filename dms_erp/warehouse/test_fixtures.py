@@ -79,6 +79,47 @@ def make_dealer(customer_name: str) -> str:
 	return customer_name
 
 
+def make_dealer_addresses(dealer: str) -> tuple[str, str]:
+	"""BRD C.3.3 made customer_address/shipping_address_name mandatory on every
+	Sales Order/Quotation; every test that creates one needs a real Billing +
+	Shipping Address on file for its dealer first, same as a genuine staff
+	caller would. Idempotent like make_dealer -- reuses an existing pair rather
+	than creating duplicates when called again for the same dealer."""
+	from dms_erp.sales.dealer_address_api import create_dealer_address
+
+	existing = frappe.get_all(
+		"Dynamic Link",
+		filters={"link_doctype": "Customer", "link_name": dealer, "parenttype": "Address"},
+		pluck="parent",
+	)
+	if existing:
+		rows = frappe.get_all("Address", filters={"name": ["in", existing]}, fields=["name", "address_type"])
+		billing = next((r.name for r in rows if r.address_type == "Billing"), None)
+		shipping = next((r.name for r in rows if r.address_type == "Shipping"), None)
+		if billing and shipping:
+			return billing, shipping
+
+	billing = create_dealer_address(
+		dealer=dealer,
+		address_type="Billing",
+		address_line1="1 Test Billing St",
+		city="Test City",
+		state="Gujarat",
+		pincode="360001",
+		is_primary=True,
+	)["id"]
+	shipping = create_dealer_address(
+		dealer=dealer,
+		address_type="Shipping",
+		address_line1="1 Test Shipping St",
+		city="Test City",
+		state="Gujarat",
+		pincode="360001",
+		is_primary=True,
+	)["id"]
+	return billing, shipping
+
+
 def make_bay(code: str, bay_type: str = "main", dimensions: str = "36x8", zone: str = "Z", row: str = "R1", categories=None, parent_warehouse: str | None = None):
 	ensure_company()
 	setup_warehouse()

@@ -12,6 +12,7 @@ from dms_erp.sales.setup import setup_sales
 from dms_erp.warehouse.test_fixtures import (
 	ensure_company,
 	make_dealer,
+	make_dealer_addresses,
 	make_item,
 	make_supplier,
 )
@@ -44,6 +45,7 @@ class TestDeliveryRisk(FrappeTestCase):
 		setup_sales()
 		cls.supplier = make_supplier("Delivery Risk Test Supplier")
 		cls.dealer = make_dealer("Delivery Risk Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.db.set_single_value("DMS Purchase Settings", "po_delay_grace_days", 0)
@@ -65,7 +67,11 @@ class TestDeliveryRisk(FrappeTestCase):
 
 	def _order(self, item: str, qty: float, delivery_in_days: int = DISPATCH_DAYS) -> str:
 		return order_api.create_order(
-			dealer=self.dealer, lines=[{"item": item, "qty": qty}], expected_dispatch=add_days(today(), delivery_in_days)
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": qty}],
+			expected_dispatch=add_days(today(), delivery_in_days),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 		)["id"]
 
 	def _line(self, order: str) -> str:

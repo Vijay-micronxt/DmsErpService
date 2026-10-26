@@ -9,7 +9,8 @@
   "dealer_inactivity_days",
   "inactive_dealer_notify_user",
   "reservation_max_days",
-  "reservation_reminder_day"
+  "reservation_reminder_day",
+  "eway_bill_threshold_amount"
  ],
  "fields": [
   {
@@ -53,12 +54,19 @@
    "fieldname": "reservation_reminder_day",
    "fieldtype": "Int",
    "label": "Reservation Reminder Day"
+  },
+  {
+   "default": "50000",
+   "description": "BRD C.3.3 -- India's commonly-cited GST e-Way Bill threshold is ₹50,000, but real state-level variation exists; this app is white-labeled, so the value a consignment is checked against is per-site config, never hardcoded. Feeds order_api._serialize's ewayBillLikely flag only -- purely informational, no GSP/NIC call is made by dms_erp itself (india_compliance's own already-configured e-Way Bill module owns actual generation).",
+   "fieldname": "eway_bill_threshold_amount",
+   "fieldtype": "Currency",
+   "label": "e-Way Bill Threshold Amount"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-14 00:00:00.000000",
+ "modified": "2026-10-26 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",
  "name": "DMS Sales Settings",

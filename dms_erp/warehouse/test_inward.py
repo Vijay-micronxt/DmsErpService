@@ -2,8 +2,19 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.setup import setup_pricing
+from dms_erp.purchase import po_api
+from dms_erp.purchase.setup import setup_purchase
+from dms_erp.sales import order_api
 from dms_erp.warehouse import inward_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestInward(FrappeTestCase):
@@ -12,11 +23,31 @@ class TestInward(FrappeTestCase):
 		super().setUpClass()
 		ensure_company()
 		setup_catalog()
+		setup_purchase()
+		setup_pricing()
 		cls.item = make_item("INWARD-TEST-ITEM", "Vitrified")
 		cls.supplier = make_supplier("Inward Test Supplier")
+		cls.dealer = make_dealer("Inward Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+
+	def _drop_ship_purchase_order_item(self):
+		so_item = make_item("INWARD-DROPSHIP-SO-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(so_item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=so_item, final_price=360, reason="Launch")
+		so = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": so_item, "qty": 5}],
+			expected_dispatch="2027-01-15",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
+		po = po_api.create_purchase_order(
+			item=self.item, ordered_qty=50, supplier=self.supplier, expected_ready_date="2027-01-01", drop_ship_sales_order=so["id"]
+		)
+		return po["id"], po["lines"][0]["id"]
 
 	def test_add_truck_defaults_to_scheduled(self):
 		truck = inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=500, lr_number="LR-TEST-1")
@@ -100,3 +131,12 @@ class TestInward(FrappeTestCase):
 		self.assertEqual(len(page["items"]), 2)
 		self.assertEqual(page["limit"], 2)
 		self.assertEqual(page["offset"], 0)
+
+	def test_add_truck_rejects_a_drop_ship_purchase_order(self):
+		# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the end
+		# customer and never lands in this app's own warehouse; add_truck is a
+		# direct booking entrypoint independent of Pickup Run/Route Plan, so it
+		# needs this guard too.
+		po, po_item = self._drop_ship_purchase_order_item()
+		with self.assertRaises(frappe.ValidationError):
+			inward_api.add_truck(supplier=self.supplier, item=self.item, boxes=10, purchase_order=po, purchase_order_item=po_item)

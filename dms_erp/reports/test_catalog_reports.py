@@ -6,7 +6,13 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.reports import catalog_reports
 from dms_erp.sales import inquiry_api, order_api
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestCatalogReports(FrappeTestCase):
@@ -18,6 +24,7 @@ class TestCatalogReports(FrappeTestCase):
 		setup_pricing()
 		cls.supplier = make_supplier("Catalog Reports Test Supplier")
 		cls.dealer = make_dealer("Catalog Reports Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -48,7 +55,14 @@ class TestCatalogReports(FrappeTestCase):
 			pricing_api.approve_price(item=item, final_price=360, reason="Launch")
 
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=fast_item, qty=200, source="Phone")
-		order_api.create_order(dealer=self.dealer, lines=[{"item": fast_item, "qty": 200}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": fast_item, "qty": 200}],
+			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+		)
 
 		fastest_first = catalog_reports.product_movement_report(order="fast")
 		fast_idx = next(i for i, r in enumerate(fastest_first) if r["productId"] == fast_item)
@@ -62,7 +76,14 @@ class TestCatalogReports(FrappeTestCase):
 		pricing_api.approve_price(item=item, final_price=370, reason="Cost increase")
 
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=30, source="Phone")
-		order_api.create_order(dealer=self.dealer, lines=[{"item": item, "qty": 30}], expected_dispatch="2026-09-01", inquiry=inquiry["id"])
+		order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 30}],
+			expected_dispatch="2026-09-01",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+		)
 
 		result = catalog_reports.product_activity_report(item=item)
 		row = result[0]

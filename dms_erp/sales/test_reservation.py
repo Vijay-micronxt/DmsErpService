@@ -7,7 +7,13 @@ from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.setup import setup_pricing
 from dms_erp.sales import order_api, reservation
 from dms_erp.sales.setup import setup_sales
-from dms_erp.warehouse.test_fixtures import ensure_company, make_dealer, make_item, make_supplier
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 
 class TestReservation(FrappeTestCase):
@@ -24,6 +30,7 @@ class TestReservation(FrappeTestCase):
 		setup_sales()
 		cls.supplier = make_supplier("Reservation Test Supplier")
 		cls.dealer = make_dealer("Reservation Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
 		cls.item = make_item("RESERVATION-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
@@ -32,7 +39,11 @@ class TestReservation(FrappeTestCase):
 
 	def _order(self) -> str:
 		return order_api.create_order(
-			dealer=self.dealer, lines=[{"item": self.item, "qty": 5}], expected_dispatch=add_days(today(), 30)
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 5}],
+			expected_dispatch=add_days(today(), 30),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
 		)["id"]
 
 	def _review(self, days_from_today: int) -> dict:

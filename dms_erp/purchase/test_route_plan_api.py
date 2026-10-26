@@ -4,9 +4,18 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from dms_erp.catalog.setup import setup_catalog
+from dms_erp.pricing import api as pricing_api
+from dms_erp.pricing.setup import setup_pricing
 from dms_erp.purchase import pickup_run_api, po_api, route_plan_api, transporter_api
 from dms_erp.purchase.setup import setup_purchase
-from dms_erp.warehouse.test_fixtures import ensure_company, make_item, make_supplier
+from dms_erp.sales import order_api
+from dms_erp.warehouse.test_fixtures import (
+	ensure_company,
+	make_dealer,
+	make_dealer_addresses,
+	make_item,
+	make_supplier,
+)
 
 _ORIGIN = (12.9716, 77.5946)
 
@@ -55,14 +64,36 @@ class TestRoutePlanApi(FrappeTestCase):
 		cls.transporter = transporter["id"]
 		cls.vehicle_row = transporter["vehicles"][0]["id"]
 
+		setup_pricing()
+		cls.dealer = make_dealer("Route Plan Test Dealer")
+		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
+
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
-	def _ready_line(self, supplier, ordered_qty=1000, ready_qty=500):
-		po = po_api.create_purchase_order(item=self.item, ordered_qty=ordered_qty, supplier=supplier, expected_ready_date="2026-09-01")
+	def _ready_line(self, supplier, ordered_qty=1000, ready_qty=500, drop_ship_sales_order=None):
+		po = po_api.create_purchase_order(
+			item=self.item,
+			ordered_qty=ordered_qty,
+			supplier=supplier,
+			expected_ready_date="2026-09-01",
+			drop_ship_sales_order=drop_ship_sales_order,
+		)
 		line_id = po["lines"][0]["id"]
 		po_api.set_line_ready(po["id"], line_id, ready_qty)
 		return line_id
+
+	def _submitted_sales_order(self):
+		item = make_item("ROUTE-PLAN-DROPSHIP-SO-ITEM", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier_a, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+		return order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": item, "qty": 5}],
+			expected_dispatch="2027-01-15",
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
 
 	def _two_stop_plan(self, qty_a=100, qty_b=100):
 		line_a = self._ready_line(self.supplier_a)
@@ -230,3 +261,30 @@ class TestRoutePlanApi(FrappeTestCase):
 				stops=[{"supplier": no_gps_supplier}],
 				lines=[{"purchase_order_item": line, "qty": 10}],
 			)
+
+	def test_create_route_plan_rejects_a_drop_ship_po_line(self):
+		# BRD C.3.3 -- a drop-ship PO ships straight from the supplier to the end
+		# customer and never passes through this app's own route plan.
+		so = self._submitted_sales_order()
+		line = self._ready_line(self.supplier_a, ready_qty=200, drop_ship_sales_order=so["id"])
+		with self.assertRaises(frappe.ValidationError):
+			route_plan_api.create_route_plan(
+				transporter=self.transporter,
+				transporter_vehicle=self.vehicle_row,
+				stops=[{"supplier": self.supplier_a}],
+				lines=[{"purchase_order_item": line, "qty": 100}],
+			)
+
+	def test_add_route_plan_line_rejects_a_drop_ship_po_line(self):
+		line_a = self._ready_line(self.supplier_a, ready_qty=300)
+		plan = route_plan_api.create_route_plan(
+			transporter=self.transporter,
+			transporter_vehicle=self.vehicle_row,
+			stops=[{"supplier": self.supplier_a}],
+			lines=[{"purchase_order_item": line_a, "qty": 100}],
+		)
+
+		so = self._submitted_sales_order()
+		drop_ship_line = self._ready_line(self.supplier_a, ready_qty=200, drop_ship_sales_order=so["id"])
+		with self.assertRaises(frappe.ValidationError):
+			route_plan_api.add_route_plan_line(plan["id"], drop_ship_line, 50)
