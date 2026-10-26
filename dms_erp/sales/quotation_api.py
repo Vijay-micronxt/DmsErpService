@@ -83,6 +83,8 @@ def _serialize(doc) -> dict:
 		"deliveryPincode": doc.get("custom_delivery_pincode"),
 		"inquiryId": doc.custom_inquiry,
 		"channel": doc.custom_order_channel,
+		"customerAddress": doc.customer_address,
+		"shippingAddressName": doc.shipping_address_name,
 		"lines": [_serialize_line(row) for row in doc.items],
 		"total": doc.grand_total,
 		"netTotal": doc.net_total,

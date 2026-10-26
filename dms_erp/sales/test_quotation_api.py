@@ -80,6 +80,15 @@ class TestQuotationApi(FrappeTestCase):
 		self.assertEqual(quotation["lines"][0]["rate"], 560)  # round(500 * 1.12)
 		self.assertEqual(quotation["channel"], "Retail")  # default
 
+	def test_create_quotation_exposes_the_addresses_it_was_created_with(self):
+		# BRD C.3.3 -- a staff-facing client (e.g. the Quotation Builder) needs to be able to
+		# read back which addresses were actually picked, not just that creation succeeded.
+		quotation = self._create_quotation(
+			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12
+		)
+		self.assertEqual(quotation["customerAddress"], self.billing_address)
+		self.assertEqual(quotation["shippingAddressName"], self.shipping_address)
+
 	def test_create_quotation_stores_delivery_pincode(self):
 		quotation = self._create_quotation(
 			dealer=self.dealer, lines=[{"item": self.priced_item, "qty": 10}], markup_pct=12, delivery_pincode="560001"
