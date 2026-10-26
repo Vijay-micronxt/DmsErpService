@@ -162,6 +162,22 @@ CUSTOM_FIELDS = {
 			"insert_after": "custom_reservation_reminder_sent_on",
 		},
 	],
+	"Sales Order Item": [
+		# BRD C.3.2 -- set once by sales.delivery_risk.review_delivery_risk (daily) when
+		# a delayed supplier PO line threatens this specific line's own delivery_date.
+		# Per-line, not header like custom_reservation_flagged_on above, because
+		# delivery_date and delay risk both vary per line on a multi-item order.
+		# Read-only, never cleared, so the same at-risk line isn't re-notified every day
+		# it stays open.
+		{
+			"fieldname": "custom_delivery_risk_flagged_on",
+			"fieldtype": "Date",
+			"label": "Delivery Risk Flagged On",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"insert_after": "delivery_date",
+		},
+	],
 	"Quotation Item": [
 		{
 			"fieldname": "custom_delivery_date",

@@ -618,6 +618,7 @@ GET /api/method/dms_erp.dashboard.api.purchase_dashboard
 | `catalog_reports.product_movement_report` | optional `order` ("slow"/"fast") |
 | `catalog_reports.product_activity_report` | optional `item` |
 | `forecasting.demand_forecast` | optional `weeks_ahead` (default 4) — always returns `"low"` confidence by design |
+| `delivery_risk.delivery_risk_window` | optional `customer`, `item`, `supplier` — BRD C.3.2 forecasting/stock window, live FIFO model |
 
 ---
 

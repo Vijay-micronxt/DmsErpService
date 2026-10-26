@@ -65,6 +65,9 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 # (see catalog/withdrawal_api.py) -- a no-op for every Series that hasn't opted in.
 # BRD C.10.2: every Active Display Placement Slip gets a WhatsApp nudge once it
 # crosses the next 3/6/12-month monitoring interval (see catalog/sample_api.py).
+# BRD C.3.2: a delayed supplier PO that threatens an open order's own delivery
+# date flags that order line and notifies its salesperson + Management (see
+# sales/delivery_risk.py) -- a no-op for every item with no delayed supply.
 scheduler_events = {
 	"daily": [
 		"dms_erp.purchase.reorder_api.notify_reorder_review",
@@ -76,6 +79,7 @@ scheduler_events = {
 		"dms_erp.sales.dealer_activity.flag_inactive_dealers",
 		# ISS-2026-00635 -- day-20 reminder / past-21-days review flag on open Sales Orders.
 		"dms_erp.sales.reservation.review_reservations",
+		"dms_erp.sales.delivery_risk.review_delivery_risk",
 	],
 	# MOM §3.7 -- "every month, the system will generate a list of active dealer numbers."
 	"monthly": [

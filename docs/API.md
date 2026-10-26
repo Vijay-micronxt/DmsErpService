@@ -70,6 +70,7 @@ POST /api/method/dms_erp.auth.api.refresh_token
 - [Reports — Finance](#reports-finance)
 - [Reports — Catalog](#reports-catalog)
 - [Reports — Forecasting](#reports-forecasting)
+- [Reports — Delivery Risk](#reports-delivery-risk)
 
 ---
 
@@ -3866,4 +3867,44 @@ The BRD's "Forecasting dashboard". No forecasting methodology was specified in t
 ```
 
 > ⚠️ confidence is always "low" right now by design — surface it in the UI wherever a projected number is shown, don't present this as a precise forecast
+
+## Reports — Delivery Risk
+
+BRD C.3.2's forecasting/stock window — per order and item, stock-in-hand/in-transit/factory-dispatch status and an at-risk flag, groupable by customer/item/supplier via the three filter params. A live FIFO model, not a recorded allocation: nothing in this app links a specific Purchase Order line to the Sales Order(s) it covers, so "which orders are at risk" is computed every call — oldest open order first (by `transaction_date`) against available supply (stock on hand, then on-track in-transit/factory-dispatch, then delayed in-transit/factory-dispatch). The same computation (`sales.delivery_risk.at_risk_sales_order_lines`) backs the daily `review_delivery_risk` escalation job, so the report and the flag always agree.
+
+#### GET `dms_erp.reports.delivery_risk.delivery_risk_window`
+
+**Delivery risk window**
+
+**Params**
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `customer` | string | optional | exact match on the Sales Order's dealer |
+| `item` | string | optional | exact match on item code |
+| `supplier` | string | optional | matches any covering Purchase Order's supplier |
+
+**Response**
+
+```json
+{
+  "rows": [{
+    "salesOrder": "SO-2026-00042", "salesOrderItem": "...", "customer": "Sharma Tiles",
+    "item": "PVT-6060", "deliveryDate": "2026-09-20",
+    "coveredFrom": "factory_dispatch_delayed", "atRisk": true, "delayDays": 10,
+    "coveringPoLines": [{"po": "PO-2026-00017", "supplier": "Sunrise Vitrified", "scheduleDate": "2026-09-05", "daysOverdue": 10}]
+  }],
+  "summary": {
+    "lineCount": 1, "atRiskCount": 1,
+    "byCustomer": {"Sharma Tiles": 1}, "byItem": {"PVT-6060": 1}, "bySupplier": {"Sunrise Vitrified": 1}
+  }
+}
+```
+
+> Every open Sales Order line gets a row, not just at-risk ones — `coveredFrom` is one of `stock` / `in_transit_ontrack` / `factory_dispatch_ontrack` / `in_transit_delayed` / `factory_dispatch_delayed` / `uncovered`. `atRisk` is only ever true when the line's own item has at least one delayed Purchase Order line **and** the covering supply is delayed (or the line is left uncovered) **and** its own `deliveryDate` is imminent (within `DMS Purchase Settings.delivery_risk_eta_buffer_days`) — an uncovered line with no delay anywhere in its supply is a plain reorder gap (`purchase.reorder_api`'s own territory), never flagged here.
+> The summary rollups (`byCustomer`/`byItem`/`bySupplier`) count only at-risk rows, so a mostly-healthy window still shows at a glance where the real exposure is.
+
+#### Scheduled job: `dms_erp.sales.delivery_risk.review_delivery_risk` (daily)
+
+Flags each newly at-risk Sales Order Item (`custom_delivery_risk_flagged_on`, set once, never cleared) and notifies the dealer's salesperson plus Management via the same in-app `Notification Log` every other daily job in this app uses — there's no real outbound WhatsApp/email send anywhere in `dms_erp` (`comms/api.py`'s own docstring), so "dealer notification" here stays a log-only escalation to the person positioned to actually call them, not a second pretend-send path for that same unsolved gap.
 

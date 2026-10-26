@@ -375,6 +375,10 @@ Inquiry workflow it says is in scope), Wave 1.*
 | TC-SO-12c | Dispatched orders leave the timeline | Move a flagged or reminded order to Dispatched. | No more reminders/flags; its reservation state reads Closed and the badge disappears. 21/20 days come from DMS Sales Settings (Reservation Window / Reservation Reminder Day), not code. | C.3.1 | M2 / Wave 1 |
 | TC-SO-12d | Find an order by its Sales Invoice number (ISS-2026-00630) | Raise a Sales Invoice on a dispatched order, then type the invoice number into the Orders search. | That order is found. (Invoices imported from Tally have no order link, so they're found from Invoices, not Orders.) | C.12 | M2 / Wave 1 |
 | TC-SO-12e | Print a sales order | Orders → open one → Print. | Printable page with order no., date, delivery date, the dealer's PO number, lines with weight, taxes and grand total. | C.3.1 / 8.3 | M2 / Wave 1 |
+| TC-SO-12f | A delayed supplier PO threatens an order's own delivery date (BRD C.3.2) | Raise a PO past its own expected-ready date for an item on an open order due soon, then run `sales.delivery_risk.review_delivery_risk`. | That order line is flagged at-risk once; its salesperson (Management if none) is notified, naming the item and delivery date. Running the job again doesn't re-notify the same line. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12g | A delay on stock already covering an order doesn't flag it | Same delayed PO as TC-SO-12f, but the order's own delivery date is still far out. | The line is not flagged — a delay alone isn't enough; it must actually threaten that order's own date. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12h | Two orders for the same item, only enough on-track supply for the first | Raise one on-track PO sized to exactly cover an earlier order and one delayed PO as the only remaining supply, with a later order for the rest. | The earlier order is unaffected; the later order is the one flagged at-risk — it's the delayed supply specifically, not a shortage in general, that puts it at risk. | C.3.2 | M2 / Wave 1 |
+| TC-SO-12i | Delivery risk window report, groupable by customer/item/supplier | Open the forecasting/stock window (`reports.delivery_risk.delivery_risk_window`) with each of `customer=`, `item=` and `supplier=` in turn. | Each filter narrows to that axis correctly; every open order line shows its stock-in-hand/in-transit/factory-dispatch coverage, not just the at-risk ones; the summary rollups count only at-risk lines per axis. | C.3.2 | M2 / Wave 1 |
 
 ### 5.3 Orders created directly by the dealer (WhatsApp / Dealer Portal)
 
@@ -385,8 +389,6 @@ Inquiry workflow it says is in scope), Wave 1.*
 
 ### Known gaps — not yet built
 
-- **C.3.2** Supplier vs customer timeline comparison / delay-impact escalation, and the
-  stock-in-hand/in-transit/factory-dispatch forecasting window — not built.
 - **C.3.3** Bill-to/Ship-to validation, drop-ship (Sales Order linked to a PO shipping
   direct to the customer), and automatic e-Way Bill generation — **confirmed not built at
   all** (no `drop_ship`/`bill_to`/`ship_to`/`eway` references anywhere in `sales/*.py`).
@@ -859,8 +861,6 @@ For quick reference — do not file these as bugs, and don't spend QA time hunti
 - **C.2.6** Proactive WhatsApp follow-up reminders (dealer or staff CRM) — genuinely new
   capability, deliberately blocked on confirming whats91's real template/button-reply API.
   Milestone 3, Wave 1 (not built, not a Wave-2 deferral).
-- **C.3.2** Supplier-vs-customer timeline/delay-impact comparison and the
-  stock-in-hand/in-transit/factory-dispatch forecasting window.
 - **C.3.3** Bill-to/Ship-to validation, drop-ship, and automatic e-Way Bill generation —
   confirmed absent from the codebase entirely, not merely untested.
 - **C.3.4** The real India Banking / VALS API integration (only an interim manual gate

@@ -169,6 +169,25 @@ Pick Tasks; everyone reads.
   auto-cancel; releasing the stock stays a person's call. Both dates are stored on
   the order and never cleared, so each happens once; `order_api` returns the state
   as `reservation`.
+- **Delivery risk** (`delivery_risk.py`, BRD C.3.2) — daily job comparing a Purchase
+  Order line's own `schedule_date` (supplier commitment) against open Sales Order
+  lines' `delivery_date` (customer commitment). Nothing links a PO line to the
+  Sales Order(s) it covers, so which orders are at risk is computed live every
+  run — a deterministic FIFO match (oldest open order first by `transaction_date`)
+  against available supply (stock on hand, then on-track in-transit/
+  factory-dispatch, then delayed in-transit/factory-dispatch). A line only flags
+  if its covering supply is actually delayed *and* its own `delivery_date` is
+  imminent (within `DMS Purchase Settings.delivery_risk_eta_buffer_days`) — a
+  delayed PO alone, or a shortfall with no delay involved at all (that's
+  `purchase.reorder_api`'s territory), doesn't flag. Flags once
+  (`custom_delivery_risk_flagged_on` on Sales Order Item, never cleared) and
+  notifies the dealer's salesperson + Management, same split `reservation.py`
+  already uses. "Dealer notification" (BRD's own wording) stays log-only to the
+  salesperson — this app has no real outbound WhatsApp/email send anywhere
+  (`comms/api.py`'s own docstring), and this doesn't add a second pretend-send
+  path for that same unsolved gap. `reports/delivery_risk.py`'s
+  `delivery_risk_window` is the forecasting/stock-window report over the same
+  computation, filterable by customer/item/supplier.
 - **ERP -> Tally sync — DISABLED, in development** (see `hooks.py`: hooks commented out,
   no custom fields on migrate, agent endpoints refuse until `TALLY_SYNC_ENABLED`).
   (`tally_sync.py`, client request Oct 2026 -- not in the BRD,
