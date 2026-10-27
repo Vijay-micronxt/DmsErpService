@@ -775,6 +775,17 @@ def _serialize_invoice(doc) -> dict:
 		"date": doc.posting_date,
 		"dealerId": doc.customer,
 		"salesOrder": doc.items[0].sales_order if doc.items else None,
+		# Several orders' worth of items can share one invoice (create_consolidated_sales_invoice)
+		# -- every distinct source order, not just the first one salesOrder above reports.
+		"salesOrders": sorted({row.sales_order for row in doc.items if row.sales_order}),
+		"clubbedOrders": [
+			{
+				"salesOrder": row.sales_order,
+				"billingAddress": row.billing_address,
+				"shippingAddress": row.shipping_address,
+			}
+			for row in doc.get("custom_clubbed_orders") or []
+		],
 		"grandTotal": doc.grand_total,
 		"outstandingAmount": doc.outstanding_amount,
 		"status": doc.status,
@@ -827,6 +838,102 @@ def create_sales_invoice(order: str):
 	invoice.custom_order_channel = doc.custom_order_channel
 	invoice.customer_address = doc.customer_address
 	invoice.shipping_address_name = doc.shipping_address_name
+	invoice.insert(ignore_permissions=True)
+	invoice.submit()
+
+	return _serialize_invoice(invoice)
+
+
+# Child-row fields make_sales_invoice's draft rows carry that must NOT follow the row onto a
+# different invoice: each is either an identity Frappe assigns fresh on insert (name/idx), or a
+# linkage field Frappe sets itself when the row is appended to the merged invoice (parent/
+# parentfield/parenttype), or bookkeeping that belongs to the eventual actual insert, not the
+# as-yet-unsaved source draft (owner/creation/modified/modified_by/docstatus).
+_MAPPED_ITEM_ROW_SYSTEM_FIELDS = {
+	"name",
+	"parent",
+	"parentfield",
+	"parenttype",
+	"idx",
+	"owner",
+	"creation",
+	"modified",
+	"modified_by",
+	"docstatus",
+}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_consolidated_sales_invoice(orders: list[str]):
+	"""Client request (Oct 2026, Vijay/Karthik over WhatsApp): several Sales Orders billed as
+	one Sales Invoice. Delivery Notes are deliberately left out of scope -- Karthik's own point
+	in that chat was that clubbing those too "will change the current system flow" and isn't
+	needed now, so _create_delivery_note keeps firing one per order exactly as it already does;
+	nothing here touches it.
+
+	Reuses create_sales_invoice's own per-order gating (Dispatched/Delivered, not already
+	invoiced) against every order in the batch up front, so a bad order in the selection fails
+	loudly before anything is built, rather than invoicing part of the batch.
+
+	A Sales Invoice has exactly one customer_address/shipping_address_name pair (and one po_no),
+	so unlike the single-order flow this can't just copy each order's own fields across --
+	orders[0] (whichever the caller lists first; the staff-app selection bar uses selection
+	order) wins for the invoice's real customer_address/shipping_address_name/po_no, since those
+	drive GST-state and e-Way-Bill logic and need exactly one value. Every clubbed order's own
+	billing/shipping address is still recorded on custom_clubbed_orders so nothing is silently
+	dropped, even though only orders[0]'s pair is what tax/e-Way-Bill calculation actually sees
+	-- callers are expected to warn staff about any address or PO-number mismatch before calling
+	this, same as the dealer-mismatch check below, since the UI can see that without a round trip.
+
+	Builds the merged invoice via make_sales_invoice per order (so each line's rate/tax/account
+	are resolved exactly as the single-order flow already trusts), then appends every order
+	after the first one's mapped item rows onto the first order's own mapped invoice -- never
+	manually recomputed, only ERPNext's own calculate_taxes_and_totals (run automatically at
+	insert/submit) ever derives the totals, same as every other document this app creates."""
+	_assert_can_manage_orders()
+
+	orders = list(dict.fromkeys(orders or []))
+	if len(orders) < 2:
+		frappe.throw(_("Select at least two orders to club into one invoice."), frappe.ValidationError)
+
+	docs = [frappe.get_doc("Sales Order", o) for o in orders]
+	if len({d.customer for d in docs}) > 1:
+		frappe.throw(
+			_("Selected orders are for different dealers — can't merge into one invoice."), frappe.ValidationError
+		)
+	for d in docs:
+		if d.custom_fulfillment_stage not in ("Dispatched", "Delivered"):
+			frappe.throw(
+				_("{0} must be Dispatched or Delivered before it can be invoiced (currently {1}).").format(
+					d.name, d.custom_fulfillment_stage
+				),
+				frappe.ValidationError,
+			)
+		if _order_invoices(d.name):
+			frappe.throw(_("{0} is already invoiced.").format(d.name), frappe.ValidationError)
+
+	from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+
+	base = docs[0]
+	invoice = make_sales_invoice(base.name, ignore_permissions=True)
+	for d in docs[1:]:
+		mapped = make_sales_invoice(d.name, ignore_permissions=True)
+		for row in mapped.items:
+			row_fields = {k: v for k, v in row.as_dict().items() if k not in _MAPPED_ITEM_ROW_SYSTEM_FIELDS}
+			invoice.append("items", row_fields)
+
+	invoice.custom_order_channel = base.custom_order_channel
+	invoice.customer_address = base.customer_address
+	invoice.shipping_address_name = base.shipping_address_name
+	for d in docs:
+		invoice.append(
+			"custom_clubbed_orders",
+			{
+				"sales_order": d.name,
+				"billing_address": d.customer_address,
+				"shipping_address": d.shipping_address_name,
+			},
+		)
 	invoice.insert(ignore_permissions=True)
 	invoice.submit()
 
