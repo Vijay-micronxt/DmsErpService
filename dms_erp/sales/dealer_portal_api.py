@@ -279,12 +279,17 @@ def get_excluded_stock(item: str) -> list[dict]:
 
 
 @frappe.whitelist(methods=["POST"])
-def raise_inquiry(item: str, qty: float, remarks: str | None = None):
+def raise_inquiry(item: str, qty: float, remarks: str | None = None, damaged_stock: bool = False):
 	"""BRD C.13.1 — the out-of-stock / "raise an enquiry" path. Always source="Web"
 	and always unassigned (see inquiry_api._create_inquiry's own staff-only
-	self-assignment default) since this is the dealer, not staff, raising it."""
+	self-assignment default) since this is the dealer, not staff, raising it.
+
+	ISS-2026-00678 -- `damaged_stock` is set when the dealer added this from the
+	item page's damaged/insurance-claim-bay stock display rather than the regular
+	"raise an enquiry" action; see inquiry_api._create_inquiry's own docstring for
+	how it carries through to the eventual order and picking."""
 	dealer = _current_dealer()
-	data = _create_inquiry(dealer, item, qty, source="Web", remarks=remarks)
+	data = _create_inquiry(dealer, item, qty, source="Web", remarks=remarks, damaged_stock=damaged_stock)
 	data["orderable"] = is_visible(dealer, item)
 	data.pop("price", None)
 	return data
@@ -301,7 +306,11 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 	inquiries of one dealer). `items` is a list of {item, qty}, JSON when sent as a
 	form field. Every line is validated before anything is created, and a failure
 	partway rolls the whole request back (Frappe's per-request transaction), so a
-	dealer never ends up with half a list raised."""
+	dealer never ends up with half a list raised.
+
+	ISS-2026-00678 -- an entry may also carry `damagedStock`/`damaged_stock`
+	(either key accepted) when it came from the item page's damaged/
+	insurance-claim-bay stock display rather than the regular catalogue."""
 	dealer = _current_dealer()
 	entries = frappe.parse_json(items) if isinstance(items, str) else items
 	if not entries:
@@ -325,7 +334,13 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 	group = None
 	for entry in entries:
 		inquiry = _create_inquiry(
-			dealer, entry["item"], flt(entry["qty"]), source="Web", remarks=remarks, request_group=group
+			dealer,
+			entry["item"],
+			flt(entry["qty"]),
+			source="Web",
+			remarks=remarks,
+			request_group=group,
+			damaged_stock=bool(entry.get("damagedStock") or entry.get("damaged_stock")),
 		)
 		if group is None:
 			group = inquiry["id"]
@@ -563,21 +578,30 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	return data
 
 
-# Client finding ISS-2026 "only show pending orders" (sheet item) -- the dealer portal's
-# Orders screen lands on this view by default; Delivered/Cancelled only show up when a
-# dealer explicitly picks that tab. Matches order_api.ORDER_STAGES' own terminal states.
-COMPLETED_ORDER_STAGES = ("Delivered", "Cancelled")
+# Client finding ISS-2026 "only show pending orders" (sheet item), refined 27 Oct 2026 --
+# the dealer portal's Orders screen collapses order_api.ORDER_STAGES' 6 stages down to 2
+# tabs: Open (Confirmed/Picking/Ready to Dispatch/Dispatched) and Cancelled. No separate
+# "Pending" tab and no "All" tab -- a just-placed order is Open from the start, same as one
+# already being picked.
+#
+# Delivered is deliberately in NEITHER tab -- a client-confirmed gap, not an oversight: once
+# an order is Delivered it has no tab of its own, and the Sales Invoice (once one exists) is
+# meant to be the dealer's record of it instead. That invoice is not automatic, though --
+# create_sales_invoice is a separate, manually-triggered staff action, so a Delivered order
+# can genuinely sit uninvoiced (and therefore invisible on this screen) for a while. Accepted
+# deliberately; revisit if that proves confusing in practice.
+OPEN_ORDER_STAGES = ("Confirmed", "Picking", "Ready to Dispatch", "Dispatched")
 
 
 @frappe.whitelist(methods=["GET"])
-def list_my_orders(stage: str | None = None, exclude_completed: bool = False, limit: int = 20, offset: int = 0):
+def list_my_orders(stage: str | None = None, stage_group: str | None = None, limit: int = 20, offset: int = 0):
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 	filters = {"customer": dealer}
 	if stage:
 		filters["custom_fulfillment_stage"] = stage
-	elif exclude_completed:
-		filters["custom_fulfillment_stage"] = ["not in", COMPLETED_ORDER_STAGES]
+	elif stage_group == "open":
+		filters["custom_fulfillment_stage"] = ["in", OPEN_ORDER_STAGES]
 	total = frappe.db.count("Sales Order", filters=filters)
 	names = frappe.get_all(
 		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

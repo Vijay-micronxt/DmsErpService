@@ -32,6 +32,7 @@ def _serialize(doc) -> dict:
 		"orderNumber": doc.sales_order,
 		"itemCode": doc.item,
 		"batchNumber": doc.batch_no,
+		"damagedStock": bool(doc.get("damaged_stock")),
 		"qty": doc.qty,
 		"allocated": doc.allocated_qty,
 		"suggestedBayId": doc.suggested_bay,
@@ -79,7 +80,12 @@ def ensure_pick_tasks(order: str):
 		if row.name in existing:
 			continue
 		item_group = frappe.get_cached_value("Item", row.item_code, "item_group")
-		suggestion = suggest_bays(item_group, row.qty)["main"]
+		# ISS-2026-00678 -- a line the dealer explicitly asked for against damaged/
+		# insurance-claim stock (custom_damaged_stock, carried from the source
+		# Inquiry/Quotation line) must be picked from a Damages Bay specifically, not
+		# suggested a normal "main" bay -- suggest_bays already supports this via `kind`.
+		kind = "damage" if row.get("custom_damaged_stock") else "normal"
+		suggestion = suggest_bays(item_group, row.qty, kind=kind)["main"]
 		suggested_bay = suggestion[0]["bay"]["id"] if suggestion else None
 
 		doc = frappe.get_doc(
@@ -88,6 +94,7 @@ def ensure_pick_tasks(order: str):
 				"sales_order": order,
 				"sales_order_item": row.name,
 				"item": row.item_code,
+				"damaged_stock": kind == "damage",
 				"qty": row.qty,
 				"suggested_bay": suggested_bay,
 				"status": "Pending",

@@ -202,6 +202,10 @@ def _serialize_line(row) -> dict:
 		# Sheet 7.8 -- the originally entered qty/unit, only when it wasn't Box.
 		"enteredQty": row.get("custom_entered_qty"),
 		"enteredUom": row.get("custom_entered_uom"),
+		# ISS-2026-00678 -- this line is against damaged/insurance-claim bay stock the
+		# dealer explicitly asked for, not regular inventory -- see picking_api.
+		# ensure_pick_tasks, which reads this same field to route picking accordingly.
+		"damagedStock": bool(row.get("custom_damaged_stock")),
 	}
 
 
@@ -362,6 +366,9 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 		# (see catalog.utils.normalize_order_line_uoms); None/None for a plain box order.
 		"custom_entered_qty": line.get("entered_qty"),
 		"custom_entered_uom": line.get("entered_uom"),
+		# ISS-2026-00678 -- same field/meaning as quotation_api._priced_items' own; read by
+		# picking_api.ensure_pick_tasks to route this line to a Damages Bay.
+		"custom_damaged_stock": bool(line.get("damaged_stock")),
 	}
 
 

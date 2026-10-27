@@ -9,6 +9,7 @@
   "sales_order",
   "sales_order_item",
   "item",
+  "damaged_stock",
   "batch_no",
   "column_break_1",
   "qty",
@@ -40,6 +41,15 @@
    "label": "Item",
    "options": "Item",
    "reqd": 1
+  },
+  {
+   "description": "ISS-2026-00678 -- copied from the Sales Order Item's own custom_damaged_stock at creation (sales.picking_api.ensure_pick_tasks), which is also what decided suggested_bay below (a Damages Bay instead of a normal one). Shown so a picker doesn't need to cross-reference the order line to know why this task points where it does.",
+   "default": "0",
+   "fieldname": "damaged_stock",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Damaged Stock"
   },
   {
    "fieldname": "batch_no",

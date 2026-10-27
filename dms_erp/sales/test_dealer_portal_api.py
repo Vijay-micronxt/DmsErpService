@@ -174,6 +174,47 @@ class TestDealerPortalApi(FrappeTestCase):
 		listed = {i["id"]: i["orderable"] for i in dealer_portal_api.list_my_inquiries(limit=50)["items"]}
 		self.assertFalse(listed[unassigned["id"]])
 
+	def test_raise_inquiry_damaged_stock_status_derives_from_damage_bay_only(self):
+		"""ISS-2026-00678 -- a damaged-stock request's status must reflect the
+		Damages Bay's own qty, not total_stock_for_item (which blends it with
+		regular stock and would report "Available" even when the Damages Bay
+		alone can't cover it)."""
+		from dms_erp.warehouse import allocation_api
+		from dms_erp.warehouse.test_fixtures import make_bay
+
+		item = make_item("DP-DAMAGED-ITEM", "Vitrified")
+		dealer_catalog_api.set_product_visibility(self.dealer, item, True)
+		pricing_api.ensure_price_record(item, self.supplier, 300, 20, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=360, reason="Launch")
+
+		main_bay = make_bay("DP-DAMAGED-MAIN-01", bay_type="main", categories=["Vitrified"])
+		damage_bay = make_bay("DP-DAMAGED-DMG-01", bay_type="damage", categories=["Vitrified"])
+		allocation_api.create_allocation(
+			item=item, batch_no="DP-DAMAGED-B1", total_qty=100, lines=[{"bay": main_bay["code"], "qty": 100}], supplier=self.supplier
+		)
+		allocation_api.create_allocation(
+			item=item, batch_no="DP-DAMAGED-B2", total_qty=2, lines=[{"bay": damage_bay["code"], "qty": 2}], supplier=self.supplier
+		)
+
+		# Regular inquiry: on_hand=102 (blended total) comfortably covers qty=5.
+		normal = dealer_portal_api.raise_inquiry(item=item, qty=5)
+		self.assertEqual(normal["status"], "Available")
+		self.assertFalse(normal["damagedStock"])
+
+		# Damaged-stock inquiry for the same item: only 2 boxes actually sit in
+		# the Damages Bay, so qty=5 against it is Partially Available.
+		damaged = dealer_portal_api.raise_inquiry(item=item, qty=5, damaged_stock=True)
+		self.assertEqual(damaged["status"], "Partially Available")
+		self.assertTrue(damaged["damagedStock"])
+
+	def test_raise_inquiries_accepts_damaged_stock_per_line(self):
+		result = dealer_portal_api.raise_inquiries(
+			items=[{"item": self.item, "qty": 2, "damagedStock": True}, {"item": self.hidden_item, "qty": 1}]
+		)
+		by_item = {row["productId"]: row for row in result["items"]}
+		self.assertTrue(by_item[self.item]["damagedStock"])
+		self.assertFalse(by_item[self.hidden_item]["damagedStock"])
+
 	def test_convert_to_order_rejects_an_unassigned_item(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		with self.assertRaises(frappe.PermissionError):
@@ -250,19 +291,39 @@ class TestDealerPortalApi(FrappeTestCase):
 		mine = dealer_portal_api.list_my_orders()
 		self.assertTrue(all(row["dealerId"] == self.other_dealer for row in mine["items"]))
 
-	def test_list_my_orders_exclude_completed_hides_delivered_and_cancelled(self):
-		open_order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
-		cancelled_order = order_api.create_order(dealer=self.dealer, lines=[{"item": self.item, "qty": 1}], expected_dispatch=add_days(today(), 5))
+	def _make_dealer_order(self):
+		return order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 1}],
+			expected_dispatch=add_days(today(), 5),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+		)
+
+	def test_list_my_orders_stage_group_open_covers_confirmed_through_dispatched(self):
+		"""Client refinement, 27 Oct 2026 -- the portal's "Open" tab groups Confirmed/
+		Picking/Ready to Dispatch/Dispatched into one filter (no separate "Pending"
+		tab -- a just-placed order is Open from the start). Cancelled is its own
+		plain `stage` filter. Delivered is deliberately in neither tab
+		(client-confirmed gap -- see OPEN_ORDER_STAGES' own comment)."""
+		confirmed_order = self._make_dealer_order()
+		picking_order = self._make_dealer_order()
+		order_api.advance_order_stage(picking_order["id"], "Picking")
+		delivered_order = self._make_dealer_order()
+		frappe.db.set_value("Sales Order", delivered_order["id"], "custom_fulfillment_stage", "Delivered")
+		cancelled_order = self._make_dealer_order()
 		order_api.advance_order_stage(cancelled_order["id"], "Cancelled")
 
 		frappe.set_user(self.dealer_user)
-		pending = dealer_portal_api.list_my_orders(exclude_completed=True)
-		ids = [row["id"] for row in pending["items"]]
-		self.assertIn(open_order["id"], ids)
+		open_tab = dealer_portal_api.list_my_orders(stage_group="open")
+		ids = [row["id"] for row in open_tab["items"]]
+		self.assertIn(confirmed_order["id"], ids)
+		self.assertIn(picking_order["id"], ids)
+		self.assertNotIn(delivered_order["id"], ids)
 		self.assertNotIn(cancelled_order["id"], ids)
 
-		everything = dealer_portal_api.list_my_orders()
-		self.assertIn(cancelled_order["id"], [row["id"] for row in everything["items"]])
+		cancelled_tab = dealer_portal_api.list_my_orders(stage="Cancelled")
+		self.assertIn(cancelled_order["id"], [row["id"] for row in cancelled_tab["items"]])
 
 	def test_get_my_order_rejects_another_dealers_order(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)

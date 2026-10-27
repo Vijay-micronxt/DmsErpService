@@ -455,6 +455,28 @@ class TestQuotationApi(FrappeTestCase):
 
 		self.assertEqual(order["lines"][0]["deliveryDate"], DISPATCH)
 
+	def test_convert_to_order_carries_damaged_stock_flag_via_native_mapper(self):
+		"""ISS-2026-00678 -- custom_damaged_stock is the same fieldname on both
+		Quotation Item and Sales Order Item, so ERPNext's native mapper carries it
+		across with no extra glue code (unlike custom_delivery_date above, which
+		needs one because the two doctypes name it differently)."""
+		quotation = self._create_quotation(
+			dealer=self.dealer,
+			lines=[
+				{"item": self.priced_item, "qty": 10, "damaged_stock": True},
+				{"item": self.second_item, "qty": 5},
+			],
+			markup_pct=10,
+		)
+		self.assertTrue(quotation["lines"][0]["damagedStock"])
+		self.assertFalse(quotation["lines"][1]["damagedStock"])
+
+		order = quotation_api.convert_to_order(quotation["id"], expected_dispatch=DISPATCH)
+
+		by_item = {line["itemCode"]: line for line in order["lines"]}
+		self.assertTrue(by_item[self.priced_item]["damagedStock"])
+		self.assertFalse(by_item[self.second_item]["damagedStock"])
+
 	def _make_tax_template(self, name_suffix: str, rate: float = 18, is_default: bool = False) -> str:
 		company = ensure_company()
 		account = frappe.get_all("Account", filters={"company": company, "is_group": 0}, limit=1, pluck="name")
