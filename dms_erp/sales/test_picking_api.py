@@ -65,6 +65,39 @@ class TestPickingApi(FrappeTestCase):
 		self.assertEqual(allocated["allocated"], 15)  # only 15 in stock against a 25 qty task
 		self.assertEqual(allocated["status"], "Allocated")
 
+	def test_ensure_pick_tasks_routes_damaged_line_to_a_damage_bay(self):
+		"""ISS-2026-00678 -- a Sales Order Item flagged custom_damaged_stock must get
+		suggested a Damages Bay specifically (suggest_bays(..., kind="damage")), not
+		whatever "main" bay picking would normally suggest."""
+		damage_bay = make_bay("PICK-DMG-01", bay_type="damage", categories=["Vitrified"])
+
+		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=5, source="Phone")
+		order = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 5, "damaged_stock": True}],
+			expected_dispatch=DISPATCH,
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			inquiry=inquiry["id"],
+		)
+		order_api.advance_order_stage(order["id"], "Picking")
+
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
+		self.assertTrue(task["damagedStock"])
+		self.assertEqual(task["suggestedBayId"], damage_bay["id"])
+
+	def test_ensure_pick_tasks_suggests_a_normal_bay_for_an_ordinary_line(self):
+		# Same item/category as the damaged-line test above, but no flag -- must NOT
+		# be routed to the damage bay just because one happens to exist for this category.
+		make_bay("PICK-DMG-02", bay_type="damage", categories=["Vitrified"])
+		order = self._make_order_in_picking(qty=5)
+
+		task = picking_api.list_pick_tasks(order["id"])["items"][0]
+		self.assertFalse(task["damagedStock"])
+		if task["suggestedBayId"]:
+			bay_type = frappe.db.get_value("Warehouse", task["suggestedBayId"], "custom_bay_type")
+			self.assertNotEqual(bay_type, "damage")
+
 	def test_patch_task_assigns_picker(self):
 		order = self._make_order_in_picking(qty=5)
 		task = picking_api.list_pick_tasks(order["id"])["items"][0]

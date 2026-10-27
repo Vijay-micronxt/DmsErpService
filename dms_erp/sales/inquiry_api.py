@@ -115,6 +115,7 @@ def _serialize(doc) -> dict:
 		# Several items raised together from the dealer portal share this id.
 		"requestGroup": doc.get("request_group"),
 		"qty": doc.qty,
+		"damagedStock": bool(doc.get("damaged_stock")),
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
 		# (pricing.api.get_price_for_dealer), shown here at Inquiry stage too rather
@@ -256,11 +257,20 @@ def _create_inquiry(
 	contact_phone: str | None = None,
 	requested_style: str | None = None,
 	request_group: str | None = None,
+	damaged_stock: bool = False,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
 	its own dealer identity, never a caller-supplied one) is the authorization for
 	that path, not INQUIRY_WRITE_ROLES.
+
+	ISS-2026-00678 -- `damaged_stock` marks this as the dealer explicitly asking
+	for damage/insurance-claim bay stock specifically (shown separately on the
+	portal, see warehouse.utils.excluded_stock_for_item), not regular inventory.
+	Carries through unchanged to Quotation Item/Sales Order Item as
+	custom_damaged_stock (same fieldname both sides, so ERPNext's native
+	Quotation->Sales Order mapper copies it with no extra glue) so picking routes
+	to the Damages Bay instead of a normal one.
 
 	ISS-2026-00636 / MOM 3.6 -- "Custom Style": exactly one of `item`/
 	`requested_style` is given, never both, never neither. `requested_style` is a
@@ -290,12 +300,24 @@ def _create_inquiry(
 		# BRD C.2.4 — checked before insert, so the new inquiry can't match itself.
 		duplicates = find_open_duplicate_inquiries(dealer, item)
 
-		# Derived from real on-hand qty rather than always "Open" -- this is what
-		# feeds the reorder engine's missed-demand signal (purchase.reorder_api.
-		# MISSED_DEMAND_STATUSES): nothing else ever sets an Inquiry to Out of Stock.
-		# "Pre-order Required" has no stock-derivable signal of its own and stays a
-		# staff call via update_inquiry.
-		on_hand = total_stock_for_item(item)
+		# ISS-2026-00678 -- a damaged-stock request's "on hand" must be the
+		# damage/insurance-claim bay total specifically, not total_stock_for_item
+		# (which blends it with regular stock and would report "Available" even
+		# when the Damages Bay alone can't actually cover qty). Deliberately
+		# excludes "display" bay stock -- that's sample/display inventory with its
+		# own Sample & Display Management workflow (catalog.sample_api), not stock
+		# a dealer orders through an Inquiry.
+		if damaged_stock:
+			from dms_erp.warehouse.utils import DAMAGE_BAY_TYPES, excluded_stock_for_item
+
+			on_hand = sum(row["boxes"] for row in excluded_stock_for_item(item) if row["bayType"] in DAMAGE_BAY_TYPES)
+		else:
+			# Derived from real on-hand qty rather than always "Open" -- this is what
+			# feeds the reorder engine's missed-demand signal (purchase.reorder_api.
+			# MISSED_DEMAND_STATUSES): nothing else ever sets an Inquiry to Out of Stock.
+			# "Pre-order Required" has no stock-derivable signal of its own and stays a
+			# staff call via update_inquiry.
+			on_hand = total_stock_for_item(item)
 		if on_hand <= 0:
 			inquiry_status = "Out of Stock"
 		elif on_hand >= qty:
@@ -317,6 +339,7 @@ def _create_inquiry(
 			"custom_requested_style": requested_style,
 			"request_group": request_group,
 			"qty": qty,
+			"damaged_stock": damaged_stock,
 			"source": source,
 			"status": inquiry_status,
 			"expected_delivery": expected_delivery,

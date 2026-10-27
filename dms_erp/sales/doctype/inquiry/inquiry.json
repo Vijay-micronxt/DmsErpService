@@ -11,6 +11,7 @@
   "custom_requested_style",
   "request_group",
   "qty",
+  "damaged_stock",
   "contact_name",
   "contact_phone",
   "column_break_1",
@@ -71,6 +72,14 @@
    "in_list_view": 1,
    "label": "Qty",
    "reqd": 1
+  },
+  {
+   "description": "ISS-2026-00678 -- the dealer explicitly asked for this against damaged/insurance-claim bay stock (shown separately on the portal, never folded into the regular available count). Carries through to Quotation Item/Sales Order Item (custom_damaged_stock, same fieldname) so picking routes to the Damages Bay instead of a normal one -- see sales.picking_api.ensure_pick_tasks.",
+   "default": "0",
+   "fieldname": "damaged_stock",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Damaged Stock"
   },
   {
    "description": "Which of the dealer's own sales staff phoned this in -- a dealer can have several people inquiring about different items at once (client requirement 8.9). Free text, not a link: this app has no separate dealer-contacts master.",

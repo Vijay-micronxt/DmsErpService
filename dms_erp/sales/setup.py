@@ -195,6 +195,19 @@ CUSTOM_FIELDS = {
 			"options": "\n".join(ORDER_UOMS),
 			"insert_after": "custom_entered_qty",
 		},
+		# ISS-2026-00678 -- carried from Inquiry.damaged_stock (quotation_api._priced_items),
+		# same fieldname as Quotation Item's own below so ERPNext's native Quotation->Sales
+		# Order mapper copies it across with no extra glue code (see quotation_api.
+		# _convert_to_order's comment on custom_delivery_date for the one field that DOES
+		# need that, precisely because its name differs across the two doctypes -- this one
+		# doesn't). Read by picking_api.ensure_pick_tasks to route the line to a Damages Bay.
+		{
+			"fieldname": "custom_damaged_stock",
+			"fieldtype": "Check",
+			"label": "Damaged Stock",
+			"default": "0",
+			"insert_after": "custom_entered_uom",
+		},
 	],
 	"Sales Invoice": [
 		{
@@ -228,6 +241,15 @@ CUSTOM_FIELDS = {
 			"label": "Entered UOM",
 			"options": "\n".join(ORDER_UOMS),
 			"insert_after": "custom_entered_qty",
+		},
+		# ISS-2026-00678 -- see Sales Order Item's own custom_damaged_stock above; same
+		# fieldname on both so ERPNext's native mapper carries it to the Sales Order line.
+		{
+			"fieldname": "custom_damaged_stock",
+			"fieldtype": "Check",
+			"label": "Damaged Stock",
+			"default": "0",
+			"insert_after": "custom_entered_uom",
 		},
 	],
 	"Opportunity": [

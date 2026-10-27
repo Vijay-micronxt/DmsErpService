@@ -132,6 +132,8 @@ def _serialize_line(row) -> dict:
 		# Sheet 7.8 -- the originally entered qty/unit, only when it wasn't Box.
 		"enteredQty": row.get("custom_entered_qty"),
 		"enteredUom": row.get("custom_entered_uom"),
+		# ISS-2026-00678 -- see order_api._serialize_line's matching field.
+		"damagedStock": bool(row.get("custom_damaged_stock")),
 	}
 
 
@@ -189,6 +191,12 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 				# catalog.utils.normalize_order_line_uoms).
 				"custom_entered_qty": line.get("entered_qty"),
 				"custom_entered_uom": line.get("entered_uom"),
+				# ISS-2026-00678 -- carried from the source Inquiry's damaged_stock (the
+				# quotation builder pre-fills this per line when built from a flagged
+				# inquiry, see pacific-tileflow's quotations.new.tsx); same fieldname as
+				# Sales Order Item's own, so _convert_to_order's native mapper carries it
+				# across automatically.
+				"custom_damaged_stock": bool(line.get("damaged_stock")),
 			}
 		)
 	return items
