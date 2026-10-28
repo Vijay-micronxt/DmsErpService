@@ -27,6 +27,7 @@ from dms_erp.catalog.api import get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
+from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.invoice_api import _has as _invoice_has
 from dms_erp.sales.invoice_api import _invoice_detail
@@ -63,15 +64,16 @@ def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> di
 	dealers') down to just this dealer's own code, and adds the top-3 on-hand
 	batches BRD C.13.1 wants shown at item-detail time.
 
-	No price is ever included -- not `price`, and not the `dealerPrice` that
-	get_product carries for staff either. Pacific's price to a dealer depends on
-	delivery and other details that only exist once a quotation is prepared, so a
-	catalog price shown earlier would just be a number staff then have to walk back
-	(client request, Oct 2026: "don't show price before quotation"). The dealer's
-	price is the quotation's (see get_my_quotation). This replaces BRD C.13.1's
-	per-dealer "price (if enabled)" switch for the portal; Customer.
-	custom_price_visible is no longer read anywhere. Staff-facing screens are
-	unaffected, since they never call through here.
+	`price` (client reversal, Oct 2026) -- this dealer's own tier/override rate,
+	same get_price_for_dealer resolution Inquiry/Quotation/Order already use, None
+	if nothing resolves (empty price lists -- see pricing/api.py's own docstring on
+	the fallback chain). Earlier this screen showed no price at all, on an Oct 2026
+	client request ("don't show price before quotation" -- quotation was mandatory
+	then). That's no longer true now that WhatsApp/the portal can both place an
+	order without a quotation ever existing, so the dealer needs a starting number
+	at inquiry time. This is deliberately NOT get_product's own `dealerPrice` field
+	(popped below) -- that one is the flat, generic "Dealer" list rate with no
+	dealer param, wrong for a Master Dealer or a dealer with a tagged override list.
 
 	`orderable` (ISS-2026-00644) is whether this item is actually in this dealer's
 	Dealer Catalog assignment (dealer_catalog_api.is_visible) -- get_catalog now shows
@@ -81,6 +83,7 @@ def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> di
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
 	product.pop("dealerPrice", None)
+	product["price"] = get_price_for_dealer(item_code, dealer)
 	# Client finding "stock accuracy" -- a dealer only ever sees availableStockQty (damage/
 	# display-bay stock already excluded), never the raw staff-facing total.
 	product.pop("stockQty", None)
@@ -572,9 +575,9 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	data = _serialize_inquiry(doc)
 	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
 	data["productName"] = frappe.get_cached_value("Item", doc.item, "item_name") if doc.item else None
-	# The tier price inquiry_api's serializer adds for staff -- a price before a
-	# quotation, which the dealer portal never shows (see _catalog_entry).
-	data.pop("price", None)
+	# inquiry_api's own serializer already set `price` via the same get_price_for_dealer
+	# resolution _catalog_entry now uses -- kept as-is (client reversal, Oct 2026, see
+	# _catalog_entry's docstring).
 	return data
 
 

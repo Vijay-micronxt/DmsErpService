@@ -221,6 +221,14 @@ CUSTOM_FIELDS = {
 			"insert_after": "due_date",
 			"description": "BRD C.4.3 -- carried over from the Sales Order at create_sales_invoice time, so the Retail vs Bulk split (C.4.1's reorder exclusion included) still holds once an order is billed. Native Tally-migrated invoices never get this field set (nothing here rewrites synced records), which is exactly why sample_api.top_dealers and reorder_api/forecasting.py default a missing value to Retail rather than excluding it.",
 		},
+		{
+			"fieldname": "custom_clubbed_orders",
+			"fieldtype": "Table",
+			"label": "Clubbed Orders",
+			"options": "Invoice Clubbed Order",
+			"insert_after": "custom_order_channel",
+			"description": "Client request (Oct 2026, Vijay/Karthik) -- order_api.create_consolidated_sales_invoice bills several Sales Orders on one invoice. The invoice's own customer_address/shipping_address_name can only hold one value (the first clubbed order's), so every clubbed order's own billing/shipping address is recorded here instead of being silently dropped when they differ. Empty for an invoice raised the ordinary one-order-at-a-time way.",
+		},
 	],
 	"Quotation Item": [
 		{
