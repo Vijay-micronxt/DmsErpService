@@ -135,6 +135,10 @@ def _serialize(doc) -> dict:
 		"source": doc.source,
 		"expectedDelivery": doc.expected_delivery,
 		"followUpDate": doc.follow_up_date,
+		# Client request, 28 Oct 2026 -- the dealer portal's own "Ask for quotation"
+		# button on an already-raised enquiry (dealer_portal_api.request_quotation).
+		"dealerRequestedQuote": bool(doc.get("dealer_requested_quote")),
+		"dealerRequestedQuoteAt": doc.get("dealer_requested_quote_at"),
 		"assignedTo": doc.assigned_to,
 		"remarks": doc.remarks,
 		# BRD client req 8.9 -- which of the dealer's own sales staff phoned this in,

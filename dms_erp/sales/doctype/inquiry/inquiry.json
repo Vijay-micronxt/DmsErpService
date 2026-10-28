@@ -21,6 +21,8 @@
   "section_break_1",
   "expected_delivery",
   "follow_up_date",
+  "dealer_requested_quote",
+  "dealer_requested_quote_at",
   "column_break_2",
   "assigned_to",
   "whatsapp_replied",
@@ -134,6 +136,22 @@
    "fieldname": "follow_up_date",
    "fieldtype": "Date",
    "label": "Follow-up Date"
+  },
+  {
+   "description": "Client request, 28 Oct 2026 -- the dealer portal's own \"Ask for quotation\" button on an enquiry still waiting on one (dealer_portal_api.request_quotation). Distinct from follow_up_date, which staff set for their own planning; this is the dealer actively asking. Never cleared automatically -- status moving to Quoted/Converted/Rejected/Closed is what the portal checks to stop offering the button again, not this flag.",
+   "default": "0",
+   "fieldname": "dealer_requested_quote",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Dealer Requested Quote"
+  },
+  {
+   "fieldname": "dealer_requested_quote_at",
+   "fieldtype": "Datetime",
+   "label": "Dealer Requested Quote At",
+   "read_only": 1,
+   "depends_on": "eval:doc.dealer_requested_quote"
   },
   {
    "fieldname": "column_break_2",

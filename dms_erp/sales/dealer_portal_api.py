@@ -21,7 +21,7 @@ in place of the staff role checks those modules' whitelisted wrappers use.
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, today
+from frappe.utils import flt, getdate, now_datetime, today
 
 from dms_erp.catalog.api import get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
@@ -554,6 +554,40 @@ def get_my_enquiry(enquiry: str) -> dict:
 	"""One enquiry with all its items. `enquiry` is the id list_my_enquiries returned: the
 	shared group id for items raised together, or the inquiry's own number for a single one."""
 	return _enquiry_for(enquiry, _current_dealer())
+
+
+@frappe.whitelist(methods=["POST"])
+def request_quotation(enquiry: str) -> dict:
+	"""Client request, 28 Oct 2026 -- the dealer portal's own "Ask for quotation" button on
+	an enquiry still waiting on one. Before this, sending an enquiry left the dealer with
+	nothing to do but passively wait for staff to get to it (the "waiting" card on
+	inquiries.$id.tsx was read-only). This sets dealer_requested_quote (+ timestamp) on every
+	item in the enquiry group that's still actually waiting -- same ownership resolution
+	get_my_enquiry already uses, so a dealer can't flag an enquiry that isn't theirs.
+
+	Deliberately idempotent and silent on an enquiry with nothing left to flag (already
+	quoted, converted, rejected or closed) rather than throwing -- the portal only shows this
+	button while `waiting` is non-empty, so a flag-nothing call here means the dealer's own
+	screen was stale, not a real error worth surfacing."""
+	dealer = _current_dealer()
+	names = frappe.get_all("Inquiry", filters={"dealer": dealer, "request_group": enquiry}, pluck="name")
+	if not names and frappe.db.exists("Inquiry", {"name": enquiry, "dealer": dealer}):
+		names = [enquiry]
+	if not names:
+		frappe.throw(_("Enquiry {0} does not belong to you.").format(enquiry), frappe.PermissionError)
+
+	terminal = {"Converted to Order", "Rejected", "Closed"}
+	now = now_datetime()
+	flagged = 0
+	for name in names:
+		doc = frappe.get_doc("Inquiry", name)
+		if doc.linked_quotation or doc.status in terminal:
+			continue
+		doc.dealer_requested_quote = 1
+		doc.dealer_requested_quote_at = now
+		doc.save(ignore_permissions=True)
+		flagged += 1
+	return {"flagged": flagged}
 
 
 @frappe.whitelist(methods=["GET"])
