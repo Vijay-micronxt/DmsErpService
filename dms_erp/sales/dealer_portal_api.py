@@ -23,7 +23,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, now_datetime, today
 
-from dms_erp.catalog.api import get_product, resolve_dealer_code
+from dms_erp.catalog.api import _serialize_image, get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
 from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
 from dms_erp.pagination import clamp
@@ -97,6 +97,7 @@ def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> di
 
 _CATALOG_SEARCH_FIELDS = (
 	"item_name",
+	"item_code",
 	"custom_colour_attribute_1",
 	"custom_colour_attribute_2",
 	"custom_design_attribute_1",
@@ -105,25 +106,48 @@ _CATALOG_SEARCH_FIELDS = (
 
 
 def _catalog_search_matches(candidate_codes: set[str], search: str) -> set[str]:
-	"""get_catalog's one search box now matches item name OR any of the four
-	colour/design attributes -- the dealer portal used to expose those as four
+	"""get_catalog's one search box now matches item name, item code OR any of the
+	four colour/design attributes -- the dealer portal used to expose those as four
 	separate dropdown filters (ISS-2026-00632 #4), but typing "Rustic" into the
 	one search box dealers already use is a more natural fit than hunting through
 	four dropdowns for it, so the dropdowns were dropped in favour of this.
 	frappe.db.count doesn't accept or_filters (only get_all does), so the OR is
 	resolved into an explicit name-list first, same union-of-get_all pattern as
-	warehouse.inward_api.list_trucks/sales.order_api.list_orders."""
+	warehouse.inward_api.list_trucks/sales.order_api.list_orders.
+
+	Client finding, 2 Nov 2026 -- a multi-word query used to be treated as one
+	literal substring, so "black glazed" never matched "...Black 300x300 Ceramic
+	Glazed Tiles" (not a contiguous substring of any single field). Each word is
+	now resolved separately (OR across all fields, same as before) and the
+	per-word match sets are intersected (AND across words) by narrowing
+	candidate_codes on every iteration, so word order/position no longer matters.
+
+	Client finding, 2 Nov 2026 (same round) -- item_code was missing entirely, so a
+	partial code like "oak-1" never matched "DEMO-OAK-1" even though the search
+	box's own placeholder ("Search item name or your code") promises code search.
+	resolve_code (the exact-match fallback below, for the *whole* code) still
+	covers the dealer's own private code via Item Dealer Code, which this LIKE
+	search can't reach without a join -- this only extends the substring search to
+	the company's own item_code, the gap the client actually hit."""
 	if not candidate_codes:
 		return set()
-	matches: set[str] = set()
-	for field in _CATALOG_SEARCH_FIELDS:
-		matches |= set(
-			frappe.get_all(
-				"Item",
-				filters={"name": ["in", list(candidate_codes)], field: ["like", f"%{search}%"]},
-				pluck="name",
+	words = [w for w in search.split() if w]
+	if not words:
+		return set()
+	matches = set(candidate_codes)
+	for word in words:
+		word_matches: set[str] = set()
+		for field in _CATALOG_SEARCH_FIELDS:
+			word_matches |= set(
+				frappe.get_all(
+					"Item",
+					filters={"name": ["in", list(matches)], field: ["like", f"%{word}%"]},
+					pluck="name",
+				)
 			)
-		)
+		matches = word_matches
+		if not matches:
+			break
 	return matches
 
 
@@ -239,7 +263,16 @@ def resolve_code(code: str) -> dict | None:
 	one. resolve_dealer_code only ever resolved the dealer's own mapped code; this
 	adds the company-code fallback (must still be sellable, ISS-2026-00644: browsable
 	regardless of this dealer's own Dealer Catalog assignment, same as get_catalog)
-	so both entry points actually work from the portal, not just one."""
+	so both entry points actually work from the portal, not just one.
+
+	Client report, 2 Nov 2026 -- a malformed Item (a real document whose own name
+	happens to equal the searched code, but with item_code/item_name left blank —
+	bad import or a record created outside the normal form) used to pass the
+	sellability check below and come back as a blank, nameless "Out of stock"
+	card. The final check covers both paths (this one and resolve_dealer_code
+	above) the same way dealer_catalog_api._sellable_item_codes now does for
+	get_catalog/browsable_catalog_for -- a real catalog entry always has both
+	code and name set."""
 	dealer = _current_dealer()
 
 	product = resolve_dealer_code(dealer, code)
@@ -249,7 +282,7 @@ def resolve_code(code: str) -> dict | None:
 			if is_sellable(status):
 				product = get_product(code)
 
-	if not product:
+	if not product or not product.get("code") or not product.get("name"):
 		return None
 	return _catalog_entry(product["id"], dealer, every_batch=True)
 
@@ -282,7 +315,14 @@ def get_excluded_stock(item: str) -> list[dict]:
 
 
 @frappe.whitelist(methods=["POST"])
-def raise_inquiry(item: str, qty: float, remarks: str | None = None, damaged_stock: bool = False):
+def raise_inquiry(
+	item: str,
+	qty: float,
+	remarks: str | None = None,
+	damaged_stock: bool = False,
+	uom: str | None = None,
+	entered_boxes: float | None = None,
+):
 	"""BRD C.13.1 — the out-of-stock / "raise an enquiry" path. Always source="Web"
 	and always unassigned (see inquiry_api._create_inquiry's own staff-only
 	self-assignment default) since this is the dealer, not staff, raising it.
@@ -290,9 +330,17 @@ def raise_inquiry(item: str, qty: float, remarks: str | None = None, damaged_sto
 	ISS-2026-00678 -- `damaged_stock` is set when the dealer added this from the
 	item page's damaged/insurance-claim-bay stock display rather than the regular
 	"raise an enquiry" action; see inquiry_api._create_inquiry's own docstring for
-	how it carries through to the eventual order and picking."""
+	how it carries through to the eventual order and picking.
+
+	BRD C.1.3/C.2.2, client request 2 Nov 2026 -- `uom` (Box/Pcs; see catalog.utils.
+	ORDER_UOMS for the full set _create_inquiry itself accepts) lets a dealer enter
+	the quantity in pieces instead of counting out boxes themselves. `entered_boxes`
+	is the portal's own combined Boxes+Pcs entry (`qty` is then the Pcs component) --
+	see _create_inquiry's own docstring for why that's kept separate from `uom`."""
 	dealer = _current_dealer()
-	data = _create_inquiry(dealer, item, qty, source="Web", remarks=remarks, damaged_stock=damaged_stock)
+	data = _create_inquiry(
+		dealer, item, qty, source="Web", remarks=remarks, damaged_stock=damaged_stock, uom=uom, entered_boxes=entered_boxes
+	)
 	data["orderable"] = is_visible(dealer, item)
 	data.pop("price", None)
 	return data
@@ -313,7 +361,19 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 
 	ISS-2026-00678 -- an entry may also carry `damagedStock`/`damaged_stock`
 	(either key accepted) when it came from the item page's damaged/
-	insurance-claim-bay stock display rather than the regular catalogue."""
+	insurance-claim-bay stock display rather than the regular catalogue. The
+	duplicate check below keys on (item, damaged_stock) together, not item alone
+	-- a damaged-stock line and a regular line for the same item are two
+	deliberately separate rows (see enquiry-list.ts's own docstring on why they're
+	never merged), so they must not trip "listed twice" against each other. Client
+	report, 2 Nov 2026: they did, because the check used to key on item only.
+
+	Same round -- an entry may also carry `uom` (Box/Pcs), passed straight through
+	to _create_inquiry per line; see raise_inquiry's own docstring. An entry may
+	instead carry `enteredBoxes`/`entered_boxes` (either key accepted) for the
+	portal's combined Boxes+Pcs entry -- `qty` is then just the Pcs component, which
+	can legitimately be 0 on its own (boxes-only), so the zero-qty check below sums
+	both rather than looking at `qty` alone."""
 	dealer = _current_dealer()
 	entries = frappe.parse_json(items) if isinstance(items, str) else items
 	if not entries:
@@ -322,20 +382,28 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 		frappe.throw(_("An enquiry can list at most {0} items.").format(MAX_ENQUIRY_ITEMS), frappe.ValidationError)
 
 	allowed = set(browsable_catalog_for(dealer))
-	seen: set[str] = set()
+	seen: set[tuple[str, bool]] = set()
 	for entry in entries:
 		item = entry.get("item")
 		if item not in allowed:
 			frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
-		if item in seen:
+		damaged = bool(entry.get("damagedStock") or entry.get("damaged_stock"))
+		key = (item, damaged)
+		if key in seen:
 			frappe.throw(_("{0} is listed twice -- combine the quantities.").format(item), frappe.ValidationError)
-		seen.add(item)
-		if flt(entry.get("qty")) <= 0:
+		seen.add(key)
+		entered_boxes = entry.get("enteredBoxes")
+		if entered_boxes is None:
+			entered_boxes = entry.get("entered_boxes")
+		if flt(entry.get("qty")) + flt(entered_boxes) <= 0:
 			frappe.throw(_("Enter a quantity above zero for {0}.").format(item), frappe.ValidationError)
 
 	created: list[dict] = []
 	group = None
 	for entry in entries:
+		entered_boxes = entry.get("enteredBoxes")
+		if entered_boxes is None:
+			entered_boxes = entry.get("entered_boxes")
 		inquiry = _create_inquiry(
 			dealer,
 			entry["item"],
@@ -344,6 +412,8 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 			remarks=remarks,
 			request_group=group,
 			damaged_stock=bool(entry.get("damagedStock") or entry.get("damaged_stock")),
+			uom=entry.get("uom"),
+			entered_boxes=flt(entered_boxes) if entered_boxes is not None else None,
 		)
 		if group is None:
 			group = inquiry["id"]
@@ -392,11 +462,16 @@ def suggest_alternatives(item: str, limit: int = 5) -> list[dict]:
 
 @frappe.whitelist(methods=["POST"])
 def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
-	"""No longer offered by the portal: an enquiry now becomes an order only through
-	a quotation the dealer accepts (accept_quotation below), per the client's "no
-	quotation is being sent to dealers before order confirmation" issue. Kept
-	callable (and tested) rather than deleted -- it's still the one path that
-	builds an order straight from an inquiry's own lines.
+	"""Offered by the portal again (client request, 2 Nov 2026), alongside
+	accept_quotation below -- BRD C.13.1 says plainly "if in stock, the dealer can
+	convert the enquiry to an order, entering their own PO number to tag and close
+	it," which this endpoint has always done; only the frontend button had been
+	pulled for a few weeks, per the Oct 2026 "no quotation is being sent to
+	dealers before order confirmation" issue (see sales/README.md's own note on
+	that change). Both paths coexist now, same as this function never actually
+	went away server-side: a dealer can convert an in-stock, orderable enquiry
+	straight to an order here, or wait for a staff quotation and accept that
+	instead (accept_quotation) -- whichever a given enquiry's situation calls for.
 
 	BRD C.13.1 — "enter their own PO number to tag/close it." Only converts an
 	inquiry this dealer actually owns, at the same in-stock/priced items it was
@@ -609,6 +684,21 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	data = _serialize_inquiry(doc)
 	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
 	data["productName"] = frappe.get_cached_value("Item", doc.item, "item_name") if doc.item else None
+	# Client request, 2 Nov 2026 -- the enquiry detail screen (inquiries.$id.tsx) showed
+	# every item with no image at all, unlike the catalog/item-detail pages. Same
+	# per-item query shape as productName above, not a bulk fetch -- an enquiry's own
+	# item count is always small (MAX_ENQUIRY_ITEMS), nothing like get_catalog's
+	# N-query concern for a full paginated listing.
+	data["images"] = (
+		[_serialize_image(row) for row in frappe.get_all(
+			"Product Image",
+			filters={"parent": doc.item, "parenttype": "Item", "parentfield": "custom_images"},
+			fields=["image", "image_type", "is_primary"],
+			order_by="idx asc",
+		)]
+		if doc.item
+		else []
+	)
 	# inquiry_api's own serializer already set `price` via the same get_price_for_dealer
 	# resolution _catalog_entry now uses -- kept as-is (client reversal, Oct 2026, see
 	# _catalog_entry's docstring).

@@ -11,6 +11,9 @@
   "custom_requested_style",
   "request_group",
   "qty",
+  "entered_boxes",
+  "entered_qty",
+  "entered_uom",
   "damaged_stock",
   "contact_name",
   "contact_phone",
@@ -74,6 +77,27 @@
    "in_list_view": 1,
    "label": "Qty",
    "reqd": 1
+  },
+  {
+   "description": "Client request, 2 Nov 2026 -- the dealer portal's own \"Boxes\" field value when entered together with pieces (entered_qty/entered_uom below then hold the Pcs side). Kept as its own figure, never re-derived from the combined box-equivalent qty -- a pieces count at or above the item's own pieces-per-box figure doesn't round-trip back to the same split the dealer actually typed (e.g. 50 Box + 5 Pcs on a 4-pcs box is NOT the same as re-splitting 205 total pieces, which comes out 51 Box 1 Pcs). Null whenever the dealer entered only boxes, or entered a single non-Box unit the old way (see entered_qty's own description).",
+   "fieldname": "entered_boxes",
+   "fieldtype": "Float",
+   "label": "Entered Boxes",
+   "read_only": 1
+  },
+  {
+   "description": "Client request, 2 Nov 2026 -- the qty/unit the dealer actually entered, when it wasn't Box (see catalog.utils.convert_qty_to_boxes, same conversion sales.order_api.create_order/quotation_api.create_quotation already use). `qty` itself always stays in boxes; these are display-only, same fields/convention as Sales Order Item/Quotation Item's own custom_entered_qty/custom_entered_uom. When entered_boxes above is also set, this is specifically the Pcs component of a combined Boxes+Pcs entry, not a lone-unit entry.",
+   "fieldname": "entered_qty",
+   "fieldtype": "Float",
+   "label": "Entered Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entered_uom",
+   "fieldtype": "Select",
+   "label": "Entered UOM",
+   "options": "Box\nPcs\nSqft\nSqm\nKg\nGram",
+   "read_only": 1
   },
   {
    "description": "ISS-2026-00678 -- the dealer explicitly asked for this against damaged/insurance-claim bay stock (shown separately on the portal, never folded into the regular available count). Carries through to Quotation Item/Sales Order Item (custom_damaged_stock, same fieldname) so picking routes to the Damages Bay instead of a normal one -- see sales.picking_api.ensure_pick_tasks.",

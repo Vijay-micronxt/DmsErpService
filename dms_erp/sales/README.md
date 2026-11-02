@@ -39,26 +39,34 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   to offer an email + password after every OTP sign-in until one is set (Pacific's ask,
   Oct 2026), via the existing `update_my_email` and `auth.dealer_api.set_my_password`;
   `auth.dealer_api.login_with_password` is the sign-in side.
-- **Dealer portal: enquiry → quotation → order** (`dealer_portal_api.py`, client issues
-  of Oct 2026) — a dealer no longer turns an enquiry straight into an order. They
-  enquire (several items at once via `raise_inquiries`: one Inquiry per item, all
-  sharing `request_group`; the portal's `list_my_enquiries`/`get_my_enquiry` hand them back as
-  ONE enquiry per group, paged by enquiry, with a status that reads "Mixed" when the items
-  differ), staff quote them (the Quotation Builder submits
-  immediately, so the quotation is visible to the dealer the moment it exists), and
-  the dealer sees it with `list_my_quotations`/`get_my_quotation` (a dealer-safe
-  shape — no markup %, channel or purchase cost) and places the order with
-  `accept_quotation` (their own PO number + dispatch date; built from the quotation
-  exactly as quoted, closing every inquiry it covered). **No price is shown before a
-  quotation**: catalog, item detail, enquiries and WhatsApp's item lookup all drop it
-  (price depends on delivery and other details), and `Customer.custom_price_visible`
-  is no longer read anywhere. The catalog splits into `scope="assigned"` / `"other"`
+- **Dealer portal: enquiry → (quotation or direct) → order** (`dealer_portal_api.py`) —
+  a dealer enquires (several items at once via `raise_inquiries`: one Inquiry per
+  item, all sharing `request_group`; the portal's `list_my_enquiries`/`get_my_enquiry`
+  hand them back as ONE enquiry per group, paged by enquiry, with a status that reads
+  "Mixed" when the items differ), then has two ways to an order, offered side by side
+  again as of 2 Nov 2026 (client request, reverting most of the way to BRD C.13.1's
+  original "if in stock, convert the enquiry to an order" wording): `convert_to_order`
+  straight from an in-stock, orderable enquiry (their own PO number + dispatch date,
+  same call for both the single-item and multi-item flows — the frontend loops it once
+  per Inquiry id for a multi-item enquiry, since the endpoint itself only ever builds
+  one order from one inquiry's lines, so a multi-item enquiry converts to one order per
+  item, not one combined order), or `accept_quotation` once staff build one (the
+  Quotation Builder submits immediately, so the quotation is visible to the dealer the
+  moment it exists) via `list_my_quotations`/`get_my_quotation` (a dealer-safe shape —
+  no markup %, channel or purchase cost). Between Oct and 2 Nov 2026 `convert_to_order`
+  was pulled from the portal UI entirely (kept callable server-side) on a "no quotation
+  is being sent to dealers before order confirmation" issue — see that function's own
+  docstring for why both paths are live again. Price **does** show now (client
+  reversal, same 2 Nov 2026 round): `CatalogItem.price`/`Inquiry.price` resolve this
+  dealer's own tier/override rate via `get_price_for_dealer`, same chain Quotation/Order
+  already use; `Customer.custom_price_visible` still exists as a field but isn't read by
+  this module. The catalog splits into `scope="assigned"` / `"other"`
   for the portal's two sections, and `list_my_invoices`/`get_my_invoice` expose the
   dealer's own Sales Invoices (opening-balance and proforma entries left out). The
   DMS Dealer role has no DocPerm on any ERPNext doctype, so the order-building call
   runs through `_run_as_system` after this module's own checks — `convert_to_order`
-  (no longer offered by the portal, kept callable) needed the same, and had been
-  failing with a permission error without it. WhatsApp's Place Order now follows the same rule: after the
+  needed the same, and had been failing with a permission error without it.
+  WhatsApp's Place Order now follows the same rule: after the
   quantity and note the bot shows a quotation (`flow_api.create_whatsapp_quotation` — a real
   Quotation at the dealer's tier rate, no markup, GST/freight stated as extra, plus an Inquiry for
   the quantity) and the PO step then confirms *that* quotation (`create_dealer_opportunity` with
@@ -151,7 +159,14 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
   line when its qty is overridden directly in boxes — the annotation would
   otherwise go stale against the new qty. `add_quotation_line`/`remove_quotation_line`
   and `order_api`'s own line-level patches are deliberately NOT extended to accept a
-  `uom` — only the two creation entry points are, for now.
+  `uom` — only the two creation entry points were, until `inquiry_api._create_inquiry`
+  joined them (client request, 2 Nov 2026, BRD C.1.3/C.2.2's "quantity in
+  boxes/pieces") — `catalog.utils.convert_qty_to_boxes` runs there too, before the
+  stock-vs-on-hand comparison or the stored `qty` ever sees it, with `entered_qty`/
+  `entered_uom` (new Inquiry fields, same convention) for display. Reached through
+  `dealer_portal_api.raise_inquiry`/`raise_inquiries`'s own `uom` param (Box/Pcs
+  exposed in the portal UI today; the backend itself accepts the full set like the
+  order-side entry points do).
 - **Structured dealer addresses** (`dealer_address_api.py`, BRD C.3.3) — real ERPNext
   `Address` records (Dynamic-Linked to `Customer`), not a new custom field:
   `create_dealer_address`/`update_dealer_address`/`list_dealer_addresses`, scoped to

@@ -42,10 +42,23 @@ CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
 
 def _sellable_item_codes(item_codes: list[str]) -> list[str]:
+	"""Client report, 2 Nov 2026 -- a malformed Item (a real document, but with
+	item_code/item_name left blank -- bad import or a record created outside the
+	normal form) was passing this check since only discontinuation status was
+	looked at, and surfaced to a dealer as a blank, nameless "Out of stock" card
+	(dealer_portal_api.resolve_code's own exact-code fallback has the same guard
+	for the same reason). A real catalog entry always has both set; one that
+	doesn't isn't a sellable product regardless of its status field."""
 	if not item_codes:
 		return []
-	rows = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_discontinuation_status"])
-	return [r.name for r in rows if is_sellable(r.custom_discontinuation_status or "Active")]
+	rows = frappe.get_all(
+		"Item", filters={"name": ["in", item_codes]}, fields=["name", "item_code", "item_name", "custom_discontinuation_status"]
+	)
+	return [
+		r.name
+		for r in rows
+		if r.item_code and r.item_name and is_sellable(r.custom_discontinuation_status or "Active")
+	]
 
 
 def _assert_can_manage_catalog():
