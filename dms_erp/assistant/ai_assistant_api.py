@@ -31,10 +31,22 @@ def _pilot_assist_api():
 
 
 @frappe.whitelist(methods=["POST"])
-def chat(message: str, conversation_history: str | None = None) -> dict:
-	"""General Q&A over ERP data, no image. See pilot_assist.api.ai_api.chat_api's
-	own docstring for the response shape -- passed through unchanged."""
-	return _pilot_assist_api().chat_api(message=message, conversation_history=conversation_history)
+def chat(message: str, history: str | None = None, selected_role: str | None = None) -> str:
+	"""General Q&A over ERP data, no image -- routed through ask_document, the SAME
+	endpoint pilot_assist's own Desk widget calls for every message (confirmed from
+	its JS: it never calls chat_api at all). This used to call chat_api instead --
+	a separate, much thinner implementation meant for stateless external callers,
+	which forced the AI into a rigid JSON schema (so list/table answers reduced to
+	a one-line summary with the row data dropped), never offered a role picker on
+	a role-based-AI site, and never produced a "Load More" pageable list or a
+	"[Open X ->]" document link. Switching to ask_document closes all of that at
+	once, in exchange for the response now being plain text (markdown tables, a
+	"ROLE_SELECT:"/"LIST_DATA:"-prefixed payload sometimes) instead of pre-parsed
+	JSON -- src/api/assistant.ts and ai-assistant-panel.tsx on the frontend handle
+	that the same way they already do for ask_with_image below."""
+	return _pilot_assist_api().ask_document(
+		message=message, doctype=None, docname=None, history=history, selected_role=selected_role
+	)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -43,6 +55,7 @@ def ask_with_image(
 	image_data: str | None = None,
 	image_mime: str | None = None,
 	history: str | None = None,
+	selected_role: str | None = None,
 ) -> str:
 	"""The only pilot_assist endpoint that actually reads an uploaded image/PDF --
 	ask_document, same one its own Desk widget calls. Returns a plain string;
@@ -52,9 +65,37 @@ def ask_with_image(
 	invoice/create_quotation actually creates anything -- same two-step flow the
 	widget itself uses, deliberately not collapsed into one call here, so the
 	staff user always sees and can correct what was extracted before anything
-	is actually created."""
+	is actually created. selected_role: see get_role_choices below -- without it,
+	a user matching 2+ configured roles under role-based AI mode got back a raw,
+	unhandled "ROLE_SELECT:" string instead of ever being able to answer."""
 	return _pilot_assist_api().ask_document(
-		message=message, doctype=None, docname=None, image_data=image_data, image_mime=image_mime, history=history
+		message=message, doctype=None, docname=None, image_data=image_data, image_mime=image_mime,
+		history=history, selected_role=selected_role,
+	)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_role_choices() -> dict:
+	"""Mirrors what pilot_assist's own boot_session hook puts in bootinfo.ai_role_choices
+	for the Desk widget's header dropdown (pilot_assist_widget.js reads frappe.boot.
+	ai_role_choices directly) -- the React app has no Frappe bootinfo of its own to read
+	that from (it's a separate SPA authenticating over this app's own JWT, not a Desk
+	session), so this exposes the same _get_matched_role_choices() as its own endpoint.
+	Empty list means "no picker needed" -- either role-based AI is off, this user matched
+	0 or 1 configured role, or their own Enable Assistant Access is off (see that function's
+	own docstring in pilot_assist for the exact rules)."""
+	api = _pilot_assist_api()
+	return {"roles": api._get_matched_role_choices(frappe.session.user)}
+
+
+@frappe.whitelist(methods=["POST"])
+def load_more(doctype: str, filters: str, fields: str, offset: int, page_size: int = 10, total: int | None = None) -> dict:
+	"""Backs the chat panel's "Load More" button on a LIST_DATA: response from chat/
+	ask_with_image above -- same query the AI already decided on for the first page,
+	re-run directly via MCP with a larger limit, no AI call involved (see pilot_assist's
+	own load_more_list_records docstring)."""
+	return _pilot_assist_api().load_more_list_records(
+		doctype=doctype, filters=filters, fields=fields, offset=offset, page_size=page_size, total=total
 	)
 
 
@@ -108,7 +149,11 @@ def speech_to_text(audio_data: str) -> dict:
 @frappe.whitelist(methods=["GET"])
 def site_branding() -> dict:
 	"""Client request, 31 Oct 2026 -- the AI panel header should show this site's own
-	configured name, not a hardcoded label. Whatever's actually set in Website Settings
-	(falls back to the site's bench name if that's blank, same as Frappe itself does)."""
-	name = frappe.db.get_single_value("Website Settings", "app_name") or frappe.local.site
+	branded name, matching pilot_assist's own Desk widget exactly rather than inventing
+	a separate scheme: that widget builds its title from frappe.boot.sysdefaults.company
+	(see pilot_assist_widget.js, `const ai_title = _company ? ('I' + _company) : ...`),
+	i.e. the default Company's name prefixed with a capital I -- not Website Settings'
+	app_name, and not a lowercase i."""
+	company = frappe.defaults.get_global_default("company")
+	name = f"I{company}" if company else "AI Assistant"
 	return {"appName": name}
