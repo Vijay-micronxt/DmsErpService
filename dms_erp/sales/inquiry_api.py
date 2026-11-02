@@ -48,10 +48,13 @@ rejects it explicitly rather than failing through an item-shaped code path with
 a None item code.
 """
 
+import math
+
 import frappe
 from frappe import _
 
 from dms_erp.catalog.utils import (
+	convert_qty_to_boxes,
 	is_sellable,
 	item_pieces_per_box,
 	item_sqft_per_box,
@@ -115,6 +118,18 @@ def _serialize(doc) -> dict:
 		# Several items raised together from the dealer portal share this id.
 		"requestGroup": doc.get("request_group"),
 		"qty": doc.qty,
+		# Client request, 2 Nov 2026 -- the qty/unit as entered, when it wasn't Box
+		# (see _create_inquiry). Null for a plain box inquiry -- nothing extra to show.
+		# The truthy check (not just "is not None") also covers rows saved before
+		# _create_inquiry stopped passing explicit None for these -- Frappe had been
+		# coercing that into 0.0/"Box" rather than leaving them genuinely empty.
+		"enteredQty": doc.get("entered_qty") or None,
+		"enteredUom": doc.get("entered_uom") if doc.get("entered_qty") else None,
+		# Client report, 2 Nov 2026 -- the Boxes component of a combined Boxes+Pcs
+		# entry (see _create_inquiry) -- 0 is a real value here ("no boxes, just
+		# pieces"), so this is only suppressed alongside enteredQty/enteredUom, not
+		# on its own falsiness.
+		"enteredBoxes": doc.get("entered_boxes") if doc.get("entered_qty") else None,
 		"damagedStock": bool(doc.get("damaged_stock")),
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
@@ -262,11 +277,37 @@ def _create_inquiry(
 	requested_style: str | None = None,
 	request_group: str | None = None,
 	damaged_stock: bool = False,
+	uom: str | None = None,
+	entered_boxes: float | None = None,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
 	its own dealer identity, never a caller-supplied one) is the authorization for
 	that path, not INQUIRY_WRITE_ROLES.
+
+	BRD C.1.3/C.2.2, client request 2 Nov 2026 -- `uom` (Box/Pcs/Sqft/Sqm/Kg/Gram,
+	catalog.utils.ORDER_UOMS) lets a dealer enter qty in whatever unit they think
+	in, same as order_api.create_order/quotation_api.create_quotation already do.
+	`qty` is converted to its box-equivalent via catalog.utils.convert_qty_to_boxes
+	before anything below (stock comparison, the duplicate check, the stored doc,
+	the Opportunity mirror) ever sees it -- every one of those operates on boxes
+	only, same as the two order-side entry points. The originally entered qty/unit
+	survive on entered_qty/entered_uom purely for display. Not applicable to a
+	Custom Style request (no Item to look up a per-box figure against), so `uom`
+	is ignored when `item` is None -- same item-only branching the rest of this
+	function already uses.
+
+	Client report, 2 Nov 2026 -- `entered_boxes`, when given, means the dealer
+	portal's own combined Boxes+Pcs entry: `qty` here is the Pcs component only,
+	`entered_boxes` the Boxes component, and the two combine into one box-equivalent
+	(the Pcs component rounds up to a whole box, same convention convert_qty_to_boxes
+	uses). Takes priority over plain `uom` conversion when both are somehow given.
+	Deliberately NOT collapsed into a single "total pieces" figure before combining
+	-- doing that first and only then splitting it back into entered_boxes/entered_qty
+	for display does NOT round-trip to what the dealer actually typed whenever the
+	Pcs component is at or above the item's own pieces-per-box figure (50 Box + 5 Pcs
+	on a 4-pcs box is 52 boxes total, but re-deriving from 205 combined pieces gives
+	back "51 Box 1 Pcs", not "50 Box 5 Pcs") -- a real bug this fixes.
 
 	ISS-2026-00678 -- `damaged_stock` marks this as the dealer explicitly asking
 	for damage/insurance-claim bay stock specifically (shown separately on the
@@ -288,6 +329,30 @@ def _create_inquiry(
 	item-shaped half of this function is skipped for a Custom Style request."""
 	if bool(item) == bool(requested_style):
 		frappe.throw(_("Exactly one of item or requested_style is required."), frappe.ValidationError)
+
+	entered_qty = None
+	entered_uom = None
+	stored_entered_boxes = None
+	if item and entered_boxes is not None:
+		pieces = qty
+		boxes = entered_boxes
+		if pieces > 0:
+			ppb = item_pieces_per_box(item)
+			if not ppb:
+				frappe.throw(
+					_("{0} has no Pcs-per-box figure set, so pieces can't be added to a box quantity for it.").format(item),
+					frappe.ValidationError,
+				)
+			qty = boxes + math.ceil(pieces / ppb)
+			entered_qty = pieces
+			entered_uom = "Pcs"
+			stored_entered_boxes = boxes
+		else:
+			qty = boxes
+	elif item and uom and uom != "Box":
+		entered_qty = qty
+		entered_uom = uom
+		qty = convert_qty_to_boxes(item, qty, uom)
 
 	if assigned_to is None and set(frappe.get_roles(frappe.session.user)) & INQUIRY_WRITE_ROLES:
 		# Only a staff caller defaults to self-assignment -- a dealer-portal session
@@ -343,6 +408,18 @@ def _create_inquiry(
 			"custom_requested_style": requested_style,
 			"request_group": request_group,
 			"qty": qty,
+			# Client report, 2 Nov 2026 -- omitted entirely for a plain-box entry, same as
+			# catalog.utils.normalize_order_line_uoms already does for Sales Order Item/
+			# Quotation Item, rather than passed as explicit None -- Frappe coerces an
+			# explicit None into the field's own "empty" value on save (0.0 for the Float
+			# entered_qty, the Select's first listed option -- "Box" -- for entered_uom),
+			# which is indistinguishable from a real "entered as 0 Box" and was showing as
+			# exactly that on every plain-box enquiry.
+			**(
+				{"entered_boxes": stored_entered_boxes, "entered_qty": entered_qty, "entered_uom": entered_uom}
+				if entered_uom
+				else {}
+			),
 			"damaged_stock": damaged_stock,
 			"source": source,
 			"status": inquiry_status,
