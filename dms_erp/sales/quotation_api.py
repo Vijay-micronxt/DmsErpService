@@ -134,6 +134,11 @@ def _serialize_line(row) -> dict:
 		"enteredUom": row.get("custom_entered_uom"),
 		# ISS-2026-00678 -- see order_api._serialize_line's matching field.
 		"damagedStock": bool(row.get("custom_damaged_stock")),
+		# ISS-2026-00712 -- the dealer's own batch choice, carried from the source
+		# Inquiry when this quotation was built from one; see order_api._serialize_line's
+		# matching field. None/"Auto" means dispatch draws whichever batch(es) are on
+		# hand once this becomes a Sales Order.
+		"preferredBatchNo": row.get("custom_preferred_batch_no"),
 	}
 
 
@@ -162,6 +167,21 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 		dealer_price = get_price_for_dealer(item, dealer)
 		if dealer_price is None:
 			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
+		# ISS-2026-00712 -- see order_api._priced_order_line's matching check; re-checked
+		# again at actual dispatch time regardless, since stock can move between
+		# quotation and order and dispatch.
+		preferred_batch_no = line.get("preferred_batch_no") or None
+		if preferred_batch_no:
+			from dms_erp.warehouse.utils import all_batches
+
+			available = next((b["boxes"] for b in all_batches(item) if b["batchNumber"] == preferred_batch_no), 0)
+			if available < line["qty"]:
+				frappe.throw(
+					_("Batch {0} only has {1} boxes of {2} on hand -- not enough for the {3} requested.").format(
+						preferred_batch_no, available, item, line["qty"]
+					),
+					frappe.ValidationError,
+				)
 		price_list_rate = round(dealer_price * (1 + float(markup_pct) / 100))
 		discount_pct = float(line.get("discount_percentage") or 0)
 		if not 0 <= discount_pct <= 100:
@@ -197,6 +217,7 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 				# Sales Order Item's own, so _convert_to_order's native mapper carries it
 				# across automatically.
 				"custom_damaged_stock": bool(line.get("damaged_stock")),
+				"custom_preferred_batch_no": preferred_batch_no,
 			}
 		)
 	return items
@@ -217,6 +238,7 @@ def _lines_from_items(rows) -> list[dict]:
 			"delivery_date": row.custom_delivery_date,
 			"entered_qty": row.get("custom_entered_qty"),
 			"entered_uom": row.get("custom_entered_uom"),
+			"preferred_batch_no": row.get("custom_preferred_batch_no"),
 		}
 		for row in rows
 	]

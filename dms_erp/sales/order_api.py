@@ -47,6 +47,28 @@ ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 ADVANCE_CONFIRM_ROLES = {"DMS Management", "System Manager"}
 FORWARD_FLOW = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered"]
 
+# Child-row fields a mapped draft row (make_sales_invoice/make_delivery_note) carries
+# that must NOT follow the row into a different/split row: each is either an identity
+# Frappe assigns fresh on insert/append (name/idx), a linkage field Frappe sets itself
+# when the row is appended (parent/parentfield/parenttype), or bookkeeping that belongs
+# to the eventual actual insert, not the as-yet-unsaved source draft (owner/creation/
+# modified/modified_by/docstatus). Shared by create_consolidated_sales_invoice (merging
+# several orders' Sales Invoice Item rows onto one invoice) and _create_delivery_note
+# (ISS-2026-00712 -- splitting one Delivery Note Item row across more than one bay/batch)
+# -- same problem, same generic Frappe child-table fields either way, not doctype-specific.
+_MAPPED_ITEM_ROW_SYSTEM_FIELDS = {
+	"name",
+	"parent",
+	"parentfield",
+	"parenttype",
+	"idx",
+	"owner",
+	"creation",
+	"modified",
+	"modified_by",
+	"docstatus",
+}
+
 
 def _assert_can_manage_orders():
 	if not set(frappe.get_roles(frappe.session.user)) & ORDER_WRITE_ROLES:
@@ -59,6 +81,7 @@ def _assert_can_confirm_advance():
 
 
 def _serialize(doc) -> dict:
+	invoiced_by_line = _invoiced_qty_by_line(doc.name)
 	return {
 		"id": doc.name,
 		"number": doc.name,
@@ -68,7 +91,7 @@ def _serialize(doc) -> dict:
 		"sourceType": doc.custom_source_type,
 		"sourceRef": doc.custom_source_ref,
 		"channel": doc.custom_order_channel,
-		"lines": [_serialize_line(row) for row in doc.items],
+		"lines": [_serialize_line(row, invoiced_by_line.get(row.name, 0)) for row in doc.items],
 		# Server-computed only — every line's rate came from get_price_for_dealer at
 		# creation time, never a client-supplied value, so this total is trustworthy.
 		"total": doc.grand_total,
@@ -83,6 +106,12 @@ def _serialize(doc) -> dict:
 		],
 		"totalTaxesAndCharges": doc.total_taxes_and_charges,
 		"stage": doc.custom_fulfillment_stage,
+		# ISS-2026-00710 -- native ERPNext field, kept in sync by core on every Sales
+		# Invoice submit/cancel against this order; never computed here. "Partly
+		# Billed" is what create_sales_invoice's partial-qty support (see below)
+		# actually produces now that a second invoice against the same order is
+		# allowed.
+		"billingStatus": doc.billing_status,
 		"customerPo": doc.po_no,
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
@@ -173,14 +202,48 @@ def _order_invoices(order: str) -> list[dict]:
 	return invoices
 
 
-def _serialize_line(row) -> dict:
+def _invoiced_qty_by_line(order: str) -> dict:
+	"""ISS-2026-00710 -- per-Sales-Order-Item-row invoiced qty, summed across every
+	live (submitted, not cancelled) Sales Invoice against this order, keyed by that
+	row's own name (so_detail). A line billed twice -- once partially, then the
+	remainder later -- reports its true running total here, not just the latest
+	invoice's qty. Same key ERPNext's own make_sales_invoice mapper groups
+	billed_qty_by_item on internally, so this always agrees with what that mapper
+	would itself offer to invoice next."""
+	rows = frappe.db.sql(
+		"""
+		select sii.so_detail as so_detail, sum(sii.qty) as qty
+		from `tabSales Invoice Item` sii
+		inner join `tabSales Invoice` si on si.name = sii.parent
+		where sii.sales_order = %s and si.docstatus = 1
+		group by sii.so_detail
+		""",
+		(order,),
+		as_dict=True,
+	)
+	return {row.so_detail: flt(row.qty) for row in rows}
+
+
+def _serialize_line(row, qty_invoiced: float = 0) -> dict:
 	weight_per_box_kg = item_weight_per_box_kg(row.item_code)
 	pieces_per_box = item_pieces_per_box(row.item_code)
 	sqft_per_box = item_sqft_per_box(row.item_code)
 	sqm_per_box = item_sqm_per_box(row.item_code)
 	return {
+		# ISS-2026-00710 -- this row's own Sales Order Item name, the exact key
+		# create_sales_invoice's qty_by_item expects (so_detail) -- with no row
+		# identifier at all, the UI would have no way to say which line a partial
+		# qty is for.
+		"lineId": row.name,
 		"itemCode": row.item_code,
 		"qty": row.qty,
+		# qtyInvoiced/qtyPending exist so the UI can show a partially-invoiced
+		# line without re-deriving it from the order's invoice list itself;
+		# qty_invoiced is the sum of every live Sales Invoice's qty for this
+		# exact row (see _invoiced_qty_by_line), the same total ERPNext's own
+		# make_sales_invoice mapper already uses to decide what's left to bill.
+		"qtyInvoiced": qty_invoiced,
+		"qtyPending": max(flt(row.qty) - flt(qty_invoiced), 0),
 		# priceListRate is the undiscounted dealer-tier rate get_price_for_dealer
 		# resolved; rate is what's actually charged after discountPercentage.
 		# Both are always server-derived — discountPercentage is the only
@@ -206,6 +269,10 @@ def _serialize_line(row) -> dict:
 		# dealer explicitly asked for, not regular inventory -- see picking_api.
 		# ensure_pick_tasks, which reads this same field to route picking accordingly.
 		"damagedStock": bool(row.get("custom_damaged_stock")),
+		# ISS-2026-00712 -- the dealer's own batch choice at order time, if any;
+		# None/"Auto" means _resolve_delivery_picks draws whichever batch(es) are
+		# on hand, largest lot first, at actual dispatch time.
+		"preferredBatchNo": row.get("custom_preferred_batch_no"),
 	}
 
 
@@ -355,6 +422,25 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 	typed_rate = _typed_rate(item, line, discount_pct)
 	if typed_rate is not None:
 		rate = typed_rate  # BRD C.11 #3, gated before creation (see create_order)
+
+	# ISS-2026-00712 -- a dealer may ask for a specific batch instead of leaving
+	# it on Auto. Checked against real on-hand stock at order time so a doomed
+	# choice is rejected immediately rather than only failing later at dispatch;
+	# _resolve_delivery_picks re-checks it again at dispatch time regardless,
+	# since stock can move between order and dispatch.
+	preferred_batch_no = line.get("preferred_batch_no") or None
+	if preferred_batch_no:
+		from dms_erp.warehouse.utils import all_batches
+
+		available = next((b["boxes"] for b in all_batches(item) if b["batchNumber"] == preferred_batch_no), 0)
+		if available < line["qty"]:
+			frappe.throw(
+				_("Batch {0} only has {1} boxes of {2} on hand -- not enough for the {3} requested.").format(
+					preferred_batch_no, available, item, line["qty"]
+				),
+				frappe.ValidationError,
+			)
+
 	return {
 		"item_code": item,
 		"qty": line["qty"],
@@ -369,6 +455,7 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 		# ISS-2026-00678 -- same field/meaning as quotation_api._priced_items' own; read by
 		# picking_api.ensure_pick_tasks to route this line to a Damages Bay.
 		"custom_damaged_stock": bool(line.get("damaged_stock")),
+		"custom_preferred_batch_no": preferred_batch_no,
 	}
 
 
@@ -656,7 +743,7 @@ def _assert_lines_ready_for_delivery(doc) -> None:
 	category-based guess, never confirmed by the picking screen's own flow (it doesn't
 	ask staff to correct it before "Mark picked"), so it's a signal that picking is
 	underway, not where the stock dispatch will actually draw from -- see
-	_resolve_delivery_bay_and_batch, which finds that from real on-hand stock instead.
+	_resolve_delivery_picks, which finds that from real on-hand stock instead.
 	A line with no Pick Task, or one not yet Picked, blocks the move rather than
 	silently skipping the stock effect of a real dispatch."""
 	picked = set(
@@ -670,34 +757,59 @@ def _assert_lines_ready_for_delivery(doc) -> None:
 		)
 
 
-def _resolve_delivery_bay_and_batch(item: str, qty: float) -> tuple[str, str]:
-	"""Which bay and batch a Delivery Note line should actually draw from, for `item`.
-	Reads the same ground truth the Stock View page already uses
+def _resolve_delivery_picks(item: str, qty: float, preferred_batch_no: str | None = None) -> list[tuple[str, str, float]]:
+	"""Which bay(s)+batch(es) a Delivery Note line should actually draw `qty` of
+	`item` from. Reads the same ground truth the Stock View page already uses
 	(warehouse.utils.list_stock_lots) rather than Pick Task's own `suggested_bay`,
 	which is only ever an unconfirmed initial guess (see
-	_assert_lines_ready_for_delivery). Only ever auto-resolves the unambiguous case --
-	exactly one bay+batch with enough on hand across the whole warehouse; none, or
-	more than one, blocks the dispatch with a clear reason rather than guessing which
-	one staff meant or silently splitting the line across bays/batches Pick Task never
-	recorded a split for."""
+	_assert_lines_ready_for_delivery).
+
+	ISS-2026-00712: used to only auto-resolve the unambiguous case (exactly one
+	bay+batch with enough on hand alone) and refuse anything split, telling staff
+	to manually consolidate picking first. Now actually draws from more than one
+	lot when it has to -- largest lot first, same greedy rule warehouse.utils.
+	suggest_batch_combination already applies to the WhatsApp quoting flow, now
+	actually used at dispatch instead of just suggested there. Returns one
+	(bay, batch, qty) tuple per lot drawn from -- a single-element list for the
+	still-common case where one lot alone covers it.
+
+	A dealer's own preferred_batch_no (set at order time, see _priced_order_line)
+	is honoured first: every lot of that exact batch, across whichever bays it's
+	split over, drawn the same greedy way, large enough combined or not -- never
+	silently spilling into a different batch the dealer didn't choose. Re-checked
+	here even though _priced_order_line already checked it at order time, since
+	stock can move between order and dispatch."""
 	from dms_erp.warehouse.utils import list_stock_lots
 
-	lots = [l for l in list_stock_lots(item=item) if l["boxes"] >= qty]
-	if len(lots) == 1:
-		return lots[0]["bayId"], lots[0]["batchNumber"]
-	if not lots:
+	lots = [l for l in list_stock_lots(item=item) if l["boxes"] > 0]
+	if preferred_batch_no:
+		lots = [l for l in lots if l["batchNumber"] == preferred_batch_no]
+
+	lots = sorted(lots, key=lambda l: l["boxes"], reverse=True)
+	picks: list[tuple[str, str, float]] = []
+	remaining = qty
+	for lot in lots:
+		if remaining <= 0:
+			break
+		take = min(lot["boxes"], remaining)
+		picks.append((lot["bayId"], lot["batchNumber"], take))
+		remaining -= take
+
+	if remaining > 0:
+		if preferred_batch_no:
+			frappe.throw(
+				_("Batch {0} only has {1} of the {2} boxes of {3} needed -- pick a different batch or switch this line to Auto.").format(
+					preferred_batch_no, qty - remaining, qty, item
+				),
+				frappe.ValidationError,
+			)
 		frappe.throw(
-			_("No single bay has {0} boxes of {1} in one batch to dispatch -- split the pick across bays in Picking first.").format(
-				qty, item
+			_("Only {0} of the {1} boxes of {2} needed are on hand across every bay/batch -- check stock before dispatching.").format(
+				qty - remaining, qty, item
 			),
 			frappe.ValidationError,
 		)
-	frappe.throw(
-		_("{0} is split across {1} bays/batches with {2}+ boxes each -- pick from a single one before dispatch.").format(
-			item, len(lots), qty
-		),
-		frappe.ValidationError,
-	)
+	return picks
 
 
 def _create_delivery_note(order: str) -> dict:
@@ -713,16 +825,41 @@ def _create_delivery_note(order: str) -> dict:
 	Uses ERPNext's own Sales Order -> Delivery Note mapper (ERPNext's actual
 	stock-ledger-posting document) so items/rates are carried over from the
 	already-approved order, never re-derived; each line's warehouse and batch come
-	from _resolve_delivery_bay_and_batch (every line must already be Picked -- see
-	_assert_lines_ready_for_delivery, called first)."""
+	from _resolve_delivery_picks (every line must already be Picked -- see
+	_assert_lines_ready_for_delivery, called first).
+
+	ISS-2026-00712 -- a mapped row that needs more than one (bay, batch) pick to
+	cover its qty becomes that many Delivery Note Item rows instead of one, each a
+	straight slice of the original row (rate/item unchanged, only qty/warehouse/
+	batch_no differ per slice -- it's the same order line, just physically drawn
+	from more than one lot). Built via each row's own as_dict() minus the system
+	fields ERPNext assigns fresh on insert/append, the same pattern
+	create_consolidated_sales_invoice already uses for the identical problem on
+	Sales Invoice Item rows. Final amounts are never hand-summed here -- only
+	ERPNext's own calculate_taxes_and_totals, re-run after the split, derives
+	them."""
 	from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
 
 	doc = frappe.get_doc("Sales Order", order)
 	_assert_lines_ready_for_delivery(doc)
 
 	dn = make_delivery_note(order)
-	for row in dn.items:
-		row.warehouse, row.batch_no = _resolve_delivery_bay_and_batch(row.item_code, row.qty)
+	mapped_rows = list(dn.items)
+	dn.items = []
+	for row in mapped_rows:
+		preferred_batch_no = (
+			frappe.db.get_value("Sales Order Item", row.so_detail, "custom_preferred_batch_no") if row.so_detail else None
+		)
+		picks = _resolve_delivery_picks(row.item_code, row.qty, preferred_batch_no)
+		row_fields = {k: v for k, v in row.as_dict().items() if k not in _MAPPED_ITEM_ROW_SYSTEM_FIELDS}
+		for bay, batch, pick_qty in picks:
+			split_fields = dict(row_fields)
+			split_fields["qty"] = pick_qty
+			split_fields["warehouse"] = bay
+			split_fields["batch_no"] = batch
+			dn.append("items", split_fields)
+
+	dn.run_method("calculate_taxes_and_totals")
 	dn.insert(ignore_permissions=True)
 	dn.submit()
 	return {"id": dn.name}
@@ -796,7 +933,7 @@ def _serialize_invoice(doc) -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def create_sales_invoice(order: str):
+def create_sales_invoice(order: str, qty_by_item: dict | None = None):
 	"""BRD Figure 4's order-to-cash flow (Sales Order -> reserve stock -> Delivery
 	Note -> Sales Invoice + e-Way bill -> Payment Tracking) has never had a Sales
 	Invoice step anywhere in this app -- every "this app posts no Sales Invoice"
@@ -810,8 +947,21 @@ def create_sales_invoice(order: str):
 
 	Gated to Dispatched/Delivered -- billing an order that hasn't actually
 	started moving has no basis in the BRD's own diagram or in ordinary
-	invoicing practice. One live invoice per order: a second call against an
-	already-invoiced order is rejected rather than silently double-billing it.
+	invoicing practice.
+
+	ISS-2026-00710: partial invoicing. make_sales_invoice already only ever maps
+	each line's *pending* qty (qty still not covered by a live Sales Invoice) --
+	that's native ERPNext behaviour (get_pending_qty), not something built here.
+	What actually blocked a second invoice against the same order before this was
+	purely this function's own guard, which this now narrows: still rejected once
+	the order is fully billed (doc.billing_status), but a second, third, etc. call
+	against an order with qty left over is allowed, each one covering whatever is
+	still pending. qty_by_item optionally asks for less than the mapped pending
+	qty per row -- {sales_order_item_row_name: qty_to_invoice} (the row's own
+	`name`/so_detail, the same key _invoiced_qty_by_line and ERPNext's own mapper
+	use) -- so a dealer can be billed for 5 of 10 now and the rest on a later
+	invoice; a row left out of qty_by_item, or qty_by_item left out entirely,
+	bills that row's full pending qty exactly as before this existed.
 
 	The Delivery Note step the BRD diagram shows ahead of this now posts
 	automatically at Dispatched (see _create_delivery_note) -- this function only
@@ -828,12 +978,37 @@ def create_sales_invoice(order: str):
 			),
 			frappe.ValidationError,
 		)
-	if _order_invoices(order):
-		frappe.throw(_("{0} is already invoiced.").format(order), frappe.ValidationError)
+	if doc.billing_status in ("Fully Billed", "Closed"):
+		frappe.throw(_("{0} is already fully invoiced.").format(order), frappe.ValidationError)
 
 	from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 
 	invoice = make_sales_invoice(order, ignore_permissions=True)
+	if not invoice.items:
+		frappe.throw(_("Nothing left to invoice on {0}.").format(order), frappe.ValidationError)
+
+	if qty_by_item:
+		for row in invoice.items:
+			requested = qty_by_item.get(row.so_detail)
+			if requested is None:
+				continue
+			requested = flt(requested)
+			if requested <= 0 or requested > row.qty:
+				frappe.throw(
+					_("Qty to invoice for {0} must be more than 0 and at most the pending qty ({1}).").format(
+						row.item_code, row.qty
+					),
+					frappe.ValidationError,
+				)
+			row.qty = requested
+			row.amount = flt(row.rate) * requested
+			row.base_amount = row.amount * flt(invoice.conversion_rate)
+		# Never hand-summed -- same rule create_consolidated_sales_invoice's own
+		# docstring states: only ERPNext's own calculate_taxes_and_totals derives
+		# totals, re-run here because the qty/amount overrides above land after
+		# make_sales_invoice already ran it once.
+		invoice.run_method("calculate_taxes_and_totals")
+
 	# BRD C.4.3 -- the retail/bulk tag follows the order onto its invoice.
 	invoice.custom_order_channel = doc.custom_order_channel
 	invoice.customer_address = doc.customer_address
@@ -842,25 +1017,6 @@ def create_sales_invoice(order: str):
 	invoice.submit()
 
 	return _serialize_invoice(invoice)
-
-
-# Child-row fields make_sales_invoice's draft rows carry that must NOT follow the row onto a
-# different invoice: each is either an identity Frappe assigns fresh on insert (name/idx), or a
-# linkage field Frappe sets itself when the row is appended to the merged invoice (parent/
-# parentfield/parenttype), or bookkeeping that belongs to the eventual actual insert, not the
-# as-yet-unsaved source draft (owner/creation/modified/modified_by/docstatus).
-_MAPPED_ITEM_ROW_SYSTEM_FIELDS = {
-	"name",
-	"parent",
-	"parentfield",
-	"parenttype",
-	"idx",
-	"owner",
-	"creation",
-	"modified",
-	"modified_by",
-	"docstatus",
-}
 
 
 @frappe.whitelist(methods=["POST"])

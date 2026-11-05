@@ -293,6 +293,27 @@ def top_batches(item: str, n: int = 3) -> list[dict]:
 	return _ranked_batches(item)[:n]
 
 
+def item_codes_with_batch(search: str) -> set[str]:
+	"""ISS-2026-00712 -- batch-number search for the dealer catalog listing (get_catalog).
+	Same Serial and Batch Entry / legacy Stock Ledger Entry.batch_no fallback
+	list_stock_lots' own docstring explains -- a plain filter on sle.batch_no alone
+	would silently miss every batch tracked through the newer Serial and Batch
+	Bundle. A partial match (LIKE) since a dealer is typing a batch number from a
+	label, not necessarily the exact full code."""
+	rows = frappe.db.sql(
+		"""
+		select distinct sle.item_code as item_code
+		from `tabStock Ledger Entry` sle
+		left join `tabSerial and Batch Entry` sbe on sbe.parent = sle.serial_and_batch_bundle
+		where sle.is_cancelled = 0
+			and coalesce(sbe.batch_no, sle.batch_no) like %(search)s
+		""",
+		{"search": f"%{search}%"},
+		as_dict=True,
+	)
+	return {row.item_code for row in rows}
+
+
 def all_batches(item: str) -> list[dict]:
 	"""Every batch of an item, ranked largest first -- the uncapped sibling of
 	top_batches, for a caller that genuinely needs the full breakdown rather than

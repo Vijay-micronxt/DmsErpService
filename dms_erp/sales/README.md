@@ -131,9 +131,13 @@ domain boundary (Inquiries/Quotations/Orders/Picking are one connected flow).
     own `suggested_bay` is only `ensure_pick_tasks`' initial category-based guess,
     never confirmed by the picking screen's own flow, so the warehouse and batch
     are instead resolved from real on-hand stock at dispatch time
-    (`_resolve_delivery_bay_and_batch`, over `warehouse.utils.list_stock_lots`) —
-    the unambiguous case only (exactly one bay+batch with enough on hand); a split
-    or insufficient pick blocks dispatch with a clear reason rather than guessing.
+    (`_resolve_delivery_picks`, over `warehouse.utils.list_stock_lots`) — largest
+    lot first, splitting the mapped row across more than one bay/batch when one
+    lot alone isn't enough (ISS-2026-00712); only an insufficient pick across
+    every lot blocks dispatch. A dealer's own preferred batch
+    (`Sales Order Item.custom_preferred_batch_no`, set at order time) is honoured
+    first and only draws from that batch, failing clearly if it's short rather
+    than silently spilling into a different one.
   - **`create_sales_invoice`** (pre-existing) now also carries the order's
     `custom_order_channel` onto the Sales Invoice (BRD C.4.3) — a new
     `Sales Invoice.custom_order_channel` custom field, so Retail-only signals

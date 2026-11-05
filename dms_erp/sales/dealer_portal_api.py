@@ -36,7 +36,7 @@ from dms_erp.sales.inquiry_api import _create_inquiry, _inquiry_filters, _serial
 from dms_erp.sales.order_api import _create_order
 from dms_erp.sales.order_api import _serialize as _serialize_order
 from dms_erp.sales.quotation_api import _convert_to_order
-from dms_erp.warehouse.utils import all_batches, top_batches, total_stock_for_item
+from dms_erp.warehouse.utils import all_batches, item_codes_with_batch, top_batches, total_stock_for_item
 
 
 MAX_ENQUIRY_ITEMS = 50
@@ -180,7 +180,15 @@ def get_catalog(
 	colour_attribute_1/2/design_attribute_1/2 stay as exact-match filter params
 	(and their list_catalog_* option endpoints) for any future caller that wants a
 	precise filter rather than free-text search, even though the dealer portal's
-	own UI no longer sends them."""
+	own UI no longer sends them.
+
+	ISS-2026-00712, folded into the one `search` box on client request (4 Nov
+	2026 -- two separate search boxes read as one too many) -- a `search` term
+	now also matches items with on-hand stock in a batch number containing it
+	(warehouse.utils.item_codes_with_batch), OR'd in alongside the existing
+	name/code/attribute match, not AND'd -- "RUSTIC" should find items named
+	Rustic as well as items only identifiable by a batch called RUSTIC-04,
+	not require both at once."""
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 
@@ -204,7 +212,8 @@ def get_catalog(
 
 	if search:
 		pre_filtered = set(frappe.get_all("Item", filters=filters, pluck="name"))
-		filters["name"] = ["in", list(_catalog_search_matches(pre_filtered, search)) or [""]]
+		matches = _catalog_search_matches(pre_filtered, search) | (item_codes_with_batch(search) & pre_filtered)
+		filters["name"] = ["in", list(matches) or [""]]
 
 	total = frappe.db.count("Item", filters=filters)
 	codes = frappe.get_all(
@@ -322,6 +331,7 @@ def raise_inquiry(
 	damaged_stock: bool = False,
 	uom: str | None = None,
 	entered_boxes: float | None = None,
+	preferred_batch_no: str | None = None,
 ):
 	"""BRD C.13.1 — the out-of-stock / "raise an enquiry" path. Always source="Web"
 	and always unassigned (see inquiry_api._create_inquiry's own staff-only
@@ -336,10 +346,23 @@ def raise_inquiry(
 	ORDER_UOMS for the full set _create_inquiry itself accepts) lets a dealer enter
 	the quantity in pieces instead of counting out boxes themselves. `entered_boxes`
 	is the portal's own combined Boxes+Pcs entry (`qty` is then the Pcs component) --
-	see _create_inquiry's own docstring for why that's kept separate from `uom`."""
+	see _create_inquiry's own docstring for why that's kept separate from `uom`.
+
+	ISS-2026-00712 -- `preferred_batch_no` is the dealer's own batch choice,
+	checked against real on-hand stock the same way _create_inquiry already
+	checks it; see that function's own docstring for how it carries onto the
+	eventual order via convert_to_order."""
 	dealer = _current_dealer()
 	data = _create_inquiry(
-		dealer, item, qty, source="Web", remarks=remarks, damaged_stock=damaged_stock, uom=uom, entered_boxes=entered_boxes
+		dealer,
+		item,
+		qty,
+		source="Web",
+		remarks=remarks,
+		damaged_stock=damaged_stock,
+		uom=uom,
+		entered_boxes=entered_boxes,
+		preferred_batch_no=preferred_batch_no,
 	)
 	data["orderable"] = is_visible(dealer, item)
 	data.pop("price", None)
@@ -373,7 +396,16 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 	instead carry `enteredBoxes`/`entered_boxes` (either key accepted) for the
 	portal's combined Boxes+Pcs entry -- `qty` is then just the Pcs component, which
 	can legitimately be 0 on its own (boxes-only), so the zero-qty check below sums
-	both rather than looking at `qty` alone."""
+	both rather than looking at `qty` alone.
+
+	ISS-2026-00712 -- an entry may also carry `preferredBatchNo`/`preferred_batch_no`
+	(either key accepted), the dealer's own batch choice for that line; see
+	raise_inquiry's own docstring. Folded into the duplicate check's key alongside
+	damaged_stock -- a dealer splitting one item's qty across two batches (the
+	item page's own "Add to enquiry list" does exactly this, one line per batch)
+	sends two entries for the same item, which must not trip "listed twice"
+	against each other any more than a damaged-stock line does. Client report,
+	4 Nov 2026: it did, because the check only accounted for damaged_stock."""
 	dealer = _current_dealer()
 	entries = frappe.parse_json(items) if isinstance(items, str) else items
 	if not entries:
@@ -382,13 +414,14 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 		frappe.throw(_("An enquiry can list at most {0} items.").format(MAX_ENQUIRY_ITEMS), frappe.ValidationError)
 
 	allowed = set(browsable_catalog_for(dealer))
-	seen: set[tuple[str, bool]] = set()
+	seen: set[tuple[str, bool, str | None]] = set()
 	for entry in entries:
 		item = entry.get("item")
 		if item not in allowed:
 			frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
 		damaged = bool(entry.get("damagedStock") or entry.get("damaged_stock"))
-		key = (item, damaged)
+		preferred_batch_no = entry.get("preferredBatchNo") or entry.get("preferred_batch_no")
+		key = (item, damaged, preferred_batch_no)
 		if key in seen:
 			frappe.throw(_("{0} is listed twice -- combine the quantities.").format(item), frappe.ValidationError)
 		seen.add(key)
@@ -414,6 +447,7 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 			damaged_stock=bool(entry.get("damagedStock") or entry.get("damaged_stock")),
 			uom=entry.get("uom"),
 			entered_boxes=flt(entered_boxes) if entered_boxes is not None else None,
+			preferred_batch_no=entry.get("preferredBatchNo") or entry.get("preferred_batch_no"),
 		)
 		if group is None:
 			group = inquiry["id"]
@@ -525,7 +559,10 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 			frappe.PermissionError,
 		)
 
-	lines = [{"item": doc.item, "qty": doc.qty}]
+	# ISS-2026-00712 -- carries the dealer's own batch choice (if any) from the
+	# enquiry onto the resulting order line; _priced_order_line re-validates it
+	# against real on-hand stock (it may have moved since the enquiry).
+	lines = [{"item": doc.item, "qty": doc.qty, "preferred_batch_no": doc.get("preferred_batch_no")}]
 	from dms_erp.sales.utils import default_billing_shipping_for
 
 	customer_address, shipping_address_name = default_billing_shipping_for(dealer)
@@ -813,6 +850,9 @@ def _serialize_dealer_quotation(doc) -> dict:
 				"deliveryDate": row.get("custom_delivery_date"),
 				"weightPerBoxKg": weight,
 				"totalWeightKg": weight * row.qty if weight is not None else None,
+				# ISS-2026-00712 -- the dealer's own batch choice, carried over from
+				# whichever Inquiry line this quotation was built from.
+				"preferredBatchNo": row.get("custom_preferred_batch_no"),
 			}
 		)
 	return {

@@ -131,6 +131,9 @@ def _serialize(doc) -> dict:
 		# on its own falsiness.
 		"enteredBoxes": doc.get("entered_boxes") if doc.get("entered_qty") else None,
 		"damagedStock": bool(doc.get("damaged_stock")),
+		# ISS-2026-00712 -- the dealer's own batch choice, if any; None/"Auto" means
+		# convert_to_order leaves it to order_api._resolve_delivery_picks at dispatch.
+		"preferredBatchNo": doc.get("preferred_batch_no"),
 		# BRD C.2.1/C.7.1 -- price derived from the dealer's own classification tier
 		# (Standard/Dealer/Master), the same lookup Quotation/Order already use
 		# (pricing.api.get_price_for_dealer), shown here at Inquiry stage too rather
@@ -279,6 +282,7 @@ def _create_inquiry(
 	damaged_stock: bool = False,
 	uom: str | None = None,
 	entered_boxes: float | None = None,
+	preferred_batch_no: str | None = None,
 ) -> dict:
 	"""Unguarded core of create_inquiry -- also called directly by
 	sales.dealer_portal_api.raise_inquiry, whose own DMS Dealer session (scoped to
@@ -316,6 +320,16 @@ def _create_inquiry(
 	custom_damaged_stock (same fieldname both sides, so ERPNext's native
 	Quotation->Sales Order mapper copies it with no extra glue) so picking routes
 	to the Damages Bay instead of a normal one.
+
+	ISS-2026-00712 -- `preferred_batch_no` is the dealer's own batch choice at
+	enquiry time (ignored for a Custom Style request -- no real Item/stock to
+	validate it against). Checked against real on-hand stock in that batch the
+	same way order_api._priced_order_line checks it for a staff/dealer order line
+	directly -- rejected immediately rather than only failing later if/when this
+	enquiry is converted to an order. Carried onto the resulting Sales Order line
+	by dealer_portal_api.convert_to_order if/when that happens; order_api.
+	_resolve_delivery_picks re-checks it again at dispatch time regardless, since
+	stock can move between enquiry and dispatch.
 
 	ISS-2026-00636 / MOM 3.6 -- "Custom Style": exactly one of `item`/
 	`requested_style` is given, never both, never neither. `requested_style` is a
@@ -400,6 +414,18 @@ def _create_inquiry(
 		# (update_inquiry) as "Pre-order Required" already does.
 		inquiry_status = "Open"
 
+	if preferred_batch_no and item:
+		from dms_erp.warehouse.utils import all_batches
+
+		available = next((b["boxes"] for b in all_batches(item) if b["batchNumber"] == preferred_batch_no), 0)
+		if available < qty:
+			frappe.throw(
+				_("Batch {0} only has {1} boxes of {2} on hand -- not enough for the {3} requested.").format(
+					preferred_batch_no, available, item, qty
+				),
+				frappe.ValidationError,
+			)
+
 	doc = frappe.get_doc(
 		{
 			"doctype": "Inquiry",
@@ -421,6 +447,7 @@ def _create_inquiry(
 				else {}
 			),
 			"damaged_stock": damaged_stock,
+			"preferred_batch_no": preferred_batch_no if item else None,
 			"source": source,
 			"status": inquiry_status,
 			"expected_delivery": expected_delivery,
