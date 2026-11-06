@@ -31,108 +31,31 @@ frappe.ui.form.on("Inquiry", {
 });
 
 function create_quotation_from_inquiry(frm) {
-	const dialog = new frappe.ui.Dialog({
-		title: __("Create Quotation from {0}", [frm.doc.name]),
-		fields: [
-			{
-				fieldname: "markup_pct",
-				fieldtype: "Percent",
-				label: __("Markup %"),
-				default: 0,
-				reqd: 1,
-			},
-			{ fieldname: "freight", fieldtype: "Currency", label: __("Freight"), default: 0 },
-			{
-				fieldname: "validity_days",
-				fieldtype: "Int",
-				label: __("Valid For (days)"),
-				default: 7,
-				reqd: 1,
-			},
-			{
-				fieldname: "taxes_and_charges",
-				fieldtype: "Link",
-				label: __("Tax Template (GST)"),
-				options: "Sales Taxes and Charges Template",
-				description: __(
-					"Left blank, the quotation is untaxed -- this app never computes GST itself, only an existing template's own rows.",
-				),
-			},
-		],
-		primary_action_label: __("Create"),
-		primary_action(values) {
-			dialog.hide();
-			frappe.call({
-				method: "dms_erp.sales.quotation_api.create_quotation",
-				args: {
-					dealer: frm.doc.dealer,
-					lines: [{ item: frm.doc.item, qty: frm.doc.qty }],
-					markup_pct: values.markup_pct,
-					freight: values.freight,
-					validity_days: values.validity_days,
-					inquiries: [frm.doc.name],
-					taxes_and_charges: values.taxes_and_charges || undefined,
-				},
-				freeze: true,
-				freeze_message: __("Creating quotation..."),
-				callback(r) {
-					if (r.message) {
-						frappe.set_route("Form", "Quotation", r.message.id);
-					}
-				},
-			});
-		},
+	// 6 Nov 2026 -- matches ERPNext's own Opportunity -> Quotation exactly: no
+	// dialog, just open_mapped_doc routing straight to a new, unsaved,
+	// pre-filled Quotation form (inquiry_api.make_quotation does the mapping,
+	// including defaulting the address pair that used to be this function's own
+	// dialog-first fix for the gap-sheet's #1/#8). Staff edit Markup %/Freight/
+	// Tax Template etc. directly on that real form, then click Desk's own
+	// native Save/Submit -- see quotation_api.guard_native_submit for the
+	// catalog/stock/address checks that create_quotation normally front-loads
+	// instead happening at that Submit.
+	frappe.model.open_mapped_doc({
+		method: "dms_erp.sales.inquiry_api.make_quotation",
+		frm: frm,
 	});
-	dialog.show();
 }
 
 function create_order_from_inquiry(frm) {
-	const dialog = new frappe.ui.Dialog({
-		title: __("Create Order from {0}", [frm.doc.name]),
-		fields: [
-			{
-				fieldname: "expected_dispatch",
-				fieldtype: "Date",
-				label: __("Expected Dispatch"),
-				reqd: 1,
-			},
-			{
-				fieldname: "customer_po",
-				fieldtype: "Data",
-				label: __("Dealer's PO Number"),
-			},
-			{
-				fieldname: "taxes_and_charges",
-				fieldtype: "Link",
-				label: __("Tax Template (GST)"),
-				options: "Sales Taxes and Charges Template",
-				description: __(
-					"Left blank, the order is untaxed -- this app never computes GST itself, only an existing template's own rows.",
-				),
-			},
-		],
-		primary_action_label: __("Create"),
-		primary_action(values) {
-			dialog.hide();
-			frappe.call({
-				method: "dms_erp.sales.order_api.create_order",
-				args: {
-					dealer: frm.doc.dealer,
-					lines: [{ item: frm.doc.item, qty: frm.doc.qty }],
-					expected_dispatch: values.expected_dispatch,
-					inquiry: frm.doc.name,
-					customer_po: values.customer_po || undefined,
-					taxes_and_charges: values.taxes_and_charges || undefined,
-				},
-				freeze: true,
-				freeze_message: __("Creating order..."),
-				callback(r) {
-					if (r.message) {
-						frappe.set_route("Form", "Sales Order", r.message.id);
-					}
-				},
-			});
-		},
+	// 6 Nov 2026 -- same native mapped-doc fix as create_quotation_from_inquiry
+	// above, same ask: no dialog, open_mapped_doc straight to a new, unsaved,
+	// pre-filled Sales Order form (inquiry_api.make_order). See order_api.
+	// guard_native_submit for the address/discount/channel checks create_order
+	// normally front-loads instead happening at Submit, and for the
+	// fulfillment-stage bookkeeping finalize_new_order normally stamps at
+	// creation that this draft never went through.
+	frappe.model.open_mapped_doc({
+		method: "dms_erp.sales.inquiry_api.make_order",
+		frm: frm,
 	});
-	dialog.show();
 }

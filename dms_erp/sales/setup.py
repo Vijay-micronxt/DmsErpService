@@ -27,11 +27,13 @@ equivalent for become Custom Fields:
   reloads the doc before touching any line.
 """
 
+import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from dms_erp.catalog.utils import ORDER_UOMS
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATIONS
 from dms_erp.sales.order_channel import DEALER_TYPES
+from dms_erp.setup.client_scripts import sync_client_scripts
 
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
@@ -471,5 +473,138 @@ TALLY_SYNC_CUSTOM_FIELDS = {
 }
 
 
+# Gap-sheet item #10 (native-Desk audit, 6 Nov 2026): custom_stage_history and
+# custom_driver_mobile have no visibility condition at all (see their own
+# CUSTOM_FIELDS entries above) -- they show up editable on the brand-new "New
+# Sales Order" Desk form, which confused staff since both are only ever actually
+# set later, by the staff app's own dispatch flow (order_api.advance_order_stage),
+# never meant to be hand-filled at creation time. Hidden here until the order
+# document actually exists -- `frm.is_new()` is false the instant it's first
+# saved, same moment advance_order_stage's own flow could plausibly start writing
+# to them. A Client Script, not a Custom Field property, because "hide only while
+# new" needs to re-evaluate on the client as the form's own state changes --
+# Custom Field's own `hidden` is a static, one-time property.
+CLIENT_SCRIPTS = {
+	# 6 Nov 2026 -- "same as the staff workflow" ask: the staff app invoices a
+	# Dispatched/Delivered order via order_api.create_sales_invoice (Dispatched/
+	# Delivered + not already fully billed -- see that function's own gate);
+	# ERPNext's native "Get Items From > Sales Order" Create button on Sales
+	# Invoice only ever shows on a brand-new, empty Sales Invoice (docstatus 0),
+	# which nothing in this app's own flow ever leaves lying around for staff to
+	# find -- every invoice this app creates is inserted and submitted in one
+	# step. This is that same action, reachable from the Sales Order's own form
+	# instead, through the real gated function rather than a raw item-mapper
+	# that would skip the Dispatched/Delivered and already-fully-billed checks.
+	"Sales Order": """
+frappe.ui.form.on('Sales Order', {
+	refresh: function(frm) {
+		frm.toggle_display('custom_stage_history', !frm.is_new());
+		frm.toggle_display('custom_driver_mobile', !frm.is_new());
+		if (
+			frm.doc.docstatus === 1
+			&& ['Dispatched', 'Delivered'].includes(frm.doc.custom_fulfillment_stage)
+			&& !['Fully Billed', 'Closed'].includes(frm.doc.billing_status)
+		) {
+			frm.add_custom_button(__('Sales Invoice'), function() {
+				frappe.call({
+					method: 'dms_erp.sales.order_api.create_sales_invoice',
+					args: { order: frm.doc.name },
+					freeze: true,
+					freeze_message: __('Creating invoice...'),
+					callback: function(r) {
+						if (r.message && r.message.id) {
+							frappe.set_route('Form', 'Sales Invoice', r.message.id);
+						}
+					},
+				});
+			}, __('Create'));
+		}
+	},
+});
+""",
+	"Quotation": """
+frappe.ui.form.on('Quotation', {
+	// 6 Nov 2026 -- the native "Create > Quotation" mapped-doc draft
+	// (inquiry_api.make_quotation) starts every line's price_list_rate at 0%
+	// markup; this is what makes the number on screen track Markup % as staff
+	// edit it, same math quotation_api._priced_items uses, without duplicating
+	// that formula here (quotation_api.price_preview does the actual
+	// calculation). Only on an unsaved draft -- once submitted, custom_markup_pct
+	// is locked (no allow_on_submit) and this would be recomputing a rate that
+	// can no longer change anyway.
+	custom_markup_pct: function(frm) {
+		if (!frm.is_new()) return;
+		(frm.doc.items || []).forEach(function(row) {
+			frappe.call({
+				type: 'GET',
+				method: 'dms_erp.sales.quotation_api.price_preview',
+				args: { dealer: frm.doc.party_name, item: row.item_code, markup_pct: frm.doc.custom_markup_pct || 0 },
+				callback: function(r) {
+					if (r.message != null) {
+						frappe.model.set_value(row.doctype, row.name, 'price_list_rate', r.message);
+					}
+				},
+			});
+		});
+	},
+	refresh: function(frm) {
+		// "Same as the staff workflow" ask: ERPNext's own "Get Items From"
+		// menu here only ever offers "Opportunity" (erpnext's own hardcoded
+		// default) -- this app's real demand-signal doctype is Inquiry, not
+		// Opportunity (see inquiry_api's own module docstring on why
+		// Opportunity is only ever a one-way, create-time mirror). "Inquiry"
+		// alongside it reuses inquiry_api.make_quotation as the mapper, the
+		// same multi-select merge create_quotation's own `inquiries` list
+		// already supports, just reachable from this side too now.
+		if (frm.doc.docstatus === 0) {
+			frm.add_custom_button(__('Inquiry'), function() {
+				erpnext.utils.map_current_doc({
+					method: 'dms_erp.sales.inquiry_api.make_quotation',
+					source_doctype: 'Inquiry',
+					target: frm,
+					get_query_filters: {
+						status: ['not in', ['Converted to Order', 'Rejected', 'Mapped to PO', 'Closed']],
+					},
+				});
+			}, __('Get Items From'));
+		}
+		// The staff app's own "Convert to Order" (quotation_api.convert_to_order,
+		// credit-limit gated, BRD C.11 trigger #1) had no native-Desk equivalent
+		// at all -- staff had to leave Desk and use the staff app for this one
+		// step. Same function, same gate, just reachable here too now.
+		if (frm.doc.docstatus === 1 && !['Ordered', 'Lost', 'Cancelled', 'Expired'].includes(frm.doc.status)) {
+			frm.add_custom_button(__('Order'), function() {
+				frappe.call({
+					method: 'dms_erp.sales.quotation_api.convert_to_order',
+					args: { quotation: frm.doc.name },
+					freeze: true,
+					freeze_message: __('Creating order...'),
+					callback: function(r) {
+						if (r.message && r.message.id) {
+							frappe.set_route('Form', 'Sales Order', r.message.id);
+						} else if (r.message && r.message.approvalRequired) {
+							frappe.msgprint(__('This order would exceed the dealer\\'s credit limit -- a Management approval request has been queued.'));
+						}
+					},
+				});
+			}, __('Create'));
+		}
+	},
+});
+""",
+}
+# Gap-sheet items #1/#8 -- native Desk already has a "Create Quotation"/"Create
+# Order" action (dms_erp/sales/doctype/inquiry/inquiry.js, from an earlier
+# session). Neither uses a dialog any more (6 Nov 2026 -- matching ERPNext's
+# own Opportunity -> Quotation, at the user's explicit request): both open a
+# real, unsaved, editable form via frappe.model.open_mapped_doc /
+# inquiry_api.make_quotation/make_order, with addresses defaulted the same way
+# inside those mappers. See quotation_api.guard_native_submit / order_api.
+# guard_native_submit for where the address/discount/channel checks
+# create_quotation/create_order normally do up front instead happen for this
+# path -- at Submit, since nothing stops staff editing the draft first.
+
+
 def setup_sales():
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+	sync_client_scripts(CLIENT_SCRIPTS)

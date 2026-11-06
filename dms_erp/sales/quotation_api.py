@@ -285,6 +285,7 @@ def _amend_with_lines(doc, lines: list[dict]) -> dict:
 	for item in items:
 		amended.append("items", item)
 	amended.insert(ignore_permissions=True)
+	amended.flags.dms_prevalidated = True
 	amended.submit()
 
 	return _serialize(amended)
@@ -386,6 +387,81 @@ def get_purchase_costs(items) -> dict:
 @frappe.whitelist(methods=["GET"])
 def get_quotation(quotation: str):
 	return _serialize(frappe.get_doc("Quotation", quotation))
+
+
+@frappe.whitelist(methods=["GET"])
+def price_preview(dealer: str, item: str, markup_pct: float = 0) -> float | None:
+	"""Live price_list_rate preview for the native "Create > Quotation" mapped-doc
+	draft (inquiry_api.make_quotation) -- the Quotation Client Script
+	(sales/setup.py) calls this whenever Markup % changes on an unsaved draft, so
+	the number on screen updates the same way _priced_items would compute it,
+	without duplicating that formula in JS. None when the dealer has no approved
+	price for this item yet -- same "don't fabricate a number" rule _priced_items
+	itself enforces by throwing; a preview just can't throw mid-edit, so it
+	returns nothing instead and Submit-time guard_native_submit is what actually
+	blocks it."""
+	dealer_price = get_price_for_dealer(item, dealer)
+	if dealer_price is None:
+		return None
+	return round(dealer_price * (1 + float(markup_pct) / 100))
+
+
+def guard_native_submit(doc, method=None):
+	"""Quotation `before_submit` hook (hooks.py) -- the one gate every Quotation
+	passes through regardless of how it was created. Needed because the native
+	"Create > Quotation" mapped-doc draft (inquiry_api.make_quotation) is a real,
+	freely-editable unsaved Desk form, not a call to create_quotation -- nothing
+	else re-checks catalog visibility/sellability/stock/addresses before a plain
+	native Save+Submit the way _priced_items/create_quotation already does for
+	every other entry point.
+
+	Skips entirely when `doc.flags.dms_prevalidated` is set -- _create_quotation
+	and _amend_with_lines both set it right before their own `.submit()`, since
+	they've already run these exact checks (plus channel-override/discount-
+	threshold approval gating, which this hook deliberately does NOT re-run: a
+	Management-approved override replaying through approvals.api is legitimate,
+	and this hook has no way to tell "already approved" apart from "never
+	checked" other than that flag).
+
+	For a draft that reaches here unflagged -- i.e. actually came from the native
+	mapped-doc form -- channel overrides and above-threshold discounts are not
+	something this hook can route to the approval queue (that queue is a
+	create-time decision, not a submit-time one), so they're hard blocks instead:
+	fails closed, same as every other check here, rather than silently letting
+	an audit-locked override through unaudited."""
+	if doc.flags.get("dms_prevalidated"):
+		return
+
+	if not doc.customer_address:
+		frappe.throw(_("A bill-to (billing) address is required."), frappe.ValidationError)
+	if not doc.shipping_address_name:
+		frappe.throw(_("A ship-to (shipping) address is required."), frappe.ValidationError)
+	assert_address_belongs_to(doc.customer_address, "Customer", doc.party_name)
+	assert_address_belongs_to(doc.shipping_address_name, "Customer", doc.party_name)
+
+	from dms_erp.approvals.api import _discount_approval_threshold_pct
+
+	threshold = _discount_approval_threshold_pct()
+	for row in doc.items:
+		if not is_visible(doc.party_name, row.item_code):
+			frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(row.item_code), frappe.PermissionError)
+		status = frappe.get_cached_value("Item", row.item_code, "custom_discontinuation_status") or "Active"
+		if not is_sellable(status):
+			frappe.throw(_("{0} is {1} and can no longer be quoted.").format(row.item_code, status_label(status)), frappe.ValidationError)
+		if flt(row.discount_percentage) > threshold:
+			frappe.throw(
+				_("{0}'s discount needs Management approval -- use the Quotation Builder app for an override.").format(row.item_code),
+				frappe.ValidationError,
+			)
+
+	default_channel = auto_classify_channel(doc.party_name, [{"item": row.item_code, "qty": row.qty} for row in doc.items])
+	if doc.custom_order_channel and doc.custom_order_channel != default_channel:
+		frappe.throw(
+			_("Channel {0} differs from the auto-classified {1} -- channel overrides need to go through the Quotation Builder app.").format(
+				doc.custom_order_channel, default_channel
+			),
+			frappe.ValidationError,
+		)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -547,6 +623,7 @@ def _create_quotation(
 	apply_tax_template(doc, taxes_and_charges)
 	doc.insert(ignore_permissions=True)
 	clear_unrequested_default_tax(doc)
+	doc.flags.dms_prevalidated = True
 	doc.submit()
 
 	for inquiry in inquiries or []:
