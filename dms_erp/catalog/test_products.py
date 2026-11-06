@@ -364,10 +364,12 @@ class TestProducts(FrappeTestCase):
 		self.assertEqual(product["dealerPrice"], 612)
 
 	def test_available_stock_qty_excludes_damage_and_display_stock(self):
-		"""Client finding "stock accuracy" — availableStockQty (sellable_stock_for_item)
-		is wired onto get_product's response alongside the untouched staff-facing
-		stockQty (total_stock_for_item); real bay-level coverage lives in
-		warehouse.test_utils.TestSellableStockForItem, this just checks the wiring."""
+		"""Client finding "stock accuracy" — availableStockQty (BRD C.3.1, now
+		available_to_promise: physical stock minus damage/display bay minus
+		whatever's already committed to another dealer's own open order) is wired
+		onto get_product's response alongside the untouched staff-facing stockQty
+		(total_stock_for_item); real coverage of available_to_promise's own logic
+		lives in warehouse.test_utils, this just checks the wiring."""
 		product = catalog_api.create_product(
 			code="PROD-TEST-STOCK",
 			name="Test Stock Item",
@@ -380,11 +382,11 @@ class TestProducts(FrappeTestCase):
 		)
 		with (
 			patch("dms_erp.catalog.api.total_stock_for_item", return_value=18) as total_mock,
-			patch("dms_erp.catalog.api.sellable_stock_for_item", return_value=15) as sellable_mock,
+			patch("dms_erp.catalog.api.available_to_promise", return_value=15) as available_mock,
 		):
 			fetched = catalog_api.get_product(product["id"])
 		total_mock.assert_called_once_with(product["id"])
-		sellable_mock.assert_called_once_with(product["id"])
+		available_mock.assert_called_once_with(product["id"])
 		self.assertEqual(fetched["stockQty"], 18)
 		self.assertEqual(fetched["availableStockQty"], 15)
 

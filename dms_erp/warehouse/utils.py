@@ -75,6 +75,58 @@ def sellable_stock_for_item(item_code: str) -> float:
 	return float(total or 0)
 
 
+def reserved_qty_for_item(item_code: str) -> float:
+	"""BRD C.3.1 -- "stock is reserved on confirmation" had never actually been
+	true: confirming a Sales Order never reduced what other dealers saw as
+	available, so two dealers could both be sold the same boxes. This sums every
+	live (submitted, not cancelled) Sales Order's own qty for this item that's
+	still open -- not yet Dispatched (stock has already left, already reflected
+	in Bin.actual_qty) or Delivered, and not Cancelled (nothing left to hold).
+	Computed live from current order stages, not a stored ledger -- the moment an
+	order ships or is cancelled (including sales.reservation's own auto-cancel),
+	it simply stops counting here; there's no separate "release" step."""
+	total = frappe.db.sql(
+		"""select sum(soi.qty) from `tabSales Order Item` soi
+		join `tabSales Order` so on so.name = soi.parent
+		where soi.item_code = %(item)s and so.docstatus = 1
+			and so.custom_fulfillment_stage not in ('Dispatched', 'Delivered', 'Cancelled')""",
+		{"item": item_code},
+	)[0][0]
+	return float(total or 0)
+
+
+def reserving_orders_for_item(item_code: str) -> list[dict]:
+	"""Staff-only breakdown behind reserved_qty_for_item's total -- which open
+	Sales Order(s) are actually holding this item, and how much, so staff can see
+	*why* availableStockQty is lower than the physical count (chase that order
+	along, rather than just a smaller number with no explanation). Same open-
+	stage definition as reserved_qty_for_item. Never shown to a dealer -- same
+	category of internal operational detail as the fields dealer_portal_api's
+	_INTERNAL_ORDER_KEYS/_dealer_order already strip (channel, owner, etc.)."""
+	rows = frappe.db.sql(
+		"""select so.name as sales_order, so.customer as dealer, sum(soi.qty) as qty
+		from `tabSales Order Item` soi
+		join `tabSales Order` so on so.name = soi.parent
+		where soi.item_code = %(item)s and so.docstatus = 1
+			and so.custom_fulfillment_stage not in ('Dispatched', 'Delivered', 'Cancelled')
+		group by so.name, so.customer
+		order by so.transaction_date asc""",
+		{"item": item_code},
+		as_dict=True,
+	)
+	return [{"salesOrder": r.sales_order, "dealer": r.dealer, "qty": float(r.qty)} for r in rows]
+
+
+def available_to_promise(item_code: str) -> float:
+	"""The number a dealer should actually see and be allowed to order against --
+	sellable_stock_for_item (the physical count, already minus damage/display
+	bay) minus whatever's already committed to another dealer's own open order.
+	Never negative: an item already oversold (data predating this check, or a
+	damaged-stock claim eating into it) reads as 0 available, not a confusing
+	negative number."""
+	return max(0.0, sellable_stock_for_item(item_code) - reserved_qty_for_item(item_code))
+
+
 def excluded_stock_for_item(item_code: str) -> list[dict]:
 	"""The "View more" breakdown — how much of an item's total sits in a bay
 	sellable_stock_for_item excluded, grouped by bay type, so staff/the dealer portal
