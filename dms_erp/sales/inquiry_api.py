@@ -48,6 +48,7 @@ rejects it explicitly rather than failing through an item-shaped code path with
 a None item code.
 """
 
+import json
 import math
 
 import frappe
@@ -288,7 +289,7 @@ def default_addresses_for_dealer(dealer: str) -> dict:
 
 
 @frappe.whitelist()
-def make_quotation(source_name: str):
+def make_quotation(source_name: str, target_doc=None):
 	""""Create > Quotation" on an Inquiry (6 Nov 2026 -- the user explicitly asked
 	twice not to put a custom dialog in front of this, pointing at ERPNext's own
 	native Opportunity -> Quotation as the model to match) -- this is that exact
@@ -309,7 +310,23 @@ def make_quotation(source_name: str):
 	stock/sellability problem it finds rather than letting a draft exist at all.
 	Real validation happens once, at Submit (hooks.py's Quotation before_submit
 	-> quotation_api.guard_native_submit) -- the one place every path through
-	this doctype (native or API) is guaranteed to pass through."""
+	this doctype (native or API) is guaranteed to pass through.
+
+	`target_doc` (optional) is this same function doubling as the mapper behind
+	Quotation's own "Get Items From > Inquiry" button (sales/setup.py's
+	Quotation Client Script, erpnext.utils.map_current_doc) -- staff merging
+	several open Inquiries into one Quotation draft natively, same capability
+	quotation_api.create_quotation's own `inquiries` list already has, just
+	reachable from the Quotation side instead of needing one button-click per
+	Inquiry. frappe.model.mapper.map_docs calls this once per Inquiry selected,
+	threading the previous call's returned (still-unsaved) doc back in as
+	`target_doc` -- so document-level fields (party_name/addresses/channel/etc.)
+	are only ever set once, on the first Inquiry in the batch (target.party_name
+	still empty); every later call in the same batch just appends another item
+	row onto the same draft. A later Inquiry for a different dealer than the
+	first is rejected outright -- same one-dealer-per-quotation rule
+	create_quotation's own `inquiries` merge already enforces, just checked
+	here instead since nothing else would catch it before Submit."""
 	from frappe.model.mapper import get_mapped_doc
 
 	from dms_erp.sales.order_channel import auto_classify_channel
@@ -322,21 +339,32 @@ def make_quotation(source_name: str):
 			frappe.ValidationError,
 		)
 
+	existing = json.loads(target_doc) if isinstance(target_doc, str) else target_doc
+	existing_dealer = existing.get("party_name") if existing else None
+	if existing_dealer and existing_dealer != inquiry.dealer:
+		frappe.throw(
+			_("{0} belongs to {1}, not {2} -- a quotation can only merge inquiries from one dealer.").format(
+				source_name, inquiry.dealer, existing_dealer
+			),
+			frappe.ValidationError,
+		)
+
 	customer_address, shipping_address_name = default_billing_shipping_for(inquiry.dealer)
 	price_list_rate = get_price_for_dealer(inquiry.item, inquiry.dealer) or 0
 
 	def set_missing_values(source, target):
-		target.quotation_to = "Customer"
-		target.party_name = source.dealer
-		target.transaction_date = frappe.utils.today()
-		target.valid_till = frappe.utils.add_days(frappe.utils.today(), 7)
-		target.company = default_company()
-		target.custom_markup_pct = 0
-		target.custom_freight = 0
-		target.custom_inquiry = source.name
-		target.custom_order_channel = auto_classify_channel(source.dealer, [{"item": source.item, "qty": source.qty}])
-		target.customer_address = customer_address
-		target.shipping_address_name = shipping_address_name
+		if not target.party_name:
+			target.quotation_to = "Customer"
+			target.party_name = source.dealer
+			target.transaction_date = frappe.utils.today()
+			target.valid_till = frappe.utils.add_days(frappe.utils.today(), 7)
+			target.company = default_company()
+			target.custom_markup_pct = 0
+			target.custom_freight = 0
+			target.custom_order_channel = auto_classify_channel(source.dealer, [{"item": source.item, "qty": source.qty}])
+			target.customer_address = customer_address
+			target.shipping_address_name = shipping_address_name
+		target.custom_inquiry = target.custom_inquiry or source.name
 		target.append(
 			"items",
 			{
@@ -364,6 +392,7 @@ def make_quotation(source_name: str):
 				"field_no_map": ["source", "status"],
 			}
 		},
+		target_doc=target_doc,
 		postprocess=set_missing_values,
 	)
 
