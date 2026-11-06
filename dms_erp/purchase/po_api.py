@@ -16,7 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, getdate, today
 
-from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier
+from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.qr_utils import qr_data_uri
 from dms_erp.warehouse.allocation_api import _BOX_STICKER_CSS
@@ -145,7 +145,21 @@ def create_purchase_order(
 		line_ready_date = line.get("expected_ready_date") or expected_ready_date
 		if not line_ready_date:
 			frappe.throw(_("expected_ready_date is required, either per line or for the whole order."), frappe.ValidationError)
-		po_lines.append({"item_code": line_item, "qty": line_qty, "schedule_date": line_ready_date})
+		# Gap-sheet item #7 (native-Desk audit, 6 Nov 2026): ERPNext's own native
+		# weight_per_unit/weight_uom (both on Purchase Order Item -- the parent
+		# Purchase Order itself only has the read-only total_net_weight sum) were
+		# never populated here -- this app tracks weight through its own
+		# custom_weight_per_box_kg instead (BRD C.1.3), so the native "Total Net
+		# Weight" on the Desk form showed a number with no unit attached.
+		po_lines.append(
+			{
+				"item_code": line_item,
+				"qty": line_qty,
+				"schedule_date": line_ready_date,
+				"weight_per_unit": item_weight_per_box_kg(line_item) or 0,
+				"weight_uom": "Kg",
+			}
+		)
 
 	# BRD D.2 -- fall back to the first line's own default supplier (its Series'
 	# supplier, unless the item overrides it) when the caller doesn't name one

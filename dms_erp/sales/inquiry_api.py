@@ -266,6 +266,176 @@ def get_inquiry(inquiry: str):
 	return _serialize(frappe.get_doc("Inquiry", inquiry))
 
 
+@frappe.whitelist(methods=["GET"])
+def default_addresses_for_dealer(dealer: str) -> dict:
+	"""Gap-sheet item #1 (native-Desk audit, 6 Nov 2026) -- inquiry.js's own
+	"Create Quotation"/"Create Order" Desk dialogs call quotation_api.
+	create_quotation/order_api.create_order directly, but neither dialog ever
+	collected customer_address/shipping_address_name -- both mandatory
+	(BRD C.3.3), so every single Desk-created Quotation/Order failed outright
+	with "A bill-to (billing) address is required." the instant "Create" was
+	clicked. This is the exact same "no address-picker UI" gap every other
+	self-service channel already has a fallback for
+	(sales.utils.default_billing_shipping_for) -- just a thin whitelisted
+	wrapper so the Desk dialogs (which have no business calling a private
+	utility function directly) can resolve the same sane default before
+	calling create_quotation/create_order, instead of guessing an address or
+	skipping the fields entirely."""
+	from dms_erp.sales.utils import default_billing_shipping_for
+
+	billing, shipping = default_billing_shipping_for(dealer)
+	return {"customerAddress": billing, "shippingAddressName": shipping}
+
+
+@frappe.whitelist()
+def make_quotation(source_name: str):
+	""""Create > Quotation" on an Inquiry (6 Nov 2026 -- the user explicitly asked
+	twice not to put a custom dialog in front of this, pointing at ERPNext's own
+	native Opportunity -> Quotation as the model to match) -- this is that exact
+	mechanism: `frappe.model.mapper.get_mapped_doc`, the same mapper
+	erpnext.crm.doctype.opportunity.opportunity.make_quotation uses, called from
+	inquiry.js via `frappe.model.open_mapped_doc` (no dialog at all -- it routes
+	straight to a new, unsaved Quotation form pre-filled from this Inquiry, same
+	as clicking Opportunity's own "Create Quotation").
+
+	Markup %/Freight start at 0 -- not asked for up front, just editable on the
+	form like any other field, with price_list_rate recomputed live as Markup %
+	changes (quotation_api.price_preview, called by the Quotation Client Script,
+	sales/setup.py) so the number on screen is real, not a placeholder.
+
+	This can NOT reuse quotation_api._priced_items/create_quotation's one-shot
+	create+submit: the whole point here is an editable draft the user can change
+	before saving, and _priced_items throws immediately on the first catalog/
+	stock/sellability problem it finds rather than letting a draft exist at all.
+	Real validation happens once, at Submit (hooks.py's Quotation before_submit
+	-> quotation_api.guard_native_submit) -- the one place every path through
+	this doctype (native or API) is guaranteed to pass through."""
+	from frappe.model.mapper import get_mapped_doc
+
+	from dms_erp.sales.order_channel import auto_classify_channel
+	from dms_erp.sales.utils import default_billing_shipping_for
+
+	inquiry = frappe.get_doc("Inquiry", source_name)
+	if not inquiry.item:
+		frappe.throw(
+			_("{0} is a custom style request with no catalog item -- it can't become a Quotation.").format(source_name),
+			frappe.ValidationError,
+		)
+
+	customer_address, shipping_address_name = default_billing_shipping_for(inquiry.dealer)
+	price_list_rate = get_price_for_dealer(inquiry.item, inquiry.dealer) or 0
+
+	def set_missing_values(source, target):
+		target.quotation_to = "Customer"
+		target.party_name = source.dealer
+		target.transaction_date = frappe.utils.today()
+		target.valid_till = frappe.utils.add_days(frappe.utils.today(), 7)
+		target.company = default_company()
+		target.custom_markup_pct = 0
+		target.custom_freight = 0
+		target.custom_inquiry = source.name
+		target.custom_order_channel = auto_classify_channel(source.dealer, [{"item": source.item, "qty": source.qty}])
+		target.customer_address = customer_address
+		target.shipping_address_name = shipping_address_name
+		target.append(
+			"items",
+			{
+				"item_code": source.item,
+				"qty": source.qty,
+				"price_list_rate": price_list_rate,
+				"rate": price_list_rate,
+			},
+		)
+
+	return get_mapped_doc(
+		"Inquiry",
+		source_name,
+		{
+			"Inquiry": {
+				"doctype": "Quotation",
+				# get_mapped_doc auto-copies any identically-named field (frappe/model/
+				# mapper.py's map_fields) -- Inquiry.source ("WhatsApp"/"Web", free text)
+				# and Quotation.source (a Link to the CRM "Source" master) collide by pure
+				# coincidence and mean something completely different; copying Inquiry's
+				# value across broke every WhatsApp-sourced Inquiry's mapped doc outright
+				# with "Could not find Source: WhatsApp" the moment it was inserted.
+				# Inquiry.status/Quotation.status collide the same way (10-state Inquiry
+				# lifecycle vs. Quotation's own status), excluded defensively alongside it.
+				"field_no_map": ["source", "status"],
+			}
+		},
+		postprocess=set_missing_values,
+	)
+
+
+@frappe.whitelist()
+def make_order(source_name: str):
+	""""Create > Order" on an Inquiry -- same native mapped-doc pattern as
+	make_quotation above (6 Nov 2026, same ask), for the direct Inquiry ->
+	Sales Order path (no Quotation, no retail markup -- order_api.create_order's
+	own direct path, same plain approved-dealer-price rate).
+
+	order_api.finalize_new_order (the one every create_order call goes
+	through) stamps `custom_fulfillment_stage`/`custom_stage_history` at
+	creation time -- a mapped draft never goes through it, so
+	order_api.guard_native_submit (this doctype's own before_submit hook)
+	stamps that bookkeeping itself, once, right before Submit, the same way it
+	validates addresses/discount/channel there instead of here for the same
+	"editable draft, can't throw on open" reason make_quotation's docstring
+	explains."""
+	from frappe.model.mapper import get_mapped_doc
+
+	from dms_erp.sales.order_channel import auto_classify_channel
+	from dms_erp.sales.utils import default_billing_shipping_for
+
+	inquiry = frappe.get_doc("Inquiry", source_name)
+	if not inquiry.item:
+		frappe.throw(
+			_("{0} is a custom style request with no catalog item -- it can't become an Order.").format(source_name),
+			frappe.ValidationError,
+		)
+
+	customer_address, shipping_address_name = default_billing_shipping_for(inquiry.dealer)
+	price_list_rate = get_price_for_dealer(inquiry.item, inquiry.dealer) or 0
+
+	def set_missing_values(source, target):
+		target.customer = source.dealer
+		target.transaction_date = frappe.utils.today()
+		target.company = default_company()
+		target.po_no = source.customer_po
+		target.custom_source_type = "Inquiry"
+		target.custom_source_ref = source.name
+		target.custom_order_channel = auto_classify_channel(source.dealer, [{"item": source.item, "qty": source.qty}])
+		target.customer_address = customer_address
+		target.shipping_address_name = shipping_address_name
+		target.append(
+			"items",
+			{
+				"item_code": source.item,
+				"qty": source.qty,
+				"price_list_rate": price_list_rate,
+				"rate": price_list_rate,
+			},
+		)
+
+	return get_mapped_doc(
+		"Inquiry",
+		source_name,
+		{
+			"Inquiry": {
+				"doctype": "Sales Order",
+				# Same get_mapped_doc field-collision problem make_quotation hit --
+				# Inquiry.source/status collide with Sales Order's own same-named
+				# fields the same way they do with Quotation's; contact_phone also
+				# collides here (Sales Order's is tied to a Contact record, Inquiry's
+				# is free text) and isn't something this mapper sets anyway.
+				"field_no_map": ["source", "status", "contact_phone"],
+			}
+		},
+		postprocess=set_missing_values,
+	)
+
+
 def _create_inquiry(
 	dealer: str,
 	item: str | None,

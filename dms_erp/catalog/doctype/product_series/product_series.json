@@ -50,7 +50,7 @@
   },
   {
    "fieldname": "size",
-   "fieldtype": "Data",
+   "fieldtype": "Autocomplete",
    "label": "Size"
   },
   {
@@ -61,13 +61,13 @@
   {
    "description": "BRD C.1.1 top-level finish. Free text -- Matt/Glossy are the BRD minimum, suggested on the frontend, not an enforced closed list, so a new finish type doesn't need a schema change.",
    "fieldname": "finish",
-   "fieldtype": "Data",
+   "fieldtype": "Autocomplete",
    "label": "Finish"
   },
   {
    "description": "BRD C.1.1 sub-finish detail. Free text -- Rocker/Carving/Stone-Art/GVT-PGVT are suggested defaults, not an enforced closed list.",
    "fieldname": "sub_finish",
-   "fieldtype": "Data",
+   "fieldtype": "Autocomplete",
    "label": "Sub Finish"
   },
   {

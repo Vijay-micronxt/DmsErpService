@@ -11,6 +11,7 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from dms_erp.catalog.utils import DISCONTINUATION_STATUSES
+from dms_erp.setup.client_scripts import sync_client_scripts
 
 # Seeded from the categories already in use across the pacific-tileflow mock data.
 ITEM_GROUPS = ["Vitrified", "Floor Tiles", "Wall Tiles", "Outdoor / Parking"]
@@ -176,9 +177,95 @@ CUSTOM_FIELDS = {
 }
 
 
+# Gap-sheet items #2/#5 and #3/#3.1/#6 (native-Desk audit, 6 Nov 2026).
+CLIENT_SCRIPTS = {
+	# #2/#5 -- Product Series' own size/finish/sub_finish are free text on
+	# purpose (BRD C.1.1 -- not a closed list), so they stay the Autocomplete
+	# fieldtype (product_series.json), not Select; this just feeds that
+	# Autocomplete real suggestions from series_api's own list_series_sizes/
+	# list_series_finishes/list_series_sub_finishes (already built, already
+	# used by the React app's own SizePicker/FinishPicker/SubFinishPicker --
+	# the native Desk form just never called them), instead of free-typing the
+	# whole thing out by hand every time.
+	"Product Series": """
+frappe.ui.form.on('Product Series', {
+	onload: function(frm) {
+		frappe.call({method: 'dms_erp.catalog.series_api.list_series_sizes', callback: function(r) {
+			frm.set_df_property('size', 'options', r.message || []);
+		}});
+		frappe.call({method: 'dms_erp.catalog.series_api.list_series_finishes', callback: function(r) {
+			frm.set_df_property('finish', 'options', r.message || []);
+		}});
+		frappe.call({method: 'dms_erp.catalog.series_api.list_series_sub_finishes', callback: function(r) {
+			frm.set_df_property('sub_finish', 'options', r.message || []);
+		}});
+	},
+});
+""",
+	# #3/#3.1 -- "with Series selection, details should get auto fetched": size,
+	# finish, pieces/sqft/weight per box and reorder frequency all already live
+	# on Product Series (series_api._serialize); an Item linked to one had to
+	# have every one of those re-typed by hand. #6 ("reorder frequency should be
+	# system generated, not manual") folds in here too -- Product Series already
+	# has its own reorder_frequency field (confirmed in series_api.py), so this
+	# is the same "stop re-typing what's already on the Series" fix, not a new
+	# sales-velocity formula that doesn't exist anywhere in this app yet. Only
+	# fires on actually changing the Series (not on every refresh), and only
+	# fills a field the Series actually has a value for -- never overwrites an
+	# Item's own value with a blank.
+	"Item": """
+frappe.ui.form.on('Item', {
+	custom_series_ref: function(frm) {
+		if (!frm.doc.custom_series_ref) return;
+		frappe.call({
+			method: 'frappe.client.get',
+			args: {doctype: 'Product Series', name: frm.doc.custom_series_ref},
+			callback: function(r) {
+				var s = r.message;
+				if (!s) return;
+				var map = {
+					custom_size: s.size,
+					custom_finish: s.finish,
+					custom_pieces_per_box: s.pieces_per_box,
+					custom_sqft_per_box: s.sqft_per_box,
+					custom_weight_per_box_kg: s.weight_per_box_kg,
+					custom_reorder_frequency: s.reorder_frequency,
+				};
+				Object.keys(map).forEach(function(field) {
+					if (map[field] !== null && map[field] !== undefined && map[field] !== '') {
+						frm.set_value(field, map[field]);
+					}
+				});
+			}
+		});
+	},
+	// Gap #9 -- a whole leftover "Tile Details (Tally)" section (tally_item_section
+	// and everything under it) from the original Tally migration, duplicating
+	// dms_erp's own real fields above under different names/units (confirmed: 13
+	// real Custom Field records, not just stray DB columns). Hidden, not deleted --
+	// tally_guid in particular is very likely the matching key sales.tally_sync.py
+	// (currently disabled, not yet signed off) will need once that feature turns
+	// on, so removing the fields outright would risk breaking it later. Guarded
+	// per-field so this no-ops harmlessly on a site that never had a Tally import.
+	refresh: function(frm) {
+		[
+			'tally_item_section', 'tally_guid', 'tally_hsn_code', 'tally_gst_rate',
+			'tally_height_mm', 'tally_width_mm', 'tally_item_col', 'tally_pieces_per_box',
+			'tally_weight_per_piece', 'tally_hexagon', 'tally_hexagon_size',
+			'tally_hexagon_sqft', 'tally_stock_category',
+		].forEach(function(field) {
+			if (frm.fields_dict[field]) frm.toggle_display(field, false);
+		});
+	},
+});
+""",
+}
+
+
 def setup_catalog():
 	create_item_groups()
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+	sync_client_scripts(CLIENT_SCRIPTS)
 
 
 def create_item_groups():

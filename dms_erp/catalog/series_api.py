@@ -20,6 +20,7 @@ SERIES_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 
 FINISH_DEFAULTS = ["Matt", "Glossy"]
 SUB_FINISH_DEFAULTS = ["Rocker", "Carving", "Stone-Art", "GVT/PGVT"]
+SIZE_DEFAULTS = ["600x600mm", "300x300mm", "600x1200mm", "800x800mm"]
 
 
 def _distinct_values(fieldname: str, defaults: list[str]) -> list[str]:
@@ -40,6 +41,16 @@ def list_series_finishes():
 @frappe.whitelist(methods=["GET"])
 def list_series_sub_finishes():
 	return _distinct_values("sub_finish", SUB_FINISH_DEFAULTS)
+
+
+@frappe.whitelist(methods=["GET"])
+def list_series_sizes():
+	"""Gap-sheet item #2 (native-Desk audit, 6 Nov 2026) -- Size was plain free
+	text with nothing to pick from, same "write the whole thing out by hand
+	every time" gap Finish/Sub Finish already had. Same fix: distinct values
+	already in use, so staff reuse an existing size or type a genuinely new one
+	-- never a closed list (BRD C.1.1 doesn't make Size a master either)."""
+	return _distinct_values("size", SIZE_DEFAULTS)
 
 
 def _assert_can_manage_series():

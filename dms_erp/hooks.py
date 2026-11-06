@@ -56,6 +56,21 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 # 	},
 # }
 
+# Quotation before_submit -- the one gate every Quotation passes through
+# regardless of how it was created, needed because the native "Create >
+# Quotation" mapped-doc draft (inquiry_api.make_quotation) is a real, freely
+# editable unsaved Desk form with no create_quotation call behind it at all.
+# See quotation_api.guard_native_submit's own docstring for the full picture,
+# including why it deliberately skips already-validated documents.
+doc_events = {
+	"Quotation": {
+		"before_submit": "dms_erp.sales.quotation_api.guard_native_submit",
+	},
+	"Sales Order": {
+		"before_submit": "dms_erp.sales.order_api.guard_native_submit",
+	},
+}
+
 # BRD C.4.1: nobody is told a draft reorder plan needs review -- a daily digest to
 # the purchase team is the smallest fix that closes that gap (see reorder_api.py).
 # BRD C.1.4: dealer price-tier classification is recomputed nightly from confirmed

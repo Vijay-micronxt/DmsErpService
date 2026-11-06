@@ -27,11 +27,13 @@ equivalent for become Custom Fields:
   reloads the doc before touching any line.
 """
 
+import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from dms_erp.catalog.utils import ORDER_UOMS
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATIONS
 from dms_erp.sales.order_channel import DEALER_TYPES
+from dms_erp.setup.client_scripts import sync_client_scripts
 
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
@@ -471,5 +473,66 @@ TALLY_SYNC_CUSTOM_FIELDS = {
 }
 
 
+# Gap-sheet item #10 (native-Desk audit, 6 Nov 2026): custom_stage_history and
+# custom_driver_mobile have no visibility condition at all (see their own
+# CUSTOM_FIELDS entries above) -- they show up editable on the brand-new "New
+# Sales Order" Desk form, which confused staff since both are only ever actually
+# set later, by the staff app's own dispatch flow (order_api.advance_order_stage),
+# never meant to be hand-filled at creation time. Hidden here until the order
+# document actually exists -- `frm.is_new()` is false the instant it's first
+# saved, same moment advance_order_stage's own flow could plausibly start writing
+# to them. A Client Script, not a Custom Field property, because "hide only while
+# new" needs to re-evaluate on the client as the form's own state changes --
+# Custom Field's own `hidden` is a static, one-time property.
+CLIENT_SCRIPTS = {
+	"Sales Order": """
+frappe.ui.form.on('Sales Order', {
+	refresh: function(frm) {
+		frm.toggle_display('custom_stage_history', !frm.is_new());
+		frm.toggle_display('custom_driver_mobile', !frm.is_new());
+	},
+});
+""",
+	# 6 Nov 2026 -- the native "Create > Quotation" mapped-doc draft
+	# (inquiry_api.make_quotation) starts every line's price_list_rate at 0%
+	# markup; this is what makes the number on screen track Markup % as staff
+	# edit it, same math quotation_api._priced_items uses, without duplicating
+	# that formula here (quotation_api.price_preview does the actual
+	# calculation). Only on an unsaved draft -- once submitted, custom_markup_pct
+	# is locked (no allow_on_submit) and this would be recomputing a rate that
+	# can no longer change anyway.
+	"Quotation": """
+frappe.ui.form.on('Quotation', {
+	custom_markup_pct: function(frm) {
+		if (!frm.is_new()) return;
+		(frm.doc.items || []).forEach(function(row) {
+			frappe.call({
+				type: 'GET',
+				method: 'dms_erp.sales.quotation_api.price_preview',
+				args: { dealer: frm.doc.party_name, item: row.item_code, markup_pct: frm.doc.custom_markup_pct || 0 },
+				callback: function(r) {
+					if (r.message != null) {
+						frappe.model.set_value(row.doctype, row.name, 'price_list_rate', r.message);
+					}
+				},
+			});
+		});
+	},
+});
+""",
+}
+# Gap-sheet items #1/#8 -- native Desk already has a "Create Quotation"/"Create
+# Order" action (dms_erp/sales/doctype/inquiry/inquiry.js, from an earlier
+# session). Neither uses a dialog any more (6 Nov 2026 -- matching ERPNext's
+# own Opportunity -> Quotation, at the user's explicit request): both open a
+# real, unsaved, editable form via frappe.model.open_mapped_doc /
+# inquiry_api.make_quotation/make_order, with addresses defaulted the same way
+# inside those mappers. See quotation_api.guard_native_submit / order_api.
+# guard_native_submit for where the address/discount/channel checks
+# create_quotation/create_order normally do up front instead happen for this
+# path -- at Submit, since nothing stops staff editing the draft first.
+
+
 def setup_sales():
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+	sync_client_scripts(CLIENT_SCRIPTS)

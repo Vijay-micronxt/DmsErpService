@@ -306,6 +306,7 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 		# BRD C.11: Management approved this order over the credit limit (see
 		# sales.credit_limit.credit_limit_approved) -- don't let ERPNext's own check refuse it.
 		so.check_credit_limit = lambda: None
+	so.flags.dms_prevalidated = True
 	so.submit()
 	out = _serialize(so)
 	out["possibleDuplicates"] = duplicates
@@ -398,6 +399,77 @@ def list_orders(
 @frappe.whitelist(methods=["GET"])
 def get_order(order: str):
 	return _serialize(frappe.get_doc("Sales Order", order))
+
+
+def guard_native_submit(doc, method=None):
+	"""Sales Order `before_submit` hook (hooks.py) -- see quotation_api.
+	guard_native_submit's own docstring for the shared reasoning: the native
+	"Create > Order" mapped-doc draft (inquiry_api.make_order) is a real,
+	freely-editable unsaved Desk form with no create_order call behind it, so
+	nothing else re-checks addresses/discount/channel before a plain native
+	Save+Submit the way _create_order already does for every other entry
+	point. Skips entirely when `doc.flags.dms_prevalidated` is set --
+	finalize_new_order (every other order-creating path) sets it right before
+	its own `.submit()`.
+
+	Also stamps `custom_stage_history` -- the bookkeeping finalize_new_order
+	normally adds at creation time, which a mapped draft never went through,
+	and which every later stage (advance_order_stage, picking, dispatch)
+	depends on already being there. Only when custom_stage_history is still
+	empty -- checked instead of custom_fulfillment_stage, which defaults to
+	"Confirmed" on the field itself (sales/setup.py) regardless of how the
+	document was created, so an unset check against it would never fire.
+
+	Credit limit is NOT re-checked here -- ERPNext's own native Sales Order
+	submit-time check already runs regardless of path (see sales.
+	credit_limit's own module docstring); duplicating it here would just be a
+	second copy of the same check. Catalog visibility/sellability are also not
+	checked here, for the same reason: _priced_order_line/create_order don't
+	check them either (see inquiry_api's own module docstring on ISS-2026-00644) --
+	this hook validates what create_order validates, not more."""
+	if doc.flags.get("dms_prevalidated"):
+		return
+
+	if not doc.customer_address:
+		frappe.throw(_("A bill-to (billing) address is required."), frappe.ValidationError)
+	if not doc.shipping_address_name:
+		frappe.throw(_("A ship-to (shipping) address is required."), frappe.ValidationError)
+	assert_address_belongs_to(doc.customer_address, "Customer", doc.customer)
+	assert_address_belongs_to(doc.shipping_address_name, "Customer", doc.customer)
+	if not doc.delivery_date:
+		frappe.throw(_("Expected Dispatch is required."), frappe.ValidationError)
+
+	from dms_erp.approvals.api import _discount_approval_threshold_pct
+
+	threshold = _discount_approval_threshold_pct()
+	for row in doc.items:
+		if flt(row.discount_percentage) > threshold:
+			frappe.throw(
+				_("{0}'s discount needs Management approval -- use the staff app for an override.").format(row.item_code),
+				frappe.ValidationError,
+			)
+
+	default_channel = auto_classify_channel(doc.customer, [{"item": row.item_code, "qty": row.qty} for row in doc.items])
+	if doc.custom_order_channel and doc.custom_order_channel != default_channel:
+		frappe.throw(
+			_("Channel {0} differs from the auto-classified {1} -- channel overrides need to go through the staff app.").format(
+				doc.custom_order_channel, default_channel
+			),
+			frappe.ValidationError,
+		)
+
+	if not doc.get("custom_stage_history"):
+		now = now_datetime()
+		created_note = (
+			_("Converted from {0}").format(doc.custom_source_ref)
+			if doc.custom_source_ref
+			else _("Created directly, no source Inquiry/Quotation")
+		)
+		doc.custom_source_type = doc.custom_source_type or ("Inquiry" if doc.custom_source_ref else "Direct")
+		doc.custom_order_channel = doc.custom_order_channel or default_channel
+		doc.custom_fulfillment_stage = "Confirmed"
+		doc.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": created_note})
+		doc.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user, "note": None})
 
 
 def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date) -> dict:
