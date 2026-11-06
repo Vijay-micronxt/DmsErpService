@@ -57,7 +57,8 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing import api as pricing_api
-from dms_erp.warehouse.utils import sellable_stock_for_item, total_stock_for_item
+from dms_erp.purchase.po_api import in_transit_for_item
+from dms_erp.warehouse.utils import available_to_promise, total_stock_for_item
 
 CATALOG_WRITE_ROLES = {"DMS Purchase", "DMS Management", "System Manager"}
 DEFAULT_STOCK_UOM = "Box"
@@ -136,6 +137,7 @@ def _serialize_image(row) -> dict:
 
 def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 	status = item_doc.custom_discontinuation_status or "Active"
+	transit_stock = in_transit_for_item(item_doc.name)
 	return {
 		"id": item_doc.name,
 		"code": item_doc.item_code,
@@ -165,9 +167,17 @@ def _serialize(item_doc: "frappe.model.document.Document") -> dict:
 		# field from the frontend's Product type can't represent on its own.
 		"stockQty": total_stock_for_item(item_doc.name),
 		# Client finding "stock accuracy" -- the dealer-facing "available" number; excludes
-		# damage/insurance-claim and display-bay stock (see warehouse.utils for why). stockQty
-		# above stays the genuine physical total for staff/warehouse/reorder uses.
-		"availableStockQty": sellable_stock_for_item(item_doc.name),
+		# damage/insurance-claim and display-bay stock (see warehouse.utils for why), and now
+		# (BRD C.3.1) whatever's already committed to another dealer's own open order too --
+		# stockQty above stays the genuine physical total for staff/warehouse/reorder uses.
+		"availableStockQty": available_to_promise(item_doc.name),
+		# BRD C.3.2 -- "Transit Warehouse": not real stock, never added to
+		# availableStockQty above -- just visibility into what's already on an
+		# open Purchase Order for this item, so staff/dealers see "more is
+		# coming" instead of a dead-end "out of stock". None/None (not 0/today)
+		# when nothing's in transit.
+		"inTransitQty": transit_stock.get("qty") if transit_stock else None,
+		"inTransitEta": transit_stock.get("eta") if transit_stock else None,
 		"bay": "—",
 		# Last-sold comes from Phase 5 (Sales) — stubbed for now.
 		"lastSoldDays": 0,
@@ -542,6 +552,19 @@ def get_excluded_stock(item: str) -> list[dict]:
 	from dms_erp.warehouse.utils import excluded_stock_for_item
 
 	return excluded_stock_for_item(item)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_reserved_stock(item: str) -> list[dict]:
+	"""BRD C.3.1 -- staff-only breakdown behind availableStockQty's own gap vs.
+	the physical count: which open Sales Order(s) are holding this item, and how
+	much. Deliberately NOT delegated through dealer_portal_api (unlike
+	get_excluded_stock above) -- which dealer/order is holding stock is exactly
+	the kind of internal detail _dealer_order already strips from every other
+	order response a dealer can see."""
+	from dms_erp.warehouse.utils import reserving_orders_for_item
+
+	return reserving_orders_for_item(item)
 
 
 COLOR_DEFAULTS = ["White", "Beige", "Grey", "Black", "Brown"]

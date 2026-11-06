@@ -253,14 +253,34 @@ Pick Tasks; everyone reads.
   every Customer on one day, and a live check found 265 of 394 dealers dormant.
   Monthly, `notify_active_dealer_numbers` announces the `active_dealer_numbers` list
   (WhatsApp Business compliance); what's done with that list stays outside dms_erp.
-- **Reservation timeline** (`reservation.py`, ISS-2026-00635) — daily job over open
-  Sales Orders (not Dispatched/Delivered/Cancelled), counted from the order date:
-  one reminder at `DMS Sales Settings.reservation_reminder_day` (20) to the dealer's
-  salesperson (Management if none), and a review flag once older than
-  `reservation_max_days` (21) to Management. Flag only — the ticket rules out
-  auto-cancel; releasing the stock stays a person's call. Both dates are stored on
-  the order and never cleared, so each happens once; `order_api` returns the state
-  as `reservation`.
+- **Reservation timeline** (`reservation.py`, ISS-2026-00711, supersedes
+  ISS-2026-00635) — daily job over open Sales Orders (not Dispatched/Delivered/
+  Cancelled), counted from the order date: one reminder at `DMS Sales Settings.
+  reservation_reminder_day` (7) to the dealer's salesperson (Management if none),
+  then an actual auto-cancel once older than `reservation_max_days` (14) — the
+  client's final call reversed ISS-2026-00635's original "flag only, never
+  auto-cancel" rule outright. Both dates are stored on the order and never
+  cleared, so each happens once; `order_api` returns the state as `reservation`
+  (dealer-facing responses strip it entirely — see `dealer_portal_api.
+  _INTERNAL_ORDER_KEYS`).
+- **Real stock reservation** (`warehouse.utils.available_to_promise`, BRD C.3.1)
+  — "stock is reserved on confirmation" had never actually been true: confirming
+  an order never reduced what another dealer saw as available, so two dealers
+  could be sold the same boxes. `available_to_promise` (physical stock minus
+  damage/display bay minus every other open Sales Order's own qty for that item)
+  is now what `catalog.api.get_product`'s `availableStockQty` shows, and what
+  `order_api._priced_order_line`/`quotation_api._priced_items` check before
+  accepting a new Auto-batch line — a damaged-stock or specific-preferred-batch
+  line skips it (they draw from their own separate, already-excluded pool).
+  Computed live from current order stages on every call, not a stored ledger, so
+  there's no separate "release" step: the moment an order ships or is cancelled
+  (including `reservation.py`'s own auto-cancel), it simply stops counting. Client
+  decision, 6 Nov 2026 — an item with zero stock at all (never purchased) is a
+  genuine backorder, not a double-booking, and stays orderable regardless; the
+  check only fires once the item has real stock already spoken for. Staff (not
+  dealers — `get_reserved_stock` is deliberately not delegated through
+  `dealer_portal_api`) can see *which* order(s) are holding it via
+  `catalog.api.get_reserved_stock` (`warehouse.utils.reserving_orders_for_item`).
 - **Delivery risk** (`delivery_risk.py`, BRD C.3.2) — daily job comparing a Purchase
   Order line's own `schedule_date` (supplier commitment) against open Sales Order
   lines' `delivery_date` (customer commitment). Nothing links a PO line to the

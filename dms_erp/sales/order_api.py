@@ -440,6 +440,33 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 				),
 				frappe.ValidationError,
 			)
+	elif not line.get("damaged_stock"):
+		# BRD C.3.1 -- "stock is reserved on confirmation": a line left on Auto must
+		# actually be covered by what's still free, not just what's physically on
+		# hand -- another dealer's own open (not yet Dispatched/Delivered/
+		# Cancelled) order may already have a claim on some of it. Damaged-stock
+		# lines skip this: they draw from the Damages Bay, a separate pool
+		# available_to_promise already excludes, not this one. A specific
+		# preferred_batch_no skips this too -- it already got its own, more
+		# precise check above (that batch's own on-hand qty), not the item-wide one.
+		#
+		# Client decision, 6 Nov 2026: an item that's never had any stock at all
+		# (sellable_stock_for_item == 0) is a genuine backorder, not a double-
+		# booking -- it stays orderable, same as it always has been (an Inquiry
+		# can already be raised the same way, "Out of Stock" status, no block).
+		# This check only ever fires once the item has real stock that's already
+		# spoken for by someone else's open order.
+		from dms_erp.warehouse.utils import available_to_promise, sellable_stock_for_item
+
+		total = sellable_stock_for_item(item)
+		free = available_to_promise(item)
+		if total > 0 and free < line["qty"]:
+			frappe.throw(
+				_("{0} only has {1} available -- the rest is already committed to another open order.").format(
+					item, free
+				),
+				frappe.ValidationError,
+			)
 
 	return {
 		"item_code": item,

@@ -308,6 +308,52 @@ def list_pending_po_lines() -> list[dict]:
 	return out
 
 
+def in_transit_for_item(item_code: str) -> dict | None:
+	"""BRD C.3.2/C.4.1 -- "Transit Warehouse": not a real physical bay (no Warehouse
+	record, no Stock Ledger Entry) -- a reporting view over list_pending_po_lines'
+	own real pending-qty figures for one item, same data the Purchase dashboard and
+	PO Pending Report already use. Drop-ship lines are excluded here (unlike that
+	function's own default) -- they ship straight to the end customer and never
+	pass through Pacific's warehouse, so they're not "coming to stock." None (not
+	a zero dict) when nothing's in transit -- honest-stub convention."""
+	rows = [r for r in list_pending_po_lines() if r["itemCode"] == item_code and not r["dropShip"]]
+	if not rows:
+		return None
+	return {
+		"qty": sum(r["pendingQty"] for r in rows),
+		"eta": min((r["expectedReadyDate"] for r in rows if r["expectedReadyDate"]), default=None),
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_transit_stock(search: str | None = None, limit: int = 20, offset: int = 0) -> dict:
+	"""The "Transit Warehouse" report (BRD C.3.2) -- every item with something
+	still pending on an open, non-drop-ship PO, grouped with its total qty,
+	earliest expected date and which PO(s) it's coming from."""
+	_assert_can_manage_purchase()
+	limit, offset = clamp(limit, offset)
+
+	grouped: dict[str, dict] = {}
+	for row in list_pending_po_lines():
+		if row["dropShip"]:
+			continue
+		g = grouped.setdefault(row["itemCode"], {"itemCode": row["itemCode"], "qty": 0.0, "eta": None, "purchaseOrders": []})
+		g["qty"] += row["pendingQty"]
+		if row["expectedReadyDate"] and (g["eta"] is None or row["expectedReadyDate"] < g["eta"]):
+			g["eta"] = row["expectedReadyDate"]
+		g["purchaseOrders"].append({"po": row["po"], "supplier": row["supplier"], "qty": row["pendingQty"], "eta": row["expectedReadyDate"]})
+
+	items = sorted(grouped.values(), key=lambda g: g["itemCode"])
+	if search:
+		q = search.strip().lower()
+		items = [g for g in items if q in g["itemCode"].lower()]
+	total = len(items)
+	page = items[offset : offset + limit]
+	for g in page:
+		g["itemName"] = frappe.get_cached_value("Item", g["itemCode"], "item_name")
+	return {"items": page, "total": total, "limit": limit, "offset": offset}
+
+
 def remaining_ready_qty_for_line(
 	po_item: str,
 	ready_qty: float | None = None,

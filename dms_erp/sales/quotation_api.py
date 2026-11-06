@@ -182,6 +182,22 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 					),
 					frappe.ValidationError,
 				)
+		elif not line.get("damaged_stock"):
+			# BRD C.3.1 -- see order_api._priced_order_line's matching check (including
+			# the never-stocked-item exception); re-checked again if/when this
+			# quotation becomes an order and again at dispatch, since stock can move
+			# at every one of those later points too.
+			from dms_erp.warehouse.utils import available_to_promise, sellable_stock_for_item
+
+			total = sellable_stock_for_item(item)
+			free = available_to_promise(item)
+			if total > 0 and free < line["qty"]:
+				frappe.throw(
+					_("{0} only has {1} available -- the rest is already committed to another open order.").format(
+						item, free
+					),
+					frappe.ValidationError,
+				)
 		price_list_rate = round(dealer_price * (1 + float(markup_pct) / 100))
 		discount_pct = float(line.get("discount_percentage") or 0)
 		if not 0 <= discount_pct <= 100:
