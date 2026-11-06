@@ -142,9 +142,9 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.3.4 — interim manual gate ahead of the real VALS API advance-payment integration (blocked on external credentials, not built). Set by Management on a per-order basis, no dealer-level default; order_api.advance_order_stage refuses Ready to Dispatch until this is set.",
 			"insert_after": "custom_order_channel",
 		},
-		# ISS-2026-00635 -- set once each by sales.reservation.review_reservations
-		# (daily); see that module for the 21-day window. Read-only: they record what
-		# the job did, nobody edits them by hand.
+		# ISS-2026-00711 (originally ISS-2026-00635) -- set once each by
+		# sales.reservation.review_reservations (daily); see that module for the
+		# window. Read-only: they record what the job did, nobody edits them by hand.
 		{
 			"fieldname": "custom_reservation_reminder_sent_on",
 			"fieldtype": "Date",
@@ -154,9 +154,13 @@ CUSTOM_FIELDS = {
 			"insert_after": "custom_advance_confirmed",
 		},
 		{
+			# Fieldname kept from ISS-2026-00635 (renaming a live custom field needs a
+			# data-migration patch for no behavioural gain) -- the label is what
+			# actually changed, since ISS-2026-00711 replaced "flag for review" with
+			# an actual auto-cancel.
 			"fieldname": "custom_reservation_flagged_on",
 			"fieldtype": "Date",
-			"label": "Reservation Flagged for Review On",
+			"label": "Reservation Auto-Cancelled On",
 			"read_only": 1,
 			"allow_on_submit": 1,
 			"in_standard_filter": 1,
@@ -208,6 +212,18 @@ CUSTOM_FIELDS = {
 			"default": "0",
 			"insert_after": "custom_entered_uom",
 		},
+		# ISS-2026-00712 -- a dealer's own batch choice at order time (dealer_portal_api.
+		# get_catalog's `batch` search / _catalog_entry's topBatches feed the picker this
+		# comes from). Left unset ("Auto"), order_api._resolve_delivery_picks draws
+		# whatever batch(es) are on hand, largest lot first, same as before this field
+		# existed -- this only ever narrows that choice, never widens it.
+		{
+			"fieldname": "custom_preferred_batch_no",
+			"fieldtype": "Link",
+			"label": "Preferred Batch",
+			"options": "Batch",
+			"insert_after": "custom_damaged_stock",
+		},
 	],
 	"Sales Invoice": [
 		{
@@ -258,6 +274,16 @@ CUSTOM_FIELDS = {
 			"label": "Damaged Stock",
 			"default": "0",
 			"insert_after": "custom_entered_uom",
+		},
+		# ISS-2026-00712 -- see Sales Order Item's own custom_preferred_batch_no above;
+		# same fieldname on both so ERPNext's native mapper carries it to the Sales
+		# Order line on convert_to_order with no extra glue.
+		{
+			"fieldname": "custom_preferred_batch_no",
+			"fieldtype": "Link",
+			"label": "Preferred Batch",
+			"options": "Batch",
+			"insert_after": "custom_damaged_stock",
 		},
 	],
 	"Opportunity": [

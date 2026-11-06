@@ -17,9 +17,11 @@ from dms_erp.warehouse.test_fixtures import (
 
 
 class TestReservation(FrappeTestCase):
-	"""ISS-2026-00635. Every check runs review_reservations with an `as_of` date
-	relative to the order's own (today's) transaction_date, rather than back-dating
-	orders -- the same day arithmetic, without touching submitted documents."""
+	"""ISS-2026-00711 (supersedes ISS-2026-00635's flag-only rule -- client's final
+	decision, 5 Nov 2026). Every check runs review_reservations with an `as_of`
+	date relative to the order's own (today's) transaction_date, rather than
+	back-dating orders -- the same day arithmetic, without touching submitted
+	documents."""
 
 	@classmethod
 	def setUpClass(cls):
@@ -34,8 +36,8 @@ class TestReservation(FrappeTestCase):
 		cls.item = make_item("RESERVATION-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
-		frappe.db.set_single_value("DMS Sales Settings", "reservation_max_days", 21)
-		frappe.db.set_single_value("DMS Sales Settings", "reservation_reminder_day", 20)
+		frappe.db.set_single_value("DMS Sales Settings", "reservation_max_days", 14)
+		frappe.db.set_single_value("DMS Sales Settings", "reservation_reminder_day", 7)
 
 	def _order(self) -> str:
 		return order_api.create_order(
@@ -51,43 +53,43 @@ class TestReservation(FrappeTestCase):
 
 	def test_nothing_happens_before_the_reminder_day(self):
 		order = self._order()
-		result = self._review(19)
+		result = self._review(6)
 		self.assertNotIn(order, result["reminded"])
-		self.assertNotIn(order, result["flagged"])
+		self.assertNotIn(order, result["cancelled"])
 
-	def test_reminder_on_day_20_then_flag_only_after_day_21(self):
+	def test_reminder_on_day_7_then_auto_cancelled_after_day_14(self):
 		order = self._order()
 
-		self.assertIn(order, self._review(20)["reminded"])
+		self.assertIn(order, self._review(7)["reminded"])
 		self.assertEqual(
 			getdate(frappe.db.get_value("Sales Order", order, "custom_reservation_reminder_sent_on")),
-			getdate(add_days(today(), 20)),
+			getdate(add_days(today(), 7)),
 		)
-		# Day 21 is still inside the window; the reminder isn't repeated either.
-		day_21 = self._review(21)
-		self.assertNotIn(order, day_21["reminded"])
-		self.assertNotIn(order, day_21["flagged"])
+		# Day 14 is still inside the window; the reminder isn't repeated either.
+		day_14 = self._review(14)
+		self.assertNotIn(order, day_14["reminded"])
+		self.assertNotIn(order, day_14["cancelled"])
 
-		self.assertIn(order, self._review(22)["flagged"])
-		self.assertEqual(order_api.get_order(order)["reservation"]["state"], "Flagged for Review")
-		# Flag only -- never cancelled.
-		self.assertEqual(frappe.db.get_value("Sales Order", order, "docstatus"), 1)
-		self.assertNotEqual(frappe.db.get_value("Sales Order", order, "custom_fulfillment_stage"), "Cancelled")
+		self.assertIn(order, self._review(15)["cancelled"])
+		# ISS-2026-00711 -- actually cancelled now, not just flagged.
+		self.assertEqual(frappe.db.get_value("Sales Order", order, "custom_fulfillment_stage"), "Cancelled")
+		self.assertEqual(order_api.get_order(order)["reservation"]["state"], "Closed")
 
-	def test_flagged_once_only(self):
+	def test_cancelled_once_only(self):
 		order = self._order()
-		self.assertIn(order, self._review(30)["flagged"])
-		self.assertNotIn(order, self._review(31)["flagged"])
+		self.assertIn(order, self._review(30)["cancelled"])
+		# Already Cancelled, so the main stage filter excludes it on the next run.
+		self.assertNotIn(order, self._review(31)["cancelled"])
 
-	def test_an_order_already_past_the_window_is_flagged_without_a_reminder(self):
+	def test_an_order_already_past_the_window_is_cancelled_without_a_reminder(self):
 		order = self._order()
 		result = self._review(40)
-		self.assertIn(order, result["flagged"])
+		self.assertIn(order, result["cancelled"])
 		self.assertNotIn(order, result["reminded"])
 
 	def test_dispatched_orders_are_left_alone(self):
 		order = self._order()
 		frappe.db.set_value("Sales Order", order, "custom_fulfillment_stage", "Dispatched")
 		result = self._review(30)
-		self.assertNotIn(order, result["flagged"])
+		self.assertNotIn(order, result["cancelled"])
 		self.assertEqual(order_api.get_order(order)["reservation"]["state"], "Closed")

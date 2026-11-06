@@ -15,6 +15,7 @@
   "entered_qty",
   "entered_uom",
   "damaged_stock",
+  "preferred_batch_no",
   "contact_name",
   "contact_phone",
   "column_break_1",
@@ -106,6 +107,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Damaged Stock"
+  },
+  {
+   "description": "ISS-2026-00712 -- the dealer's own batch choice at enquiry time, carried onto the resulting Sales Order line if/when convert_to_order runs (dealer_portal_api.convert_to_order). Left unset (\"Auto\"), order_api._resolve_delivery_picks draws whichever batch(es) are on hand, largest lot first.",
+   "fieldname": "preferred_batch_no",
+   "fieldtype": "Link",
+   "label": "Preferred Batch",
+   "options": "Batch"
   },
   {
    "description": "Which of the dealer's own sales staff phoned this in -- a dealer can have several people inquiring about different items at once (client requirement 8.9). Free text, not a link: this app has no separate dealer-contacts master.",
