@@ -49,6 +49,7 @@
    "fieldtype": "Column Break"
   },
   {
+   "description": "BRD C.1.1 top-level size (e.g. 600x600mm). Free text -- existing sizes are suggested, not an enforced closed list, so a new size doesn't need a schema change.",
    "fieldname": "size",
    "fieldtype": "Autocomplete",
    "label": "Size"
