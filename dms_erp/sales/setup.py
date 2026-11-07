@@ -562,6 +562,24 @@ frappe.ui.form.on('Quotation', {
 					method: 'dms_erp.sales.inquiry_api.make_quotation',
 					source_doctype: 'Inquiry',
 					target: frm,
+					// `setters` is NOT optional -- frappe.ui.form.MultiSelectDialog's own
+					// get_primary_filters() does `$.isArray(this.setters) ? ... :
+					// Object.keys(this.setters).forEach(...)`; omitting it left
+					// this.setters undefined, so Object.keys(undefined) threw inside the
+					// dialog's own constructor -- the whole dialog crashed before it
+					// could render, with no visible error. Every native caller of this
+					// function always passes one; Dealer narrows the picker to one
+					// dealer's own open Inquiries, same as Sales Order's native
+					// "Get Items From > Quotation" narrows by Customer.
+					setters: [
+						{
+							label: __('Dealer'),
+							fieldname: 'dealer',
+							fieldtype: 'Link',
+							options: 'Customer',
+							default: frm.doc.party_name || undefined,
+						},
+					],
 					get_query_filters: {
 						status: ['not in', ['Converted to Order', 'Rejected', 'Mapped to PO', 'Closed']],
 					},

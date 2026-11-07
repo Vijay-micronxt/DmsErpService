@@ -351,6 +351,7 @@ def make_quotation(source_name: str, target_doc=None):
 
 	customer_address, shipping_address_name = default_billing_shipping_for(inquiry.dealer)
 	price_list_rate = get_price_for_dealer(inquiry.item, inquiry.dealer) or 0
+	item_name, stock_uom = frappe.db.get_value("Item", inquiry.item, ["item_name", "stock_uom"])
 
 	def set_missing_values(source, target):
 		if not target.party_name:
@@ -369,6 +370,16 @@ def make_quotation(source_name: str, target_doc=None):
 			"items",
 			{
 				"item_code": source.item,
+				# Item Name/UOM/Stock UOM/Conversion Factor -- normally filled in by the
+				# browser's own item_code change handler (get_item_details) the moment
+				# staff picks an item by hand; a mapped row never fires that, so Desk's
+				# own client-side mandatory-field check ("Missing Fields": Item Name,
+				# UOM) failed on Save before the request even reached the server, even
+				# though server-side validate() would have backfilled them anyway.
+				"item_name": item_name,
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
+				"conversion_factor": 1,
 				"qty": source.qty,
 				"price_list_rate": price_list_rate,
 				"rate": price_list_rate,
@@ -426,6 +437,7 @@ def make_order(source_name: str):
 
 	customer_address, shipping_address_name = default_billing_shipping_for(inquiry.dealer)
 	price_list_rate = get_price_for_dealer(inquiry.item, inquiry.dealer) or 0
+	item_name, stock_uom = frappe.db.get_value("Item", inquiry.item, ["item_name", "stock_uom"])
 
 	def set_missing_values(source, target):
 		target.customer = source.dealer
@@ -441,6 +453,12 @@ def make_order(source_name: str):
 			"items",
 			{
 				"item_code": source.item,
+				# See make_quotation's own comment on item_name/uom/stock_uom/
+				# conversion_factor -- same client-side "Missing Fields" issue, same fix.
+				"item_name": item_name,
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
+				"conversion_factor": 1,
 				"qty": source.qty,
 				"price_list_rate": price_list_rate,
 				"rate": price_list_rate,
