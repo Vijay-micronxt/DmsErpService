@@ -190,14 +190,46 @@ CLIENT_SCRIPTS = {
 	"Product Series": """
 frappe.ui.form.on('Product Series', {
 	onload: function(frm) {
-		frappe.call({method: 'dms_erp.catalog.series_api.list_series_sizes', callback: function(r) {
-			frm.set_df_property('size', 'options', r.message || []);
+		// list_series_sizes/finishes/sub_finishes are all GET-only whitelisted
+		// (series_api.py) -- frappe.call defaults to POST without an explicit
+		// type, which silently fails "Not permitted" here (same bug class as
+		// inquiry.js's own GET/POST mismatch, see that file's history).
+		//
+		// frm.set_df_property(fieldname, 'options', ...) alone is NOT enough
+		// for Autocomplete: it only updates the docfield's own metadata and
+		// does a generic field refresh -- frappe.ui.form.ControlAutocomplete
+		// (frappe/public/js/frappe/form/controls/autocomplete.js) only ever
+		// reads df.options once, inside set_options(), which runs during
+		// make_input() when the control is FIRST built (synchronously, on
+		// page load, long before this onload handler's frappe.call even
+		// resolves) -- a later generic refresh doesn't re-run make_input, so
+		// the already-built Awesomplete widget's own suggestion list never
+		// actually changed, no matter what df.options said afterwards. The
+		// real way to push new options into an already-built Autocomplete is
+		// frappe's own documented pattern (frappe/public/js/frappe/views/
+		// communication.js): call set_data() directly on the control.
+		// BRD C.1.1 -- these are free text with suggestions, not a closed list
+		// (staff must be able to type a genuinely new size/finish/sub-finish).
+		// ControlAutocomplete.validate() silently clears anything NOT already
+		// in its own suggestion list once that list is non-empty -- df.
+		// ignore_validation is what turns that enforcement off; without it,
+		// every one of these three fields would quietly become a disguised
+		// closed list the moment it had any suggestions at all.
+		function apply_options(fieldname, options) {
+			frm.set_df_property(fieldname, 'options', options);
+			frm.set_df_property(fieldname, 'ignore_validation', 1);
+			if (frm.fields_dict[fieldname] && frm.fields_dict[fieldname].set_data) {
+				frm.fields_dict[fieldname].set_data(options);
+			}
+		}
+		frappe.call({type: 'GET', method: 'dms_erp.catalog.series_api.list_series_sizes', callback: function(r) {
+			apply_options('size', r.message || []);
 		}});
-		frappe.call({method: 'dms_erp.catalog.series_api.list_series_finishes', callback: function(r) {
-			frm.set_df_property('finish', 'options', r.message || []);
+		frappe.call({type: 'GET', method: 'dms_erp.catalog.series_api.list_series_finishes', callback: function(r) {
+			apply_options('finish', r.message || []);
 		}});
-		frappe.call({method: 'dms_erp.catalog.series_api.list_series_sub_finishes', callback: function(r) {
-			frm.set_df_property('sub_finish', 'options', r.message || []);
+		frappe.call({type: 'GET', method: 'dms_erp.catalog.series_api.list_series_sub_finishes', callback: function(r) {
+			apply_options('sub_finish', r.message || []);
 		}});
 	},
 });

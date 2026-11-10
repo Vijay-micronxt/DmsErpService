@@ -12,6 +12,8 @@ lifecycle's unused "Mapped to PO" state), not just a remarks note.
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from dms_erp.setup.client_scripts import sync_client_scripts
+
 CUSTOM_FIELDS = {
 	"Purchase Receipt": [
 		{
@@ -230,6 +232,27 @@ def seed_brd_fleet():
 		).insert(ignore_permissions=True)
 
 
+# Gap-sheet item #6 -- "What's the Unit of Measure for Total net weight in
+# Purchase Order" was a real question, not a feature request: po_api.py now
+# fills in each line's weight_per_unit/weight_uom (Kg) from the item's own
+# Series weight, so the native total_net_weight figure is real instead of 0 --
+# but the field's own label never said what unit the number it already shows
+# is in. Client-side only (frm.set_df_property), not a Property Setter, since
+# nothing here needs to survive a doctype-level comparison/report against the
+# label text -- same "don't touch what Frappe/ERPNext owns unless the native
+# label is actually wrong" bar as everywhere else in this app.
+CLIENT_SCRIPTS = {
+	"Purchase Order": """
+frappe.ui.form.on('Purchase Order', {
+	refresh: function(frm) {
+		frm.set_df_property('total_net_weight', 'label', __('Total Net Weight (Kg)'));
+	},
+});
+""",
+}
+
+
 def setup_purchase():
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+	sync_client_scripts(CLIENT_SCRIPTS)
 	seed_brd_fleet()
