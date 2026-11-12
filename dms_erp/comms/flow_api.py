@@ -142,8 +142,35 @@ def _extract_qty(segment: str) -> tuple[str, float | None]:
 	return segment[: m.start()].strip(), float(m.group(1))
 
 
+def _resolve_numbered_candidate(dealer: str, original_search: str, index: int) -> dict | None:
+	"""The item at position `index` (1-based, matching the numbered list the first
+	attempt showed) from re-running `original_search` fresh. Re-running rather than
+	remembering the exact candidate list is deliberate -- this backend is stateless
+	per call, and whats91 only ever hands back lead.variables (plain strings), not
+	the actual Item dicts shown the first time -- so "the same search, run again"
+	is the only thing to resolve a position number against. Assumes the same
+	search repeated within the retry's 5-minute window returns the same ordering,
+	true in practice (resolve_item_by_name's own ranking is deterministic for a
+	given catalog + text); a batch disappearing from stock mid-conversation could
+	in principle shift things, same inherent risk any "pick #2" UI has. None on an
+	out-of-range index, or when the original search no longer resolves as
+	ambiguous at all (e.g. a candidate was discontinued in between)."""
+	from dms_erp.catalog.api import resolve_item_by_name
+
+	outcome = resolve_item_by_name(dealer, original_search)
+	if outcome.get("status") != "ambiguous":
+		return None
+	candidates = outcome.get("candidates") or []
+	if 1 <= index <= len(candidates):
+		return candidates[index - 1]
+	return None
+
+
 def _resolve_and_track_items(
-	dealer: str, text: str, describe_item: Callable[[dict, float | None], str]
+	dealer: str,
+	text: str,
+	describe_item: Callable[[dict, float | None], str],
+	original_search: str | None = None,
 ) -> tuple[str, str, str | None, str | None]:
 	"""Core of get_item_info -- factored out on its own so the split/resolve/Inquiry-
 	raising logic (the part that's genuinely reusable) stays separate from the
@@ -170,23 +197,52 @@ def _resolve_and_track_items(
 	docstring) is never silently resolved into an answer here: no Inquiry is raised
 	for that segment (there's no confirmed item to raise one against), item_code
 	isn't set from it, and the reply lists the actual candidates by name and code so
-	the dealer can just retype the exact one. Deliberately not a real multi-turn
-	confirmation loop (a dealer tapping "🛒 Place Order" straight after with no
-	item_code set falls through to create_dealer_opportunity's own existing "we
-	couldn't tell which item" reply, itself already correct for exactly this) --
-	whats91's action.api_call nodes only expose two output branches (Success/Error),
-	confirmed against this Flow's own JSON, so a genuine "reply 1 or 2" branch isn't
-	buildable without unconfirmed platform behavior. This closes BRD's actual
-	correctness requirement (never guess) without pretending the interactive
-	round-trip is built too."""
+	the dealer can just retype the exact one.
+
+	`original_search`, when given, is the Flow's own retry loop (n_wait_item_retry
+	-- docs/whatsapp-flows/dealer-portal-pacific.json) re-asking after an ambiguous
+	or not-found first attempt: a bare number reply ("2") is then resolved as "the
+	2nd candidate from re-running the ORIGINAL search", not treated as literal item
+	text (which would just fail again) -- see _resolve_numbered_candidate. A plain
+	item code or name reply still works exactly as on the first attempt either way;
+	this only adds a second way to answer the same question, matching the same
+	numbered-list habit this Flow already trains on the Main Menu and quantity
+	steps. 12 Nov 2026 -- supersedes this function's own earlier note (still true
+	when called with no `original_search`, e.g. a fresh, non-retry lookup) that a
+	real multi-turn "reply 1 or 2" round-trip wasn't buildable; two chained
+	action.api_call nodes with a control.wait between them turned out to be enough,
+	once whats91's own success_rules could be pointed at get_item_info's item_code
+	field instead of its bare message text."""
 	from dms_erp.catalog.api import resolve_item_by_name, resolve_item_mention
 	from dms_erp.sales.inquiry_api import _create_inquiry
+	from dms_erp.sales.utils import recent_inquiry_for
 
 	lines = []
 	created_inquiry_ids = []
 	item_code = None
 	for raw_segment in _split_item_mentions(text):
 		segment, qty = _extract_qty(raw_segment)
+
+		if original_search and segment.strip().isdigit():
+			item = _resolve_numbered_candidate(dealer, original_search, int(segment.strip()))
+			if item:
+				if item_code is None:
+					item_code = item["id"]
+				recent = recent_inquiry_for(dealer, item["id"])
+				try:
+					inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=qty or 1, source="WhatsApp")
+					created_inquiry_ids.append(inquiry["id"])
+				except (frappe.PermissionError, frappe.ValidationError):
+					pass
+				line = describe_item(item, qty)
+				if recent:
+					line += f"\n⚠️ You already asked about this item in the last 24 hours ({recent.name})."
+				lines.append(line)
+				continue
+			# Out of range (or the original search no longer resolves the same way) --
+			# falls through to the normal lookup below, which will treat "2" as literal
+			# text and (almost certainly) report it not found, same as any other typo.
+
 		# A dealer prompted for "the item code" often types the item's name instead,
 		# sometimes with a typo -- the exact code match is tried first since it's the
 		# intended, unambiguous path; the fuzzy name match is only a fallback for when
@@ -208,7 +264,7 @@ def _resolve_and_track_items(
 				more = f"\n…and {total - len(candidates)} more." if total > len(candidates) else ""
 				lines.append(
 					f"We found {total} items matching '{segment}':\n{listing}{more}\n"
-					f"Please reply with the exact item code of the one you mean"
+					f"Reply with the number from the list above, or the exact item name or code"
 					+ (", or type more of the name to narrow it down." if more else ".")
 				)
 				continue
@@ -219,6 +275,11 @@ def _resolve_and_track_items(
 		if item_code is None:
 			item_code = item["id"]
 
+		# Client request, 12 Nov 2026 -- checked before creating this inquiry, same
+		# as find_open_duplicate_inquiries' own "before it exists to match itself"
+		# timing, so this one's own creation below never counts as its own recent hit.
+		recent = recent_inquiry_for(dealer, item["id"])
+
 		try:
 			inquiry = _create_inquiry(dealer=dealer, item=item["id"], qty=qty or 1, source="WhatsApp")
 			created_inquiry_ids.append(inquiry["id"])
@@ -228,7 +289,10 @@ def _resolve_and_track_items(
 			# demand-tracking side effect is skipped (see this module's docstring).
 			pass
 
-		lines.append(describe_item(item, qty))
+		line = describe_item(item, qty)
+		if recent:
+			line += f"\n⚠️ You already asked about this item in the last 24 hours ({recent.name})."
+		lines.append(line)
 
 	reply = "\n".join(lines)
 	# A single reference field can't point at more than one Inquiry -- only tag the
@@ -267,6 +331,24 @@ def _alt_item_suggestion(dealer: str, item: dict) -> str | None:
 
 
 @frappe.whitelist()
+def check_dealer_registered(lead=None, **kwargs):
+	"""Flow event `dealer.check` -- client request, 12 Nov 2026: an unregistered
+	number should be told right after "Hello", not after they've picked a menu
+	option and found out it doesn't work. Every other endpoint in this module
+	already carries this exact dealer_for_phone(phone) check on its own; this just
+	surfaces it as the very first thing the Flow does, same spirit as the dealer
+	portal's own login rejecting an unrecognized number up front."""
+	phone, _text = _lead_fields(lead)
+	dealer = dealer_for_phone(phone)
+	if not dealer:
+		return {
+			"message": "This WhatsApp number isn't registered with Pacific. Please contact your Pacific representative to get set up.",
+			"registered": "",
+		}
+	return {"message": "", "registered": "yes"}
+
+
+@frappe.whitelist()
 def get_item_info(lead=None, **kwargs):
 	"""Flow event `item.lookup` (Dealer Portal flow's "1. Item Availability & Price"
 	step): `lead.message` is the item code(s) the dealer typed after being prompted
@@ -301,6 +383,10 @@ def get_item_info(lead=None, **kwargs):
 	dealer = dealer_for_phone(phone)
 	if not dealer:
 		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
+	# n_set_item_code (Flow) stores the FIRST attempt's own text here and is never
+	# touched again by the retry steps -- see _resolve_and_track_items' own
+	# docstring for why a numbered retry reply needs the original search text.
+	original_search = _lead_variables(lead).get("customer_name")
 	if not text:
 		return {"message": "Please enter an item code to check availability."}
 
@@ -348,7 +434,9 @@ def get_item_info(lead=None, **kwargs):
 
 		return line
 
-	reply, related_type, related_reference, item_code = _resolve_and_track_items(dealer, text, describe)
+	reply, related_type, related_reference, item_code = _resolve_and_track_items(
+		dealer, text, describe, original_search=original_search
+	)
 	_send_message(dealer, reply, related_type=related_type, related_reference=related_reference)
 	return {"message": reply, "item_code": item_code}
 
@@ -516,6 +604,66 @@ def _resolve_order_qty(order_qty_band: str | None) -> float:
 
 
 @frappe.whitelist()
+def list_item_batches(lead=None, **kwargs):
+	"""Flow event `batches.list` -- fired right after a dealer taps "🛒 Place Order",
+	so the Place-Order step can ask which batch they want (client request, 12 Nov
+	2026, matching the dealer portal's own batch picker -- see dealer_portal_api.
+	raise_inquiry's preferred_batch_no). item is read from
+	lead.variables.order_item_code, same source create_dealer_opportunity itself
+	uses -- set earlier in this same Flow session by get_item_info.
+
+	`has_batches` is deliberately "" (falsy, same empty-string convention every
+	other success_rules check in this Flow already uses) whenever there's nothing
+	genuinely to choose between -- 0 or 1 real batch -- so the Flow can skip
+	asking entirely rather than offering a pointless one-option choice.
+
+	Numbered 1-based, matching the plain position number a dealer naturally types
+	(the same habit this Flow already trains elsewhere -- the item-candidates
+	list uses the same style) -- create_dealer_opportunity resolves a typed
+	position number back against this exact ranked order (see
+	_resolve_batch_choice), so it must never be re-sorted independently of it."""
+	from dms_erp.warehouse.utils import all_batches
+
+	variables = _lead_variables(lead)
+	item_code = variables.get("order_item_code")
+	if not item_code:
+		return {"message": "", "has_batches": ""}
+
+	batches = all_batches(item_code)
+	if len(batches) < 2:
+		return {"message": "", "has_batches": ""}
+
+	listing = "\n".join(f"{i}. {b['batchNumber']} — {int(b['boxes'])} boxes" for i, b in enumerate(batches, 1))
+	return {"message": f"Available batches for this item:\n{listing}", "has_batches": "yes"}
+
+
+def _resolve_batch_choice(item_code: str, typed: str | None) -> str | None:
+	"""A dealer's typed reply to n_ask_batch_choice, resolved against this item's
+	real batches (same ranked order list_item_batches showed, all_batches' own
+	largest-first default) -- either a plain position number matching what was
+	shown ("2"), or the batch code itself typed back verbatim. "Skip"/blank/
+	anything that matches neither quietly resolves to None (automatic) rather
+	than failing the order/enquiry over it -- a WhatsApp reply is free-typed
+	text, not picked from a list, so a typo is far more likely here than on the
+	dealer portal's own batch picker."""
+	from dms_erp.warehouse.utils import all_batches
+
+	typed = (typed or "").strip()
+	if not typed or typed.lower() in ("skip", "no", "none"):
+		return None
+
+	batches = all_batches(item_code)
+	if typed.isdigit():
+		index = int(typed)
+		if 1 <= index <= len(batches):
+			return batches[index - 1]["batchNumber"]
+		return None
+
+	real_batches = {b["batchNumber"] for b in batches}
+	return typed if typed in real_batches else None
+
+
+@frappe.whitelist()
 def create_dealer_opportunity(lead=None, **kwargs):
 	"""Flow event `opportunity.create` -- used by BOTH the "🔔 Request More Info" step
 	(after a stock/price check) and the "🛒 Place Order" step (after quantity-band +
@@ -556,6 +704,13 @@ def create_dealer_opportunity(lead=None, **kwargs):
 	po_number = variables.get("po_number")
 	note = variables.get("order_note") or text or None
 
+	# Client request, 12 Nov 2026 -- the dealer's own batch choice (list_item_batches/
+	# n_set_batch_choice), resolved against this item's real batches -- see
+	# _resolve_batch_choice's own docstring for why a position number ("2") and
+	# the batch code itself are both accepted, and why anything else quietly
+	# falls back to "no preference" instead of failing the order/enquiry over it.
+	preferred_batch_no = _resolve_batch_choice(item_code, variables.get("preferred_batch_no"))
+
 	quotation_id = variables.get("quotation_id")
 	if po_number and quotation_id:
 		# The Flow showed the dealer this quotation (create_whatsapp_quotation) and they
@@ -591,7 +746,10 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			return {"message": reply}
 
 		qty = _resolve_order_qty(variables.get("order_qty_band"))
-		lines = [{"item": item_code, "qty": qty}]
+		# Client request, 12 Nov 2026 -- the dealer's own batch choice (list_item_batches/
+		# n_set_batch_choice, validated above -- real on-hand stock is re-checked once
+		# more by _priced_order_line itself at order time regardless.
+		lines = [{"item": item_code, "qty": qty, "preferred_batch_no": preferred_batch_no}]
 		from dms_erp.sales.utils import default_billing_shipping_for
 
 		customer_address, shipping_address_name = default_billing_shipping_for(dealer)
@@ -642,8 +800,12 @@ def create_dealer_opportunity(lead=None, **kwargs):
 		_send_message(dealer, reply, related_type="Order", related_reference=order["number"])
 		return {"message": reply}
 
+	# preferred_batch_no, validated above -- this path also covers "Ask for
+	# quotation", where the dealer's batch pick matters just as much as a direct order.
 	try:
-		inquiry = _create_inquiry(dealer=dealer, item=item_code, qty=1, source="WhatsApp", remarks=note)
+		inquiry = _create_inquiry(
+			dealer=dealer, item=item_code, qty=1, source="WhatsApp", remarks=note, preferred_batch_no=preferred_batch_no
+		)
 	except (frappe.PermissionError, frappe.ValidationError):
 		reply = f"We couldn't raise this enquiry against your account. {dealer_contact_line(dealer)}"
 		_send_message(dealer, reply, related_type="General")

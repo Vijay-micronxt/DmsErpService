@@ -25,9 +25,29 @@ MD-01): name, group, territory, dealer type, credit limit, salesperson, GSTIN,
 address, disabled. `classification` is deliberately not settable here — it is
 recomputed nightly.
 
-`gstin`/`address` are plain Customer custom fields (sales/setup.py), free text like
-`phone`/`email` — GSTIN isn't validated against the checksum format, and address
-isn't a linked Address doctype record.
+`gstin` is a plain Customer custom field (sales/setup.py), free text like
+`phone`/`email` — not validated against the checksum format.
+
+`address` is more involved (gap found 11 Nov 2026): the real address every other
+part of this app actually uses (Quotation/Order's mandatory customer_address,
+dealer portal, WhatsApp — see sales.utils.default_billing_shipping_for) is a
+proper Address doctype record, native ERPNext's own Customer form shows it under
+"Address & Contact" -- custom_address is a *separate*, plain free-text field this
+module alone reads/writes, which stayed blank for any dealer whose address only
+ever existed as a real Address record (created directly in native Desk, or by
+migration). Reading now prefers custom_address (an explicit override, same
+"settable value always wins" convention as `priceList` above) but falls back to
+the dealer's real primary/only Billing Address when custom_address is unset, so
+the staff app stops showing blank where native Desk already has the real thing.
+Writing updates that same real Address's address_line1 when one already exists,
+alongside custom_address — but deliberately does NOT create a brand-new Address
+record from scratch: `city`/`country` are mandatory on that doctype and this
+module's own address field is a single free-text box with no reliable way to
+pull a real city out of it, so inventing one would be exactly the kind of
+fabricated data this app avoids elsewhere (see dashboard.api's honest-zero
+convention). A dealer with no real Address at all still only gets custom_address
+set, same as before -- Quotation/Order creation's own mandatory-address check is
+what actually surfaces that gap, not a guess made here.
 
 `portalAccountCreated`/`hasPassword`/`lastLoginAt` (see `_portal_status_for`) are
 read-only staff visibility into BRD C.13 onboarding -- the Customer form itself
@@ -64,6 +84,80 @@ SALES_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 def _assert_can_manage_dealers():
 	if not set(frappe.get_roles(frappe.session.user)) & SALES_WRITE_ROLES:
 		frappe.throw(_("Only Sales or Management can manage dealers."), frappe.PermissionError)
+
+
+def _primary_billing_address_names(customer_names: list[str]) -> dict[str, str]:
+	"""{customer_name: Address name} for whichever Billing Address each dealer's
+	own default_billing_shipping_for would resolve (primary if more than one,
+	the only one if exactly one, skipped if none/ambiguous) -- batched for a
+	whole dealer list instead of sales.utils.default_billing_shipping_for's
+	one-customer-at-a-time query, same reason list_dealers already batches
+	credit limits/outstanding/portal status instead of looping get_dealer."""
+	if not customer_names:
+		return {}
+	links = frappe.get_all(
+		"Dynamic Link",
+		filters={"link_doctype": "Customer", "link_name": ["in", customer_names], "parenttype": "Address"},
+		fields=["link_name", "parent"],
+	)
+	if not links:
+		return {}
+	address_names = [row.parent for row in links]
+	rows = frappe.get_all(
+		"Address",
+		filters={"name": ["in", address_names], "address_type": "Billing"},
+		fields=["name", "is_primary_address"],
+	)
+	by_address = {row.name: row for row in rows}
+	candidates: dict[str, list] = {}
+	for link in links:
+		row = by_address.get(link.parent)
+		if row:
+			candidates.setdefault(link.link_name, []).append(row)
+
+	result = {}
+	for customer, rows in candidates.items():
+		primary = next((r.name for r in rows if r.is_primary_address), None)
+		if primary:
+			result[customer] = primary
+		elif len(rows) == 1:
+			result[customer] = rows[0].name
+	return result
+
+
+def _format_address(doc) -> str:
+	parts = [doc.address_line1, doc.get("address_line2"), doc.city, doc.get("state")]
+	return ", ".join(p for p in parts if p)
+
+
+def _real_billing_address_text_for(customer_names: list[str]) -> dict[str, str]:
+	"""{customer_name: formatted address text} for the real Billing Address
+	_primary_billing_address_names resolves -- the fallback list_dealers/
+	get_dealer use when custom_address is blank. See this module's own
+	docstring (11 Nov 2026 gap) for why custom_address wins when both exist."""
+	address_names = _primary_billing_address_names(customer_names)
+	if not address_names:
+		return {}
+	by_name = {v: k for k, v in address_names.items()}
+	rows = frappe.get_all(
+		"Address",
+		filters={"name": ["in", list(address_names.values())]},
+		fields=["name", "address_line1", "address_line2", "city", "state"],
+	)
+	return {by_name[row.name]: _format_address(row) for row in rows if _format_address(row)}
+
+
+def _update_billing_address_line1(customer: str, address_line1: str) -> None:
+	"""Writes the staff app's free-text address edit onto the dealer's real
+	Billing Address when one already exists -- never creates a new Address
+	record here (see this module's own docstring for why: city/country are
+	mandatory on Address and this single text box has no reliable way to
+	supply a real one). A dealer with no Billing Address yet is unaffected;
+	custom_address alone still gets set, same as before this existed."""
+	address_name = _primary_billing_address_names([customer]).get(customer)
+	if not address_name:
+		return
+	frappe.db.set_value("Address", address_name, "address_line1", address_line1, update_modified=False)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -351,6 +445,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 	outstanding = party_balances("Customer", [r.name for r in rows], company)
 	portal_status = _portal_status_for([r.name for r in rows])
 	extra_phones = _additional_phones_for([r.name for r in rows])
+	real_addresses = _real_billing_address_text_for([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -367,7 +462,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.custom_email,
 			r.custom_out_of_station,
 			r.custom_gstin,
-			r.custom_address,
+			r.custom_address or real_addresses.get(r.name),
 			outstanding.get(r.name, 0),
 			portal_status.get(r.name),
 			r.default_price_list,
@@ -397,7 +492,7 @@ def get_dealer(dealer: str):
 		doc.custom_email,
 		doc.custom_out_of_station,
 		doc.custom_gstin,
-		doc.custom_address,
+		doc.custom_address or _real_billing_address_text_for([doc.name]).get(doc.name),
 		party_balances("Customer", [doc.name], company).get(doc.name, 0),
 		_portal_status_for([doc.name]).get(doc.name),
 		doc.default_price_list,
@@ -559,7 +654,6 @@ def update_dealer(dealer: str, patch: dict):
 		"territory": "territory",
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
-		"address": "custom_address",
 		"priceList": "default_price_list",
 	}
 	if "dealerType" in patch:
@@ -591,6 +685,10 @@ def update_dealer(dealer: str, patch: dict):
 			doc.set("custom_price_visible", 1 if value else 0)
 		elif key == "outOfStation":
 			doc.set("custom_out_of_station", 1 if value else 0)
+		elif key == "address":
+			doc.set("custom_address", value)
+			if value:
+				_update_billing_address_line1(dealer, value)
 		elif key in field_map:
 			doc.set(field_map[key], value)
 		elif key == "creditLimit":

@@ -21,7 +21,7 @@ in place of the staff role checks those modules' whitelisted wrappers use.
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, now_datetime, today
+from frappe.utils import cint, flt, getdate, now_datetime, today
 
 from dms_erp.catalog.api import _serialize_image, get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
@@ -321,6 +321,24 @@ def get_excluded_stock(item: str) -> list[dict]:
 	if item not in set(browsable_catalog_for(dealer)):
 		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
 	return _get_excluded_stock(item)
+
+
+@frappe.whitelist(methods=["GET"])
+def check_recent_inquiry(item: str, damaged_stock: bool = False) -> dict:
+	"""Client request, 12 Nov 2026 -- lets the portal warn a dealer ("you already
+	asked about this in the last 24 hours") right where they're adding an item to
+	the enquiry list, before they ever submit. A display hint only, same spirit as
+	_serialize_dealer_inquiry's own `orderable` -- raise_inquiry/raise_inquiries
+	still create the inquiry either way; nothing here blocks it. See
+	sales.utils.recent_inquiry_for for the actual (dealer, item, damaged_stock)
+	same-rolling-24-hours check, kept separate from BRD C.2.4's own 7-day one."""
+	from dms_erp.sales.utils import recent_inquiry_for
+
+	dealer = _current_dealer()
+	if item not in set(browsable_catalog_for(dealer)):
+		frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
+	recent = recent_inquiry_for(dealer, item, damaged_stock=cint(damaged_stock))
+	return {"recent": bool(recent), "inquiry": recent.name if recent else None}
 
 
 @frappe.whitelist(methods=["POST"])

@@ -52,6 +52,37 @@ def find_open_duplicate_inquiries(
 	return matches
 
 
+RECENT_INQUIRY_WINDOW_HOURS = 24
+
+
+def recent_inquiry_for(dealer: str, item: str, damaged_stock: bool = False, hours: int = RECENT_INQUIRY_WINDOW_HOURS) -> dict | None:
+	"""Client request, 12 Nov 2026 -- a genuine rolling N-hour check, separate from
+	find_open_duplicate_inquiries above (that one is BRD C.2.4's own 7-day window,
+	compared on calendar date only, not exact time). Used where "within the last
+	24 hours" has to mean exactly that -- the WhatsApp item-availability reply, and
+	the dealer portal's "Add to enquiry list" check -- not "today or the last 7
+	days". Keyed on (dealer, item, damaged_stock) the same way raise_inquiries'
+	own same-submission duplicate check is, so a damaged-stock line and a regular
+	line for the same item are never treated as the same recent inquiry.
+
+	Returns the most recent still-open matching Inquiry (name, date, qty), or None."""
+	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-hours)
+	rows = frappe.get_all(
+		"Inquiry",
+		filters={
+			"dealer": dealer,
+			"item": item,
+			"damaged_stock": 1 if damaged_stock else 0,
+			"status": ["not in", list(CLOSED_INQUIRY_STATUSES)],
+			"creation": [">=", cutoff],
+		},
+		fields=["name", "creation", "qty"],
+		order_by="creation desc",
+		limit=1,
+	)
+	return rows[0] if rows else None
+
+
 @frappe.whitelist(methods=["GET"])
 def list_tax_templates() -> list[dict]:
 	"""Whatever Sales Taxes and Charges Templates the site's own GST/Chart of
