@@ -43,6 +43,83 @@
       "selected": false
     },
     {
+      "id": "n_api_check_dealer",
+      "data": {
+        "label": "Check Dealer Registered",
+        "config": {
+          "method": "POST",
+          "event_name": "dealer.check",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/check_dealer_registered",
+          "success_rules": [
+            {
+              "path": "message.registered",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "dealer_check_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": 0,
+        "y": 100
+      },
+      "selected": false
+    },
+    {
+      "id": "n_show_not_registered",
+      "data": {
+        "label": "Show Not Registered",
+        "config": {
+          "buttons": [],
+          "body_text": "{{dealer_check_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "",
+          "header_text": "🔒 Not Registered",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 145,
+      "dragging": false,
+      "position": {
+        "x": -300,
+        "y": 100
+      },
+      "selected": false
+    },
+    {
       "id": "n_main_menu",
       "data": {
         "label": "Main Menu",
@@ -254,15 +331,15 @@
         "config": {
           "method": "POST",
           "event_name": "item.lookup",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_item_info",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_item_info",
           "success_rules": [
             {
-              "path": "message.message",
+              "path": "message.item_code",
               "value": "",
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -342,6 +419,168 @@
       "position": {
         "x": -800,
         "y": 1380
+      },
+      "selected": false
+    },
+    {
+      "id": "n_show_item_clarify",
+      "data": {
+        "label": "Show Item Clarify / Not Found",
+        "config": {
+          "buttons": [],
+          "body_text": "{{erpnext_response.message.message}}",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Reply with its number, name, or item code -- or send Hello to start over",
+          "header_text": "📦 Item Lookup",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 165,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 1600
+      },
+      "selected": false
+    },
+    {
+      "id": "n_wait_item_retry",
+      "data": {
+        "label": "Wait Item Code (Retry)",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 1820
+      },
+      "selected": false
+    },
+    {
+      "id": "n_set_item_code_retry2",
+      "data": {
+        "label": "Set Item Code (Retry 2)",
+        "config": {
+          "key": "item_search_retry2_raw",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 2040
+      },
+      "selected": false
+    },
+    {
+      "id": "n_api_stock_retry2",
+      "data": {
+        "label": "Get Item Info (Retry 2)",
+        "config": {
+          "method": "POST",
+          "event_name": "item.lookup",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_item_info",
+          "success_rules": [
+            {
+              "path": "message.item_code",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "erpnext_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 2260
+      },
+      "selected": false
+    },
+    {
+      "id": "n_show_item_final",
+      "data": {
+        "label": "Show Item Final (Give Up)",
+        "config": {
+          "buttons": [],
+          "body_text": "{{erpnext_response.message.message}}\n\nYou can also browse our full catalogue and place an order directly at https://pd.storenxt.in/",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Send Hello to return to main menu",
+          "header_text": "📦 Item Lookup",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 165,
+      "dragging": false,
+      "position": {
+        "x": -800,
+        "y": 2480
       },
       "selected": false
     },
@@ -445,7 +684,7 @@
         "config": {
           "method": "POST",
           "event_name": "opportunity.create",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_dealer_opportunity",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/create_dealer_opportunity",
           "success_rules": [
             {
               "path": "message.message",
@@ -453,7 +692,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -493,12 +732,12 @@
         "label": "Opportunity Created",
         "config": {
           "buttons": [],
-          "body_text": "{{opportunity_response.message.message}}",
+          "body_text": "Hi! Here's an update on your request:\n\n{{opportunity_response.message.message}}",
           "list_data": null,
           "media_url": "",
           "media_type": "",
           "footer_text": "Send Hello to return to main menu",
-          "header_text": "✅ Enquiry Raised",
+          "header_text": "✅ Update",
           "media_filename": "",
           "interactive_type": "none"
         },
@@ -615,7 +854,7 @@
         "config": {
           "method": "POST",
           "event_name": "delivery.status",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_delivery_status",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_delivery_status",
           "success_rules": [
             {
               "path": "message.message",
@@ -623,7 +862,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -697,15 +936,15 @@
           "media_type": "",
           "footer_text": "Example: SAL-ORD-2025-00123",
           "header_text": "📋 Order Status",
-          "media_filename": "",
-          "interactive_type": "none",
           "action_buttons": [
             {
+              "url": "https://pd.storenxt.in",
               "kind": "website",
-              "title": "Visit Site",
-              "url": "https://pd.storenxt.in"
+              "title": "Visit Site"
             }
-          ]
+          ],
+          "media_filename": "",
+          "interactive_type": "none"
         },
         "outputs": [
           {
@@ -740,15 +979,15 @@
           "media_type": "",
           "footer_text": "Send Hello to return to main menu",
           "header_text": "👤 My Profile",
-          "media_filename": "",
-          "interactive_type": "none",
           "action_buttons": [
             {
+              "url": "https://pd.storenxt.in",
               "kind": "website",
-              "title": "View My Profile",
-              "url": "https://pd.storenxt.in"
+              "title": "View My Profile"
             }
-          ]
+          ],
+          "media_filename": "",
+          "interactive_type": "none"
         },
         "outputs": [
           {
@@ -827,7 +1066,7 @@
         "config": {
           "method": "POST",
           "event_name": "order.status",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_order_status",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_order_status",
           "success_rules": [
             {
               "path": "message.message",
@@ -835,7 +1074,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -908,7 +1147,7 @@
         "config": {
           "method": "POST",
           "event_name": "outstanding.check",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_outstanding_due",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_outstanding_due",
           "success_rules": [
             {
               "path": "message.message",
@@ -916,7 +1155,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -939,6 +1178,7 @@
       "type": "action.api_call",
       "width": 232,
       "height": 144,
+      "dragging": false,
       "position": {
         "x": 400,
         "y": 496
@@ -947,8 +1187,7 @@
       "positionAbsolute": {
         "x": 400,
         "y": 496
-      },
-      "dragging": false
+      }
     },
     {
       "id": "n_show_outstanding",
@@ -996,7 +1235,7 @@
         "config": {
           "method": "POST",
           "event_name": "orders.recent5",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/get_recent_orders",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/get_recent_orders",
           "success_rules": [
             {
               "path": "message.message",
@@ -1004,7 +1243,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -1143,6 +1382,136 @@
       }
     },
     {
+      "id": "n_api_batches",
+      "data": {
+        "label": "Get Item Batches",
+        "config": {
+          "method": "POST",
+          "event_name": "batches.list",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/list_item_batches",
+          "success_rules": [
+            {
+              "path": "message.has_batches",
+              "value": "",
+              "operator": "not_equals"
+            }
+          ],
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
+          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
+          "continue_on_error": true,
+          "lead_message_mode": "all_variables",
+          "response_variable": "batches_response",
+          "lead_message_template": "{{lead.variable_message}}",
+          "lead_variable_mappings": [],
+          "lead_variable_separator": ", "
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Success"
+          },
+          {
+            "key": "error",
+            "label": "Error"
+          }
+        ]
+      },
+      "type": "action.api_call",
+      "width": 232,
+      "height": 144,
+      "dragging": false,
+      "position": {
+        "x": -1400,
+        "y": 2420
+      },
+      "selected": false
+    },
+    {
+      "id": "n_ask_batch_choice",
+      "data": {
+        "label": "Ask Batch Choice",
+        "config": {
+          "buttons": [],
+          "body_text": "{{batches_response.message.message}}\n\nWant a specific batch? Reply with the number from the list above (e.g. 1), or reply 'Skip' and we'll choose automatically.",
+          "list_data": null,
+          "media_url": "",
+          "media_type": "",
+          "footer_text": "Example: 1, or Skip",
+          "header_text": "📦 Choose a Batch",
+          "media_filename": "",
+          "interactive_type": "none"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Sent"
+          }
+        ]
+      },
+      "type": "message.compose",
+      "width": 240,
+      "height": 165,
+      "dragging": false,
+      "position": {
+        "x": -1400,
+        "y": 2640
+      },
+      "selected": false
+    },
+    {
+      "id": "n_wait_batch_choice",
+      "data": {
+        "label": "Wait Batch Choice",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -1400,
+        "y": 2860
+      },
+      "selected": false
+    },
+    {
+      "id": "n_set_batch_choice",
+      "data": {
+        "label": "Set Batch Choice",
+        "config": {
+          "key": "preferred_batch_no",
+          "value": "{{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -1400,
+        "y": 3080
+      },
+      "selected": false
+    },
+    {
       "id": "n_ask_place_order",
       "data": {
         "label": "Ask Place Order",
@@ -1150,14 +1519,18 @@
           "buttons": [
             {
               "id": "btn_order_yes",
-              "title": "✅ Yes, place order"
+              "title": "✅ Place order now"
+            },
+            {
+              "id": "btn_order_quote",
+              "title": "📄 Ask for quotation"
             },
             {
               "id": "btn_order_no",
               "title": "❌ No, thanks"
             }
           ],
-          "body_text": "🛒 Would you like to place an order for this item?",
+          "body_text": "🛒 Would you like to place this order now, or ask our team for a quotation first?",
           "list_data": null,
           "media_url": "",
           "media_type": "",
@@ -1173,7 +1546,11 @@
           },
           {
             "key": "btn_order_yes",
-            "label": "✅ Yes, place order"
+            "label": "✅ Place order now"
+          },
+          {
+            "key": "btn_order_quote",
+            "label": "📄 Ask for quotation"
           },
           {
             "key": "btn_order_no",
@@ -1183,7 +1560,7 @@
       },
       "type": "message.compose",
       "width": 240,
-      "height": 188,
+      "height": 220,
       "dragging": false,
       "position": {
         "x": -1250,
@@ -1304,13 +1681,13 @@
           },
           {
             "key": "qty_exact",
-            "label": "Quantity: Type exact quantity"
+            "label": "Quantity: ✏️ Type exact quantity"
           }
         ]
       },
       "type": "message.compose",
       "width": 240,
-      "height": 213,
+      "height": 216,
       "dragging": false,
       "position": {
         "x": -1100,
@@ -1758,7 +2135,7 @@
         "config": {
           "method": "POST",
           "event_name": "payment.generate_link",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/erpnext_enhancements.api.paytm_payment_link.generate_payment_link",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/erpnext_enhancements.api.paytm_payment_link.generate_payment_link",
           "success_rules": [
             {
               "path": "message.message",
@@ -1766,7 +2143,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -1842,7 +2219,7 @@
         "label": "Ask PO Number",
         "config": {
           "buttons": [],
-          "body_text": "Please share your *PO Number* to confirm this quotation and place your order.",
+          "body_text": "Please share your *PO Number* to confirm and place your order.",
           "list_data": null,
           "media_url": "",
           "media_type": "",
@@ -2134,7 +2511,7 @@
         "config": {
           "method": "POST",
           "event_name": "custom_style.create",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_custom_style_inquiry",
+          "endpoint_url": "https://pacific-inc.storenxt.in/api/method/create_custom_style_inquiry",
           "success_rules": [
             {
               "path": "message.message",
@@ -2142,7 +2519,7 @@
               "operator": "not_equals"
             }
           ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
+          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token 1ecebf3d8a97745:5b24142e98c42b9\"\n}",
           "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
           "continue_on_error": true,
           "lead_message_mode": "all_variables",
@@ -2213,61 +2590,12 @@
       }
     },
     {
-      "id": "n_api_quote",
+      "id": "n_clear_quotation_id",
       "data": {
-        "label": "Create Quotation",
-        "config": {
-          "method": "POST",
-          "event_name": "quotation.create",
-          "endpoint_url": "https://tas-demo.storenxt.in/api/method/create_whatsapp_quotation",
-          "success_rules": [
-            {
-              "path": "message.quotation_id",
-              "value": "",
-              "operator": "not_equals"
-            }
-          ],
-          "headers_template": "{\n  \"Content-Type\": \"application/json\",\n  \"Authorization\": \"token e59b9f112c4dc83:044c547cd654f40\"\n}",
-          "payload_template": "{ \"lead\":{\n  \"event\": \"{{event.name}}\",\n  \"phone\": \"{{contact.phone}}\",\n  \"message\": \"{{lead.message}}\",\n  \"variables\": \"{{lead.variables}}\"\n}}",
-          "continue_on_error": true,
-          "lead_message_mode": "all_variables",
-          "response_variable": "quote_response",
-          "lead_message_template": "{{lead.variable_message}}",
-          "lead_variable_mappings": [],
-          "lead_variable_separator": ", "
-        },
-        "outputs": [
-          {
-            "key": "out",
-            "label": "Success"
-          },
-          {
-            "key": "error",
-            "label": "Error"
-          }
-        ]
-      },
-      "type": "action.api_call",
-      "width": 232,
-      "height": 144,
-      "dragging": false,
-      "position": {
-        "x": -1100,
-        "y": 3480
-      },
-      "selected": false,
-      "positionAbsolute": {
-        "x": -1100,
-        "y": 3480
-      }
-    },
-    {
-      "id": "n_set_quote_id",
-      "data": {
-        "label": "Set Quotation Ref",
+        "label": "Clear Quotation Ref (Direct Order path)",
         "config": {
           "key": "quotation_id",
-          "value": "{{quote_response.message.quotation_id}}"
+          "value": ""
         },
         "outputs": [
           {
@@ -2282,79 +2610,26 @@
       "dragging": false,
       "position": {
         "x": -1100,
-        "y": 3700
+        "y": 3480
       },
       "selected": false,
       "positionAbsolute": {
         "x": -1100,
-        "y": 3700
+        "y": 3480
       }
     },
     {
-      "id": "n_show_quote",
+      "id": "n_ask_quote_request_note",
       "data": {
-        "label": "Show Quotation",
-        "config": {
-          "buttons": [
-            {
-              "id": "btn_quote_yes",
-              "title": "✅ Confirm order"
-            },
-            {
-              "id": "btn_quote_no",
-              "title": "❌ Not now"
-            }
-          ],
-          "body_text": "{{quote_response.message.message}}\n\nTap *Confirm order* to place this order — we'll ask for your PO number next.",
-          "list_data": null,
-          "media_url": "",
-          "media_type": "",
-          "footer_text": "",
-          "header_text": "📄 Your Quotation",
-          "media_filename": "",
-          "interactive_type": "button"
-        },
-        "outputs": [
-          {
-            "key": "out",
-            "label": "Default"
-          },
-          {
-            "key": "btn_quote_yes",
-            "label": "✅ Confirm order"
-          },
-          {
-            "key": "btn_quote_no",
-            "label": "❌ Not now"
-          }
-        ]
-      },
-      "type": "message.compose",
-      "width": 240,
-      "height": 188,
-      "dragging": false,
-      "position": {
-        "x": -1100,
-        "y": 3920
-      },
-      "selected": false,
-      "positionAbsolute": {
-        "x": -1100,
-        "y": 3920
-      }
-    },
-    {
-      "id": "n_show_quote_unavailable",
-      "data": {
-        "label": "Quotation Not Possible (fixed text)",
+        "label": "Ask Quotation Request Quantity",
         "config": {
           "buttons": [],
-          "body_text": "We couldn't prepare a quotation for this item right now — it may not be set up for ordering on your account yet. We've noted your enquiry and our team will follow up with you.",
+          "body_text": "Please tell us the quantity you'd like a quotation for.",
           "list_data": null,
           "media_url": "",
           "media_type": "",
-          "footer_text": "Send Hello to return to main menu",
-          "header_text": "📝 Enquiry noted",
+          "footer_text": "Example: 50 boxes",
+          "header_text": "📄 Quotation Request",
           "media_filename": "",
           "interactive_type": "none"
         },
@@ -2370,22 +2645,116 @@
       "height": 145,
       "dragging": false,
       "position": {
-        "x": -800,
-        "y": 3700
+        "x": -900,
+        "y": 2600
       },
       "selected": false,
       "positionAbsolute": {
-        "x": -800,
-        "y": 3700
+        "x": -900,
+        "y": 2600
+      }
+    },
+    {
+      "id": "n_wait_quote_request_note",
+      "data": {
+        "label": "Wait Quotation Request Quantity",
+        "config": {
+          "timeout_seconds": 300
+        },
+        "outputs": [
+          {
+            "key": "on_input",
+            "label": "Input"
+          },
+          {
+            "key": "on_timeout",
+            "label": "Timeout"
+          }
+        ]
+      },
+      "type": "control.wait",
+      "width": 232,
+      "height": 140,
+      "dragging": false,
+      "position": {
+        "x": -900,
+        "y": 2820
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -900,
+        "y": 2820
+      }
+    },
+    {
+      "id": "n_set_quote_request_note",
+      "data": {
+        "label": "Set Quotation Request Note",
+        "config": {
+          "key": "order_note",
+          "value": "Quotation requested — quantity: {{lead.message}}"
+        },
+        "outputs": [
+          {
+            "key": "out",
+            "label": "Next"
+          }
+        ]
+      },
+      "type": "action.set_variable",
+      "width": 232,
+      "height": 164,
+      "dragging": false,
+      "position": {
+        "x": -900,
+        "y": 3040
+      },
+      "selected": false,
+      "positionAbsolute": {
+        "x": -900,
+        "y": 3040
       }
     }
   ],
   "edges": [
     {
-      "id": "e_start_menu",
+      "id": "e_start_check",
       "type": "smoothstep",
       "source": "n_start",
+      "target": "n_api_check_dealer",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_check_registered_menu",
+      "type": "smoothstep",
+      "source": "n_api_check_dealer",
       "target": "n_main_menu",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_check_not_registered",
+      "type": "smoothstep",
+      "source": "n_api_check_dealer",
+      "target": "n_show_not_registered",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_not_registered_end",
+      "type": "smoothstep",
+      "source": "n_show_not_registered",
+      "target": "n_end",
       "condition": {
         "type": "always"
       },
@@ -2452,11 +2821,88 @@
       "id": "e_api_stock_err",
       "type": "smoothstep",
       "source": "n_api_stock",
-      "target": "n_error",
+      "target": "n_show_item_clarify",
       "condition": {
         "type": "always"
       },
       "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_item_clarify_wait",
+      "type": "smoothstep",
+      "source": "n_show_item_clarify",
+      "target": "n_wait_item_retry",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_item_retry_set",
+      "type": "smoothstep",
+      "source": "n_wait_item_retry",
+      "target": "n_set_item_code_retry2",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_item_retry2_api",
+      "type": "smoothstep",
+      "source": "n_set_item_code_retry2",
+      "target": "n_api_stock_retry2",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_stock_retry2_show",
+      "type": "smoothstep",
+      "source": "n_api_stock_retry2",
+      "target": "n_show_stock",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_stock_retry2_final",
+      "type": "smoothstep",
+      "source": "n_api_stock_retry2",
+      "target": "n_show_item_final",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_show_item_final_end",
+      "type": "smoothstep",
+      "source": "n_show_item_final",
+      "target": "n_end",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_item_retry_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_item_retry",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
       "targetHandle": "in"
     },
     {
@@ -2890,9 +3336,75 @@
       "targetHandle": "in"
     },
     {
-      "id": "e_stock_ref_ask",
+      "id": "e_stock_ref_batches",
       "type": "smoothstep",
       "source": "n_set_stock_order_ref",
+      "target": "n_api_batches",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_batches_ask",
+      "type": "smoothstep",
+      "source": "n_api_batches",
+      "target": "n_ask_batch_choice",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_api_batches_skip",
+      "type": "smoothstep",
+      "source": "n_api_batches",
+      "target": "n_ask_place_order",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "error",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_batch_wait",
+      "type": "smoothstep",
+      "source": "n_ask_batch_choice",
+      "target": "n_wait_batch_choice",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "out",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_batch_set",
+      "type": "smoothstep",
+      "source": "n_wait_batch_choice",
+      "target": "n_set_batch_choice",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_input",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_wait_batch_timeout",
+      "type": "smoothstep",
+      "source": "n_wait_batch_choice",
+      "target": "n_ask_place_order",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_batch_ask",
+      "type": "smoothstep",
+      "source": "n_set_batch_choice",
       "target": "n_ask_place_order",
       "condition": {
         "type": "always"
@@ -3058,7 +3570,7 @@
       "id": "e_note_none_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_none",
-      "target": "n_api_quote",
+      "target": "n_clear_quotation_id",
       "condition": {
         "type": "always"
       },
@@ -3080,7 +3592,7 @@
       "id": "e_note_urgent_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_urgent",
-      "target": "n_api_quote",
+      "target": "n_clear_quotation_id",
       "condition": {
         "type": "always"
       },
@@ -3102,7 +3614,7 @@
       "id": "e_note_call_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_call",
-      "target": "n_api_quote",
+      "target": "n_clear_quotation_id",
       "condition": {
         "type": "always"
       },
@@ -3124,7 +3636,7 @@
       "id": "e_note_other_api_opp",
       "type": "smoothstep",
       "source": "n_set_note_other",
-      "target": "n_api_quote",
+      "target": "n_clear_quotation_id",
       "condition": {
         "type": "always"
       },
@@ -3396,10 +3908,21 @@
       "targetHandle": "in"
     },
     {
-      "id": "e_api_quote_set",
+      "id": "e_order_quote_request",
       "type": "smoothstep",
-      "source": "n_api_quote",
-      "target": "n_set_quote_id",
+      "source": "n_ask_place_order",
+      "target": "n_ask_quote_request_note",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "btn_order_quote",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_ask_quote_request_note_wait",
+      "type": "smoothstep",
+      "source": "n_ask_quote_request_note",
+      "target": "n_wait_quote_request_note",
       "condition": {
         "type": "always"
       },
@@ -3407,21 +3930,32 @@
       "targetHandle": "in"
     },
     {
-      "id": "e_api_quote_err",
+      "id": "e_wait_quote_request_note_set",
       "type": "smoothstep",
-      "source": "n_api_quote",
-      "target": "n_show_quote_unavailable",
+      "source": "n_wait_quote_request_note",
+      "target": "n_set_quote_request_note",
       "condition": {
         "type": "always"
       },
-      "sourceHandle": "error",
+      "sourceHandle": "on_input",
       "targetHandle": "in"
     },
     {
-      "id": "e_set_quote_show",
+      "id": "e_wait_quote_request_note_timeout",
       "type": "smoothstep",
-      "source": "n_set_quote_id",
-      "target": "n_show_quote",
+      "source": "n_wait_quote_request_note",
+      "target": "n_error",
+      "condition": {
+        "type": "always"
+      },
+      "sourceHandle": "on_timeout",
+      "targetHandle": "in"
+    },
+    {
+      "id": "e_set_quote_request_note_api_opp",
+      "type": "smoothstep",
+      "source": "n_set_quote_request_note",
+      "target": "n_api_opportunity",
       "condition": {
         "type": "always"
       },
@@ -3429,32 +3963,10 @@
       "targetHandle": "in"
     },
     {
-      "id": "e_quote_yes_po",
+      "id": "e_clear_quotation_id_po",
       "type": "smoothstep",
-      "source": "n_show_quote",
+      "source": "n_clear_quotation_id",
       "target": "n_ask_po_number",
-      "condition": {
-        "type": "always"
-      },
-      "sourceHandle": "btn_quote_yes",
-      "targetHandle": "in"
-    },
-    {
-      "id": "e_quote_no_declined",
-      "type": "smoothstep",
-      "source": "n_show_quote",
-      "target": "n_order_declined",
-      "condition": {
-        "type": "always"
-      },
-      "sourceHandle": "btn_quote_no",
-      "targetHandle": "in"
-    },
-    {
-      "id": "e_quote_unavailable_end",
-      "type": "smoothstep",
-      "source": "n_show_quote_unavailable",
-      "target": "n_end",
       "condition": {
         "type": "always"
       },
