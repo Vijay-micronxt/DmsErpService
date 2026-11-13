@@ -37,19 +37,32 @@ def inquiry_to_po_mapping_report():
 	"""The BRD's "Inquiry-to-PO mapping report" — every PO raised via `sales.
 	inquiry_api.convert_to_purchase_requirement`, joined back to the Inquiry that
 	drove it. Purchase Orders raised directly (no source_inquiry) don't appear
-	here — there's nothing to map."""
+	here — there's nothing to map.
+
+	12 Nov 2026 rebuild (BRD D.3) -- an Inquiry can hold several items now, so
+	there's no single productId/qty on it any more; the PO was always raised for
+	one specific item (convert_to_purchase_requirement's own `item` disambiguation),
+	found here by matching the PO's own item code back to that Inquiry's item rows."""
 	po_names = frappe.get_all("Purchase Order", filters={"custom_source_inquiry": ["is", "set"], "docstatus": 1}, pluck="name")
 
 	rows = []
 	for po_name in po_names:
 		po = po_api.get_purchase_order(po_name)
-		inquiry = inquiry_api.get_inquiry(po["sourceInquiry"])
+		try:
+			inquiry = inquiry_api.get_inquiry(po["sourceInquiry"])
+		except frappe.DoesNotExistError:
+			# Dangling reference (the source Inquiry was hard-deleted after this PO
+			# already existed) -- nothing honest to join it to, so skip the row
+			# rather than crashing the whole report over one bad link.
+			continue
+		po_item_code = po["lines"][0]["itemCode"] if po["lines"] else None
+		row = next((r for r in inquiry["items"] if r["productId"] == po_item_code), None)
 		rows.append(
 			{
 				"inquiryId": inquiry["id"],
 				"dealerId": inquiry["dealerId"],
-				"productId": inquiry["productId"],
-				"inquiryQty": inquiry["qty"],
+				"productId": row["productId"] if row else po_item_code,
+				"inquiryQty": row["qty"] if row else None,
 				"inquiryStatus": inquiry["status"],
 				"poId": po["id"],
 				"poSupplier": po["supplier"],

@@ -20,6 +20,7 @@ from frappe import _
 from frappe.utils import add_days, flt, now_datetime, today
 
 from dms_erp.catalog.utils import (
+	item_images,
 	item_pieces_per_box,
 	item_sqft_per_box,
 	item_sqm_per_box,
@@ -236,6 +237,12 @@ def _serialize_line(row, qty_invoiced: float = 0) -> dict:
 		# qty is for.
 		"lineId": row.name,
 		"itemCode": row.item_code,
+		# Client request, 12 Nov 2026 -- the dealer portal's order detail page showed
+		# only the bare code before this (no other line on any dealer-facing document
+		# did); itemName/images let it match the tap-to-zoom + item-name-links-to-
+		# detail-page treatment the Enquiry/Quotation/Invoice lines now all share.
+		"itemName": row.item_name,
+		"images": item_images(row.item_code),
 		"qty": row.qty,
 		# qtyInvoiced/qtyPending exist so the UI can show a partially-invoiced
 		# line without re-deriving it from the order's invoice list itself;
@@ -698,6 +705,19 @@ def create_order(
 		taxes_and_charges=taxes_and_charges,
 	)
 
+	def _create_after_duplicate_gate(**kwargs):
+		# Client request, 12 Nov 2026 -- innermost gate, nested same as the others:
+		# see sales.duplicate_order's own module docstring for why this is narrower
+		# than (and doesn't replace) BRD C.2.4's own 7-day duplicate-inquiry hint.
+		from dms_erp.sales.duplicate_order import gate_duplicate_order
+
+		return gate_duplicate_order(
+			dealer=kwargs["dealer"],
+			lines=kwargs["lines"],
+			create_fn=_create_order,
+			create_kwargs=kwargs,
+		)
+
 	def _create_after_discount_gate(**kwargs):
 		# BRD C.7.3/C.11#4: see quotation_api.create_quotation's own copy of this
 		# nested gate for why it's nested inside the other gates rather than
@@ -707,7 +727,7 @@ def create_order(
 		return gate_discount_over_price_list(
 			reference_doctype="Sales Order",
 			lines=kwargs["lines"],
-			create_fn=_create_order,
+			create_fn=_create_after_duplicate_gate,
 			create_kwargs=kwargs,
 		)
 

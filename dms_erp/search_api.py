@@ -31,8 +31,13 @@ SOURCES = [
 	 "search": ["name", "supplier_name", "gstin"]},
 	{"doctype": "Item", "label": "Items", "kind": "app", "title": "item_name", "subtitle": ["item_group", "custom_size"],
 	 "search": ["name", "item_name"]},
-	{"doctype": "Inquiry", "label": "Inquiries", "kind": "app", "title": "name", "subtitle": ["dealer", "item", "status"],
-	 "search": ["name", "dealer", "item", "contact_name", "contact_phone", "customer_po"]},
+	# 12 Nov 2026 rebuild -- "item" dropped from both lists: it moved to the
+	# Inquiry Item child table, which this generic same-doctype field search
+	# can't reach into. Searching an Inquiry by item code isn't wired up here
+	# any more (dealer/status/contact/PO search still works) -- a real, accepted
+	# reduction, not an oversight.
+	{"doctype": "Inquiry", "label": "Inquiries", "kind": "app", "title": "name", "subtitle": ["dealer", "status"],
+	 "search": ["name", "dealer", "contact_name", "contact_phone", "customer_po"]},
 	{"doctype": "Quotation", "label": "Quotations", "kind": "app", "title": "name", "subtitle": ["customer_name", "status"],
 	 "search": ["name", "party_name", "customer_name", "tally_voucher_no"]},
 	{"doctype": "Sales Order", "label": "Orders", "kind": "app", "title": "name", "subtitle": ["customer_name", "status"],

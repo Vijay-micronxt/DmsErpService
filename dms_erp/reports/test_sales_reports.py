@@ -57,22 +57,24 @@ class TestSalesReports(FrappeTestCase):
 		self.assertEqual(result["summary"]["total"], 0)
 
 	def test_missed_demand_report_prices_out_of_stock_inquiries(self):
+		# 12 Nov 2026 rebuild: the test item has no stock, so create_inquiry auto-sets
+		# this item row to Out of Stock on its own -- no status override needed or valid.
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=15, source="Phone")
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
 		result = sales_reports.missed_demand_report()
-		row = next(r for r in result["rows"] if r["id"] == inquiry["id"])
+		row = next(r for r in result["rows"] if r["inquiryId"] == inquiry["id"])
 		self.assertEqual(row["estimatedValue"], 15 * 400)
 		self.assertGreaterEqual(result["totalValue"], 15 * 400)
 
-	def test_missed_demand_report_excludes_open_inquiries(self):
+	def test_missed_demand_report_excludes_items_that_are_not_missed(self):
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=15, source="Phone")
-		# The test item has no stock, so a new inquiry is auto-set to Out of Stock (genuine
-		# missed demand). Put it back to Open: that's the status this test is about.
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Open"})
+		# The test item has no stock, so the new inquiry's item row is auto-set to Out of
+		# Stock (genuine missed demand). Flip it back to Available directly on the row --
+		# that's the state this test is about (parent workflow status stays "Open" either way).
+		frappe.db.set_value("Inquiry Item", inquiry["items"][0]["lineId"], "availability_status", "Available")
 
 		result = sales_reports.missed_demand_report()
-		ids = {r["id"] for r in result["rows"]}
+		ids = {r["inquiryId"] for r in result["rows"]}
 		self.assertNotIn(inquiry["id"], ids)
 
 	def test_retail_vs_bulk_report_groups_by_channel(self):

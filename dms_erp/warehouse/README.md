@@ -28,7 +28,10 @@ in this module.
   "damage awaiting claim" count already did — now shared via `utils.claim_ref_for_lot`
   instead of duplicated. Both are `null` for lots outside a damage/claim bay.
 - **Inward Truck** (`doctype/inward_truck`) — a genuinely custom doctype (gate/LR/
-  ETA tracking has no ERPNext equivalent). Does not itself move stock.
+  ETA tracking has no ERPNext equivalent). Does not itself move stock. Its optional
+  `vehicle_type` and `vehicle_number` are snapshots from the registered Transporter
+  fleet; `vehicle_type` is free text because the separate `Vehicle Type` doctype is
+  only for box-capacity checks on supplier Pickup Runs.
 - **Bay Allocation** (`allocation_api.py`, `doctype/bay_allocation`) — a custom
   doctype for the suggest/confirm/split-across-bays workflow (no ERPNext
   equivalent), but confirming one **posts and submits a native Purchase Receipt**

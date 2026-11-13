@@ -40,9 +40,13 @@ class TestInquiryApi(FrappeTestCase):
 		# engine's missed-demand signal (purchase.reorder_api.MISSED_DEMAND_STATUSES).
 		item = make_item("INQ-TEST-NO-STOCK", "Vitrified")
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=100, source="WhatsApp")
-		self.assertEqual(inquiry["status"], "Out of Stock")
+		# 12 Nov 2026 rebuild: workflow status (parent) and stock availability
+		# (per-item) are separate fields now -- status stays "Open" at creation
+		# regardless of stock, and the no-stock signal moves to the item row.
+		self.assertEqual(inquiry["status"], "Open")
+		self.assertEqual(inquiry["items"][0]["availabilityStatus"], "Out of Stock")
 		self.assertEqual(inquiry["dealerId"], self.dealer)
-		self.assertEqual(inquiry["qty"], 100)
+		self.assertEqual(inquiry["items"][0]["qty"], 100)
 		self.assertIsNone(inquiry["duplicateOf"])
 
 	def test_create_inquiry_fully_covered_by_stock_is_available(self):
@@ -51,7 +55,7 @@ class TestInquiryApi(FrappeTestCase):
 			item=item, batch_no="INQ-TEST-FULL-B1", total_qty=100, lines=[{"bay": self.bay["code"], "qty": 100}], supplier=self.supplier
 		)
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
-		self.assertEqual(inquiry["status"], "Available")
+		self.assertEqual(inquiry["items"][0]["availabilityStatus"], "Available")
 
 	def test_create_inquiry_partially_covered_by_stock_is_partially_available(self):
 		item = make_item("INQ-TEST-PARTIAL-STOCK", "Vitrified")
@@ -59,7 +63,7 @@ class TestInquiryApi(FrappeTestCase):
 			item=item, batch_no="INQ-TEST-PARTIAL-B1", total_qty=20, lines=[{"bay": self.bay["code"], "qty": 20}], supplier=self.supplier
 		)
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
-		self.assertEqual(inquiry["status"], "Partially Available")
+		self.assertEqual(inquiry["items"][0]["availabilityStatus"], "Partially Available")
 
 	def test_create_inquiry_flags_a_recent_open_duplicate(self):
 		dealer = make_dealer("Inquiry Duplicate Dealer")
@@ -97,25 +101,28 @@ class TestInquiryApi(FrappeTestCase):
 	def test_inquiry_carries_the_items_weight(self):
 		frappe.db.set_value("Item", self.item, "custom_weight_per_box_kg", 28)
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="WhatsApp")
-		self.assertEqual(inquiry["weightPerBoxKg"], 28)
-		self.assertEqual(inquiry["totalWeightKg"], 280)
+		self.assertEqual(inquiry["items"][0]["weightPerBoxKg"], 28)
+		self.assertEqual(inquiry["items"][0]["totalWeightKg"], 280)
 
 	def test_inquiry_carries_the_items_pieces_and_sqft(self):
 		frappe.db.set_value("Item", self.item, "custom_pieces_per_box", 4)
 		frappe.db.set_value("Item", self.item, "custom_sqft_per_box", 15.5)
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="WhatsApp")
-		self.assertEqual(inquiry["piecesPerBox"], 4)
-		self.assertEqual(inquiry["totalPieces"], 40)
-		self.assertEqual(inquiry["sqftPerBox"], 15.5)
-		self.assertEqual(inquiry["totalSqft"], 155)
+		row = inquiry["items"][0]
+		self.assertEqual(row["piecesPerBox"], 4)
+		self.assertEqual(row["totalPieces"], 40)
+		self.assertEqual(row["sqftPerBox"], 15.5)
+		self.assertEqual(row["totalSqft"], 155)
 		# sqm is derived from sqft (1 sqft = 0.09290304 sqm exactly), not its own field.
-		self.assertAlmostEqual(inquiry["sqmPerBox"], 1.44, places=2)
-		self.assertAlmostEqual(inquiry["totalSqm"], 14.4, places=2)
+		self.assertAlmostEqual(row["sqmPerBox"], 1.44, places=2)
+		self.assertAlmostEqual(row["totalSqm"], 14.4, places=2)
 
 	def test_update_inquiry_patches_status_and_remarks(self):
+		# "Available" etc. are per-item availability_status values now, not valid
+		# parent Inquiry.status options -- exercise a real workflow transition instead.
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=50, source="Phone")
-		updated = inquiry_api.update_inquiry(inquiry["id"], {"status": "Available", "remarks": "Confirmed in stock"})
-		self.assertEqual(updated["status"], "Available")
+		updated = inquiry_api.update_inquiry(inquiry["id"], {"status": "Quoted", "remarks": "Confirmed in stock"})
+		self.assertEqual(updated["status"], "Quoted")
 		self.assertEqual(updated["remarks"], "Confirmed in stock")
 
 	def test_write_requires_sales_or_management_role(self):
@@ -124,8 +131,10 @@ class TestInquiryApi(FrappeTestCase):
 			inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=10, source="Phone")
 
 	def test_convert_to_purchase_requirement_creates_po_and_maps_inquiry(self):
+		# An Inquiry stays "Open" at the parent level regardless of per-item stock
+		# availability (that's the item row's own availability_status) -- no status
+		# update needed before raising the purchase requirement.
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
 		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date=str(add_days(today(), 30)))
 
@@ -136,7 +145,6 @@ class TestInquiryApi(FrappeTestCase):
 	def test_convert_to_purchase_requirement_falls_back_to_the_items_default_supplier(self):
 		frappe.db.set_value("Item", self.item, "custom_default_supplier", self.supplier)
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
 		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date=str(add_days(today(), 30)))
 
@@ -147,7 +155,6 @@ class TestInquiryApi(FrappeTestCase):
 		# be resolved here. (This used to pass only because a stale date failed first.)
 		item = make_item("INQ-NO-SUPPLIER-ITEM", "Vitrified")
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=40, source="Phone")
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 
 		with self.assertRaises(frappe.ValidationError):
 			inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], expected_ready_date=str(add_days(today(), 30)))
@@ -172,7 +179,7 @@ class TestInquiryApi(FrappeTestCase):
 		self.assertFalse(dealer_catalog_api.is_visible(other_dealer, unassigned_item))
 
 		inquiry = inquiry_api.create_inquiry(dealer=other_dealer, item=unassigned_item, qty=5, source="Phone")
-		self.assertEqual(inquiry["productId"], unassigned_item)
+		self.assertEqual(inquiry["items"][0]["productId"], unassigned_item)
 
 	def test_create_inquiry_rejects_pulled_back_item(self):
 		item = make_item("INQ-PULLED-ITEM", "Vitrified")
@@ -202,11 +209,13 @@ class TestInquiryApi(FrappeTestCase):
 		inquiry = inquiry_api.create_inquiry(
 			dealer=self.dealer, qty=1, source="WhatsApp", requested_style="Carrara Marble Look, 600x1200"
 		)
-		self.assertIsNone(inquiry["productId"])
-		self.assertEqual(inquiry["requestedStyle"], "Carrara Marble Look, 600x1200")
+		row = inquiry["items"][0]
+		self.assertIsNone(row["productId"])
+		self.assertEqual(row["requestedStyle"], "Carrara Marble Look, 600x1200")
 		self.assertEqual(inquiry["status"], "Open")
-		self.assertIsNone(inquiry["price"])
-		self.assertIsNone(inquiry["weightPerBoxKg"])
+		# No real item -- nothing to price, and prices is keyed by real item rows only.
+		self.assertEqual(inquiry["prices"], {})
+		self.assertIsNone(row["weightPerBoxKg"])
 		# Explicitly never mirrored to an Opportunity -- there's no real item_code
 		# to put in Opportunity Item, and the ticket itself says not to create one.
 		self.assertIsNone(inquiry["linkedOpportunity"])

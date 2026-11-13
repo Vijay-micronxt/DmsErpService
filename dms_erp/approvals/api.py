@@ -521,4 +521,9 @@ APPLIERS = {
 	"Pricing Override": _apply_document_creation,
 	"Amend Or Cancel Submitted Document": _apply_amend_or_cancel,
 	"Credit Limit Exceeded": _apply_credit_limit_exceeded,
+	# sales.duplicate_order.gate_duplicate_order -- always targets "Sales Order"
+	# the one way (order_api._create_order), same as Channel Override/Discount
+	# Over Price List, so it shares their generic applier rather than needing
+	# its own like Credit Limit Exceeded's dual create_order/convert_to_order.
+	"Duplicate Order": _apply_document_creation,
 }

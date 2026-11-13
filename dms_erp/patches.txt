@@ -7,3 +7,4 @@ dms_erp.patches.backfill_inquiry_links
 dms_erp.patches.transport_rate_zone_to_ranges
 dms_erp.patches.backfill_pieces_per_box_from_tally
 dms_erp.patches.link_items_to_product_series
+dms_erp.patches.migrate_inquiry_items_to_child_table

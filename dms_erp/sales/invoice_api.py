@@ -15,7 +15,7 @@ per-site through `_has` rather than assumed.
 import frappe
 from frappe import _
 
-from dms_erp.catalog.utils import item_weight_per_box_kg
+from dms_erp.catalog.utils import item_images, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 
 INVOICE_READ_ROLES = {"DMS Sales", "DMS Management", "DMS Finance", "System Manager"}
@@ -181,6 +181,8 @@ def _invoice_detail(doc) -> dict:
 			{
 				"itemCode": row.item_code,
 				"itemName": row.item_name,
+				# Client request, 12 Nov 2026 -- see catalog.utils.item_images' own docstring.
+				"images": item_images(row.item_code),
 				"qty": row.qty,
 				"uom": row.uom,
 				"rate": row.rate,

@@ -40,14 +40,42 @@ function create_quotation_from_selected(listview) {
 		return;
 	}
 
+	// 12 Nov 2026 rebuild (BRD D.3) -- the list view's own rows no longer carry
+	// item/qty directly (that moved to each Inquiry's own Items child table), so
+	// the full document for every selected row has to be fetched first; lines
+	// is every real (non-Custom-Style) item across all of them, flattened into
+	// one combined Quotation, same as inquiry_api.make_quotation's own
+	// single-Inquiry version does -- just across several selected Inquiries here.
+	frappe.dom.freeze(__("Loading selected inquiries..."));
+	Promise.all(rows.map((r) => frappe.db.get_doc("Inquiry", r.name)))
+		.then((docs) => {
+			frappe.dom.unfreeze();
+			const lines = [];
+			for (const doc of docs) {
+				for (const row of doc.items || []) {
+					if (row.item) {
+						lines.push({ item: row.item, qty: row.qty, label: row.item });
+					}
+				}
+			}
+			if (lines.length === 0) {
+				frappe.msgprint(__("None of the selected inquiries have a real catalog item (only custom style requests)."));
+				return;
+			}
+			show_create_quotation_dialog(dealer, rows, lines);
+		})
+		.catch(() => frappe.dom.unfreeze());
+}
+
+function show_create_quotation_dialog(dealer, rows, lines) {
 	const dialog = new frappe.ui.Dialog({
 		title: __("Create Quotation from {0} inquiries", [rows.length]),
 		fields: [
 			{
 				fieldname: "summary",
 				fieldtype: "HTML",
-				options: `<p>${__("Dealer")}: <strong>${frappe.utils.escape_html(dealer)}</strong></p><ul>${rows
-					.map((r) => `<li>${frappe.utils.escape_html(r.name)} — ${frappe.utils.escape_html(r.item)} × ${r.qty}</li>`)
+				options: `<p>${__("Dealer")}: <strong>${frappe.utils.escape_html(dealer)}</strong></p><ul>${lines
+					.map((l) => `<li>${frappe.utils.escape_html(l.label)} × ${l.qty}</li>`)
 					.join("")}</ul>`,
 			},
 			{
@@ -82,7 +110,7 @@ function create_quotation_from_selected(listview) {
 				method: "dms_erp.sales.quotation_api.create_quotation",
 				args: {
 					dealer,
-					lines: rows.map((r) => ({ item: r.item, qty: r.qty })),
+					lines: lines.map((l) => ({ item: l.item, qty: l.qty })),
 					markup_pct: values.markup_pct,
 					freight: values.freight,
 					validity_days: values.validity_days,
