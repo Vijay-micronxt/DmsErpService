@@ -8,6 +8,7 @@
  "field_order": [
   "supplier",
   "vehicle_type",
+  "transporter_vehicle",
   "vehicle_number",
   "column_break_1",
   "scheduled_date",
@@ -28,11 +29,15 @@
   },
   {
    "fieldname": "vehicle_type",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Vehicle Type",
-   "options": "Vehicle Type",
    "reqd": 1
+  },
+  {
+   "fieldname": "transporter_vehicle",
+   "fieldtype": "Data",
+   "label": "Registered Fleet Vehicle"
   },
   {
    "fieldname": "vehicle_number",
