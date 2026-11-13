@@ -23,16 +23,16 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime, today
 
-from dms_erp.catalog.api import _serialize_image, get_product, resolve_dealer_code
+from dms_erp.catalog.api import get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
-from dms_erp.catalog.utils import is_sellable, item_weight_per_box_kg
+from dms_erp.catalog.utils import is_sellable, item_images, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.invoice_api import _has as _invoice_has
 from dms_erp.sales.invoice_api import _invoice_detail
 from dms_erp.sales.invoice_api import _serialize_row as _serialize_invoice_row
-from dms_erp.sales.inquiry_api import _create_inquiry, _inquiry_filters, _serialize as _serialize_inquiry
+from dms_erp.sales.inquiry_api import _create_inquiry, _create_inquiry_multi, _inquiry_filters, _serialize as _serialize_inquiry
 from dms_erp.sales.order_api import _create_order
 from dms_erp.sales.order_api import _serialize as _serialize_order
 from dms_erp.sales.quotation_api import _convert_to_order
@@ -383,22 +383,23 @@ def raise_inquiry(
 		preferred_batch_no=preferred_batch_no,
 	)
 	data["orderable"] = is_visible(dealer, item)
-	data.pop("price", None)
+	# BRD client request, Oct 2026: no price shown before a quotation exists --
+	# 12 Nov 2026 rebuild moved the old top-level `price` into a `prices` dict
+	# (one per line), same rule, same thing to strip here.
+	data.pop("prices", None)
 	return data
 
 
 @frappe.whitelist(methods=["POST"])
 def raise_inquiries(items, remarks: str | None = None) -> dict:
-	"""Several items enquired on in one go (the enquiry list on the portal). Each
-	item becomes its own Inquiry, exactly as raise_inquiry makes one -- the Inquiry
-	doctype is one item per record, and everything downstream (stock status,
-	missed-demand reporting, quoting) is built on that -- but they all carry the
-	same `requestGroup` (the first one's number), so staff see they came together
-	and quote them as a single quotation (create_quotation already merges several
-	inquiries of one dealer). `items` is a list of {item, qty}, JSON when sent as a
-	form field. Every line is validated before anything is created, and a failure
-	partway rolls the whole request back (Frappe's per-request transaction), so a
-	dealer never ends up with half a list raised.
+	"""Several items enquired on in one go (the enquiry list on the portal).
+	12 Nov 2026 rebuild: these all become rows on the SAME Inquiry now (BRD
+	D.3) -- one real multi-item record, not N separate ones glued together by a
+	`request_group` string (that field, and the whole workaround, is gone).
+	`items` is a list of {item, qty}, JSON when sent as a form field. Every line
+	is validated before anything is created (_create_inquiry_multi's own
+	all-or-nothing guarantee), so a dealer never ends up with half a list
+	raised.
 
 	ISS-2026-00678 -- an entry may also carry `damagedStock`/`damaged_stock`
 	(either key accepted) when it came from the item page's damaged/
@@ -449,32 +450,30 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 		if flt(entry.get("qty")) + flt(entered_boxes) <= 0:
 			frappe.throw(_("Enter a quantity above zero for {0}.").format(item), frappe.ValidationError)
 
-	created: list[dict] = []
-	group = None
+	rows = []
 	for entry in entries:
 		entered_boxes = entry.get("enteredBoxes")
 		if entered_boxes is None:
 			entered_boxes = entry.get("entered_boxes")
-		inquiry = _create_inquiry(
-			dealer,
-			entry["item"],
-			flt(entry["qty"]),
-			source="Web",
-			remarks=remarks,
-			request_group=group,
-			damaged_stock=bool(entry.get("damagedStock") or entry.get("damaged_stock")),
-			uom=entry.get("uom"),
-			entered_boxes=flt(entered_boxes) if entered_boxes is not None else None,
-			preferred_batch_no=entry.get("preferredBatchNo") or entry.get("preferred_batch_no"),
+		rows.append(
+			{
+				"item": entry["item"],
+				"qty": flt(entry["qty"]),
+				"damagedStock": bool(entry.get("damagedStock") or entry.get("damaged_stock")),
+				"uom": entry.get("uom"),
+				"enteredBoxes": flt(entered_boxes) if entered_boxes is not None else None,
+				"preferredBatchNo": entry.get("preferredBatchNo") or entry.get("preferred_batch_no"),
+			}
 		)
-		if group is None:
-			group = inquiry["id"]
-			frappe.db.set_value("Inquiry", group, "request_group", group, update_modified=False)
-			inquiry["requestGroup"] = group
-		inquiry["orderable"] = is_visible(dealer, entry["item"])
-		inquiry.pop("price", None)
-		created.append(inquiry)
-	return {"requestGroup": group, "items": created}
+
+	inquiry = _create_inquiry_multi(dealer, rows, source="Web", remarks=remarks)
+	inquiry.pop("prices", None)
+	for item_row in inquiry["items"]:
+		item_row["orderable"] = is_visible(dealer, item_row["productId"]) if item_row["productId"] else False
+	# requestGroup kept in the response shape (now just this one Inquiry's own id)
+	# for any caller still reading it after the rebuild -- real grouping is gone,
+	# this is the whole enquiry now.
+	return {"requestGroup": inquiry["id"], "enquiry": inquiry["id"], "items": inquiry["items"]}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -556,11 +555,14 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(_("Inquiry {0} does not belong to you.").format(inquiry), frappe.PermissionError)
 	if doc.status in {"Converted to Order", "Rejected", "Closed"}:
 		frappe.throw(_("Inquiry {0} is {1} and can no longer be converted.").format(inquiry, doc.status), frappe.ValidationError)
-	if not doc.item:
-		# ISS-2026-00636 -- a Custom Style request (doc.custom_requested_style set,
-		# no real Item): there's nothing to build a Sales Order line from, so this
-		# is rejected with its own clear message rather than falling into
-		# is_visible(dealer, None), which would also reject it, just less clearly.
+
+	# 12 Nov 2026 rebuild (BRD D.3) -- one Inquiry can hold several items now;
+	# every real (non-Custom-Style) row becomes one line on a single combined
+	# Sales Order, same as native Desk's inquiry_api.make_order already does.
+	real_rows = [row for row in doc.items if row.item]
+	if not real_rows:
+		# ISS-2026-00636 -- every row is a Custom Style request (no real Item):
+		# there's nothing to build a Sales Order line from.
 		from dms_erp.sales.utils import dealer_contact_line
 
 		frappe.throw(
@@ -569,18 +571,19 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 			),
 			frappe.ValidationError,
 		)
-	if not is_visible(dealer, doc.item):
+	not_orderable = [row.item for row in real_rows if not is_visible(dealer, row.item)]
+	if not_orderable:
 		from dms_erp.sales.utils import dealer_contact_line
 
 		frappe.throw(
-			_("{0} isn't yet set up for ordering on your account. {1}").format(doc.item, dealer_contact_line(dealer)),
+			_("{0} isn't yet set up for ordering on your account. {1}").format(", ".join(not_orderable), dealer_contact_line(dealer)),
 			frappe.PermissionError,
 		)
 
-	# ISS-2026-00712 -- carries the dealer's own batch choice (if any) from the
-	# enquiry onto the resulting order line; _priced_order_line re-validates it
+	# ISS-2026-00712 -- carries each row's own batch choice (if any) from the
+	# enquiry onto its resulting order line; _priced_order_line re-validates it
 	# against real on-hand stock (it may have moved since the enquiry).
-	lines = [{"item": doc.item, "qty": doc.qty, "preferred_batch_no": doc.get("preferred_batch_no")}]
+	lines = [{"item": row.item, "qty": row.qty, "preferred_batch_no": row.get("preferred_batch_no")} for row in real_rows]
 	from dms_erp.sales.utils import default_billing_shipping_for
 
 	customer_address, shipping_address_name = default_billing_shipping_for(dealer)
@@ -613,77 +616,24 @@ def list_my_inquiries(status: str | None = None, search: str | None = None, limi
 	}
 
 
-def _enquiry_status(statuses: list[str]) -> str:
-	"""One status for a whole enquiry. When every item is in the same state it's that state;
-	when they differ (two quoted, one out of stock) there is no honest single word, so it
-	says "Mixed" and the detail page shows each item's own status."""
-	distinct = set(statuses)
-	return statuses[0] if len(distinct) == 1 else "Mixed"
-
-
-def _serialize_enquiry(key: str, docs: list, dealer: str) -> dict:
-	"""One enquiry as the dealer sees it: the items they asked about together. The Inquiry
-	doctype is one item per record (stock status, reorder demand and quoting all hang off
-	that), so an enquiry raised with several items is several records sharing a
-	request_group -- this gathers them back into the single enquiry the dealer made.
-	A lone inquiry is just an enquiry of one item, keyed by its own number."""
-	items = [_serialize_dealer_inquiry(doc, dealer) for doc in sorted(docs, key=lambda d: (d.creation, d.name))]
-	return {
-		"id": key,
-		"number": key,
-		"date": items[0]["date"],
-		"createdAt": items[0]["createdAt"],
-		"status": _enquiry_status([i["status"] for i in items]),
-		"itemCount": len(items),
-		"remarks": next((i["remarks"] for i in items if i["remarks"]), None),
-		"linkedQuotations": sorted({i["linkedQuotation"] for i in items if i["linkedQuotation"]}),
-		"items": items,
-	}
+# 12 Nov 2026 rebuild (BRD D.3) -- "enquiry" used to mean "one or more Inquiry
+# records sharing a request_group", gathered back into one view by
+# _serialize_enquiry/_enquiry_for below, because the old Inquiry doctype was
+# one item per record. Now one Inquiry record already holds every item the
+# dealer asked about together -- an "enquiry" and an "Inquiry" are the same
+# thing. The enquiry-named endpoints stay (the frontend still calls them) but
+# are now thin wrappers over the plain Inquiry ones; request_group/_enquiry_for/
+# _serialize_enquiry/_enquiry_status are gone.
 
 
 @frappe.whitelist(methods=["GET"])
 def list_my_enquiries(status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
-	"""The dealer's enquiries, one entry per enquiry they made -- items raised together from
-	the enquiry list come back as ONE entry holding all of them (see _serialize_enquiry).
-	Paginated by enquiry, not by item, so a 3-item enquiry is never split across pages.
-	`status`/`search` pick the enquiries that have at least one matching item; the whole
-	enquiry is then returned, not only the matching items."""
-	dealer = _current_dealer()
-	limit, offset = clamp(limit, offset)
-	rows = frappe.get_all(
-		"Inquiry",
-		filters=_inquiry_filters(dealer, status, search),
-		fields=["name", "request_group", "creation"],
-		order_by="creation desc",
-	)
-	keys: list[str] = []
-	for row in rows:
-		key = row.request_group or row.name
-		if key not in keys:
-			keys.append(key)
-	page = keys[offset : offset + limit]
-	return {
-		"items": [_enquiry_for(key, dealer) for key in page],
-		"total": len(keys),
-		"limit": limit,
-		"offset": offset,
-	}
-
-
-def _enquiry_for(key: str, dealer: str) -> dict:
-	names = frappe.get_all("Inquiry", filters={"dealer": dealer, "request_group": key}, pluck="name")
-	if not names and frappe.db.exists("Inquiry", {"name": key, "dealer": dealer}):
-		names = [key]
-	if not names:
-		frappe.throw(_("Enquiry {0} does not belong to you.").format(key), frappe.PermissionError)
-	return _serialize_enquiry(key, [frappe.get_doc("Inquiry", name) for name in names], dealer)
+	return list_my_inquiries(status=status, search=search, limit=limit, offset=offset)
 
 
 @frappe.whitelist(methods=["GET"])
 def get_my_enquiry(enquiry: str) -> dict:
-	"""One enquiry with all its items. `enquiry` is the id list_my_enquiries returned: the
-	shared group id for items raised together, or the inquiry's own number for a single one."""
-	return _enquiry_for(enquiry, _current_dealer())
+	return get_my_inquiry(enquiry)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -691,33 +641,27 @@ def request_quotation(enquiry: str) -> dict:
 	"""Client request, 28 Oct 2026 -- the dealer portal's own "Ask for quotation" button on
 	an enquiry still waiting on one. Before this, sending an enquiry left the dealer with
 	nothing to do but passively wait for staff to get to it (the "waiting" card on
-	inquiries.$id.tsx was read-only). This sets dealer_requested_quote (+ timestamp) on every
-	item in the enquiry group that's still actually waiting -- same ownership resolution
-	get_my_enquiry already uses, so a dealer can't flag an enquiry that isn't theirs.
+	inquiries.$id.tsx was read-only). 12 Nov 2026 rebuild: `enquiry` is just the Inquiry's
+	own name now (no more group id) -- sets dealer_requested_quote (+ timestamp) once, on
+	the whole Inquiry, not per item (quoting is now also a whole-Inquiry action -- see
+	quotation_api.create_quotation's `inquiries` closing out the full record, not a line).
 
 	Deliberately idempotent and silent on an enquiry with nothing left to flag (already
 	quoted, converted, rejected or closed) rather than throwing -- the portal only shows this
-	button while `waiting` is non-empty, so a flag-nothing call here means the dealer's own
-	screen was stale, not a real error worth surfacing."""
+	button while still waiting, so a flag-nothing call here means the dealer's own screen was
+	stale, not a real error worth surfacing."""
 	dealer = _current_dealer()
-	names = frappe.get_all("Inquiry", filters={"dealer": dealer, "request_group": enquiry}, pluck="name")
-	if not names and frappe.db.exists("Inquiry", {"name": enquiry, "dealer": dealer}):
-		names = [enquiry]
-	if not names:
+	doc = frappe.get_doc("Inquiry", enquiry)
+	if doc.dealer != dealer:
 		frappe.throw(_("Enquiry {0} does not belong to you.").format(enquiry), frappe.PermissionError)
 
 	terminal = {"Converted to Order", "Rejected", "Closed"}
-	now = now_datetime()
-	flagged = 0
-	for name in names:
-		doc = frappe.get_doc("Inquiry", name)
-		if doc.linked_quotation or doc.status in terminal:
-			continue
-		doc.dealer_requested_quote = 1
-		doc.dealer_requested_quote_at = now
-		doc.save(ignore_permissions=True)
-		flagged += 1
-	return {"flagged": flagged}
+	if doc.linked_quotation or doc.status in terminal:
+		return {"flagged": 0}
+	doc.dealer_requested_quote = 1
+	doc.dealer_requested_quote_at = now_datetime()
+	doc.save(ignore_permissions=True)
+	return {"flagged": 1}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -735,28 +679,21 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	convert_to_order still refuses both. `orderable` is that same rule computed
 	up front, so the portal can hide "Convert to order" instead of showing a
 	button that only ever fails. convert_to_order stays the real gate -- this is
-	a display hint, re-checked there."""
+	a display hint, re-checked there.
+
+	12 Nov 2026 rebuild -- orderable/productName/images move from one top-level
+	set of keys to per-item, since an Inquiry can hold several items now; each
+	entry in `items[]` gets its own. Client request, 2 Nov 2026 (the images
+	part) -- the enquiry detail screen (inquiries.$id.tsx) showed every item
+	with no image at all, unlike the catalog/item-detail pages."""
 	data = _serialize_inquiry(doc)
-	data["orderable"] = bool(doc.item) and is_visible(dealer, doc.item)
-	data["productName"] = frappe.get_cached_value("Item", doc.item, "item_name") if doc.item else None
-	# Client request, 2 Nov 2026 -- the enquiry detail screen (inquiries.$id.tsx) showed
-	# every item with no image at all, unlike the catalog/item-detail pages. Same
-	# per-item query shape as productName above, not a bulk fetch -- an enquiry's own
-	# item count is always small (MAX_ENQUIRY_ITEMS), nothing like get_catalog's
-	# N-query concern for a full paginated listing.
-	data["images"] = (
-		[_serialize_image(row) for row in frappe.get_all(
-			"Product Image",
-			filters={"parent": doc.item, "parenttype": "Item", "parentfield": "custom_images"},
-			fields=["image", "image_type", "is_primary"],
-			order_by="idx asc",
-		)]
-		if doc.item
-		else []
-	)
-	# inquiry_api's own serializer already set `price` via the same get_price_for_dealer
-	# resolution _catalog_entry now uses -- kept as-is (client reversal, Oct 2026, see
-	# _catalog_entry's docstring).
+	for row, item_row in zip(doc.items, data["items"]):
+		item_row["orderable"] = bool(row.item) and is_visible(dealer, row.item)
+		item_row["productName"] = frappe.get_cached_value("Item", row.item, "item_name") if row.item else None
+		item_row["images"] = item_images(row.item) if row.item else []
+	# inquiry_api's own serializer already set `prices` via the same
+	# get_price_for_dealer resolution _catalog_entry now uses (client reversal,
+	# Oct 2026, see _catalog_entry's docstring) -- kept as-is.
 	return data
 
 
@@ -860,6 +797,8 @@ def _serialize_dealer_quotation(doc) -> dict:
 			{
 				"itemCode": row.item_code,
 				"itemName": row.item_name,
+				# Client request, 12 Nov 2026 -- see catalog.utils.item_images' own docstring.
+				"images": item_images(row.item_code),
 				"qty": row.qty,
 				"priceListRate": row.price_list_rate,
 				"discountPercentage": row.discount_percentage,
@@ -1054,7 +993,7 @@ def get_my_invoice(invoice: str) -> dict:
 
 @frappe.whitelist(methods=["POST"])
 def cancel_my_order(order: str, note: str | None = None) -> dict:
-	from frappe.utils import now_datetime, time_diff_in_hours
+	from frappe.utils import get_datetime, now_datetime, time_diff_in_hours
 
 	from dms_erp.approvals.api import gate_authorized_action
 	from dms_erp.sales.order_api import _cancel_order_action
@@ -1068,7 +1007,16 @@ def cancel_my_order(order: str, note: str | None = None) -> dict:
 	if stage in ("Delivered", "Cancelled"):
 		frappe.throw(_("Order {0} can no longer be cancelled (currently {1}).").format(order, stage), frappe.ValidationError)
 
-	age_hours = time_diff_in_hours(now_datetime(), doc.creation)
+	# Client request, 12 Nov 2026 -- the self-cancel window now counts from
+	# midnight of the order's own Transaction Date (Sales Order's own name for
+	# what Sales Invoice calls Posting Date), not the exact real-world moment it
+	# was created (doc.creation). Transaction Date has no time of its own, so
+	# get_datetime() on it is midnight of that date -- a Sales Order posted
+	# today, entered at 11pm, still gets the same 24-hour window as one entered
+	# at 9am the same day, rather than effectively less because of when in the
+	# day it happened to be created.
+	window_start = get_datetime(doc.transaction_date)
+	age_hours = time_diff_in_hours(now_datetime(), window_start)
 	if age_hours <= DEALER_CANCEL_WINDOW_HOURS:
 		doc.custom_fulfillment_stage = "Cancelled"
 		doc.append(

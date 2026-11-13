@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "creation": "2026-11-12 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "custom_requested_style",
+  "qty",
+  "entered_boxes",
+  "entered_qty",
+  "entered_uom",
+  "damaged_stock",
+  "preferred_batch_no",
+  "availability_status",
+  "duplicate_flag"
+ ],
+ "fields": [
+  {
+   "description": "ISS-2026-00636 / MOM 3.6 -- not reqd: a Custom Style request (custom_requested_style set instead) has no real catalog item behind it. Exactly one of item/custom_requested_style must be set -- enforced in sales.inquiry_api._create_inquiry, not here.",
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item"
+  },
+  {
+   "description": "ISS-2026-00636 / MOM 3.6 -- WhatsApp's \"Custom Style\" option: a dealer describes a design that isn't in the item master at all, free text, rather than this app inventing a placeholder Item. Set instead of `item`, never alongside it.",
+   "fieldname": "custom_requested_style",
+   "fieldtype": "Data",
+   "label": "Requested Style (Custom)",
+   "depends_on": "eval:!doc.item"
+  },
+  {
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "description": "Client request, 2 Nov 2026 -- the dealer portal's own \"Boxes\" field value when entered together with pieces (entered_qty/entered_uom below then hold the Pcs side). Null whenever the dealer entered only boxes.",
+   "fieldname": "entered_boxes",
+   "fieldtype": "Float",
+   "label": "Entered Boxes",
+   "read_only": 1
+  },
+  {
+   "description": "Client request, 2 Nov 2026 -- the qty/unit the dealer actually entered, when it wasn't Box. `qty` itself always stays in boxes; these are display-only.",
+   "fieldname": "entered_qty",
+   "fieldtype": "Float",
+   "label": "Entered Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entered_uom",
+   "fieldtype": "Select",
+   "label": "Entered UOM",
+   "options": "Box\nPcs\nSqft\nSqm\nKg\nGram",
+   "read_only": 1
+  },
+  {
+   "description": "ISS-2026-00678 -- the dealer explicitly asked for this against damaged/insurance-claim bay stock. Carries through to Quotation Item/Sales Order Item (custom_damaged_stock) so picking routes to the Damages Bay.",
+   "default": "0",
+   "fieldname": "damaged_stock",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Damaged Stock"
+  },
+  {
+   "description": "ISS-2026-00712 -- the dealer's own batch choice at enquiry time, carried onto the resulting Sales Order line if/when this converts. Left unset (\"Auto\"), order_api._resolve_delivery_picks draws whichever batch(es) are on hand, largest lot first.",
+   "fieldname": "preferred_batch_no",
+   "fieldtype": "Link",
+   "label": "Preferred Batch",
+   "options": "Batch"
+  },
+  {
+   "description": "BRD D.3 -- 12 Nov 2026 rebuild: split out from the Inquiry's own `status` (now workflow-only) once one Inquiry could hold items with genuinely different stock positions at once. Computed at create_inquiry time from this item's real stock, same check the WhatsApp/portal reply already made -- not re-derived live on every read.",
+   "default": "Open",
+   "fieldname": "availability_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Availability",
+   "options": "Open\nAvailable\nPartially Available\nOut of Stock\nPre-order Required",
+   "read_only": 1
+  },
+  {
+   "description": "BRD D.3 -- client request, 12 Nov 2026. Set when the dealer already has another still-open inquiry item for the same item+damaged_stock within the last 24 hours (sales.utils.recent_inquiry_for) -- a visible record for Pacific staff, separate from the same-moment `duplicateOf` hint create_inquiry's own response carries.",
+   "default": "0",
+   "fieldname": "duplicate_flag",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Duplicate Flag",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sales",
+ "name": "Inquiry Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

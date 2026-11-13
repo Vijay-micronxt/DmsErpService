@@ -762,6 +762,18 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			customer_po=po_number,
 		)
 
+		def _create_after_duplicate_gate(**kwargs):
+			# Client request, 12 Nov 2026 -- nested the same way order_api.create_order's
+			# own copy of this gate is; see sales.duplicate_order's own module docstring.
+			from dms_erp.sales.duplicate_order import gate_duplicate_order
+
+			return gate_duplicate_order(
+				dealer=kwargs["dealer"],
+				lines=kwargs["lines"],
+				create_fn=_create_order,
+				create_kwargs=kwargs,
+			)
+
 		try:
 			# BRD C.11 trigger #1: a WhatsApp-placed order is never itself an
 			# "authorized" credit-limit override (the API user this Flow
@@ -770,12 +782,14 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			# rather than hard-blocking the dealer the way ERPNext's own native
 			# credit-limit check would (and, before this, actually did -- see
 			# safe_customer_message's own docstring for what that looked like).
+			# Same WhatsApp-is-never-authorized reasoning applies to the duplicate-
+			# order gate nested inside this one.
 			result = gate_credit_limit(
 				dealer=dealer,
 				additional_value=_estimate_order_value(dealer, lines),
 				reference_doctype="Sales Order",
 				applier_action="create_order",
-				create_fn=_create_order,
+				create_fn=_create_after_duplicate_gate,
 				create_kwargs=create_kwargs,
 			)
 		except (frappe.PermissionError, frappe.ValidationError) as e:
@@ -788,10 +802,22 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			return {"message": reply}
 
 		if isinstance(result, dict) and result.get("approvalRequired"):
-			reply = (
-				f"Your order against PO {po_number} is over your approved credit limit, so it needs "
-				f"a quick review by our team before we can confirm it. We'll notify you once it's approved."
-			)
+			# Client request, 12 Nov 2026 -- two gates can now produce this same
+			# {"approvalRequired": True} shape (credit limit, duplicate order), so the
+			# dealer-facing wording has to match which one actually fired rather than
+			# always naming the credit limit.
+			trigger = (result.get("approval") or {}).get("triggerType")
+			if trigger == "Duplicate Order":
+				reply = (
+					f"Your order against PO {po_number} comes in within 24 hours of an order you "
+					f"already placed for the same item, so it needs a quick review by our team before "
+					f"we can confirm it. We'll notify you once it's approved."
+				)
+			else:
+				reply = (
+					f"Your order against PO {po_number} is over your approved credit limit, so it needs "
+					f"a quick review by our team before we can confirm it. We'll notify you once it's approved."
+				)
 			_send_message(dealer, reply, related_type="General")
 			return {"message": reply}
 

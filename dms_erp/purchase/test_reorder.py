@@ -103,9 +103,11 @@ class TestReorder(FrappeTestCase):
 		return order
 
 	def _missed_demand(self, item, qty):
-		"""An inquiry on a zero-stock item, which create_inquiry auto-sets to Out of Stock."""
+		"""An inquiry on a zero-stock item, which create_inquiry auto-sets to Out of Stock.
+		12 Nov 2026 rebuild: that's the item row's own availability_status now, not the
+		parent Inquiry's workflow status (which stays "Open")."""
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=item, qty=qty, source="Phone")
-		self.assertEqual(inquiry["status"], "Out of Stock")
+		self.assertEqual(inquiry["items"][0]["availabilityStatus"], "Out of Stock")
 		return inquiry
 
 	def _target(self, sold_in_window):

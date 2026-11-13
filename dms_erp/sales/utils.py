@@ -38,18 +38,27 @@ def find_open_duplicate_inquiries(
 	`window_days` before `as_of` (today by default). Newest first. Used by
 	create_inquiry (checked against the moment of creation, before the new
 	inquiry itself exists to match against) as a same-moment prompt, not a hard
-	block — the caller decides whether to warn or let it through."""
-	from dms_erp.sales.inquiry_api import list_all_inquiries
+	block — the caller decides whether to warn or let it through.
 
+	12 Nov 2026 rebuild (BRD D.3) -- item/qty moved to the Inquiry Item child
+	table, so this joins against it instead of filtering the Inquiry directly;
+	`id` in the returned dicts is the parent Inquiry's own name (what a human
+	reads as "the inquiry"), not the child row's."""
 	as_of = getdate(as_of) if as_of else getdate()
 	since = add_days(as_of, -window_days)
-	matches = [
-		i
-		for i in list_all_inquiries(dealer=dealer)
-		if i["productId"] == item and i["status"] not in CLOSED_INQUIRY_STATUSES and i["date"] and since <= getdate(i["date"]) <= as_of
-	]
-	matches.sort(key=lambda i: i["date"], reverse=True)
-	return matches
+	rows = frappe.db.sql(
+		"""
+		select i.name as id, i.date as date, ii.qty as qty
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where i.dealer = %(dealer)s and ii.item = %(item)s and i.status not in %(closed)s
+			and i.date >= %(since)s and i.date <= %(as_of)s
+		order by i.date desc, i.creation desc
+		""",
+		{"dealer": dealer, "item": item, "closed": tuple(CLOSED_INQUIRY_STATUSES), "since": since, "as_of": as_of},
+		as_dict=True,
+	)
+	return rows
 
 
 RECENT_INQUIRY_WINDOW_HOURS = 24
@@ -65,20 +74,68 @@ def recent_inquiry_for(dealer: str, item: str, damaged_stock: bool = False, hour
 	own same-submission duplicate check is, so a damaged-stock line and a regular
 	line for the same item are never treated as the same recent inquiry.
 
-	Returns the most recent still-open matching Inquiry (name, date, qty), or None."""
+	12 Nov 2026 rebuild (BRD D.3) -- joins the Inquiry Item child table; `name`
+	in the result is the parent Inquiry's own name (a child row's own creation
+	timestamp matches its parent's -- rows are only ever added at Inquiry
+	create time, never appended later -- so filtering on the child row's
+	creation is equivalent to the parent's, just lets the query stay joined
+	rather than needing two passes). Returns the most recent still-open
+	matching row (name, creation, qty), or None."""
 	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-hours)
-	rows = frappe.get_all(
-		"Inquiry",
-		filters={
+	rows = frappe.db.sql(
+		"""
+		select i.name as name, ii.creation as creation, ii.qty as qty
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where i.dealer = %(dealer)s and ii.item = %(item)s and ii.damaged_stock = %(damaged_stock)s
+			and i.status not in %(closed)s and ii.creation >= %(cutoff)s
+		order by ii.creation desc
+		limit 1
+		""",
+		{
 			"dealer": dealer,
 			"item": item,
 			"damaged_stock": 1 if damaged_stock else 0,
-			"status": ["not in", list(CLOSED_INQUIRY_STATUSES)],
-			"creation": [">=", cutoff],
+			"closed": tuple(CLOSED_INQUIRY_STATUSES),
+			"cutoff": cutoff,
 		},
-		fields=["name", "creation", "qty"],
-		order_by="creation desc",
-		limit=1,
+		as_dict=True,
+	)
+	return rows[0] if rows else None
+
+
+def recent_converted_inquiry_for(dealer: str, item: str, hours: int = RECENT_INQUIRY_WINDOW_HOURS) -> dict | None:
+	"""Client request, 12 Nov 2026 -- the other half of the 24-hour duplicate rule:
+	recent_inquiry_for above answers "did they already ask about this?" (a warning,
+	never a block); this answers "did that earlier ask already become a real
+	order?" -- the signal sales.duplicate_order.gate_duplicate_order holds a NEW
+	order on. Filtered on linked_sales_order being set, not the Inquiry's own
+	status string -- set once, at the same moment status moves to "Converted to
+	Order" (see Inquiry.linked_sales_order's own field description), so this
+	still finds it even if something later changed the status text (unlikely, but
+	the field is the authoritative "this really became an order" signal, not the
+	label). Returns the most recent such Inquiry (name, linked_sales_order), or
+	None -- deliberately not keyed on damaged_stock the way recent_inquiry_for is,
+	since a second order for the same item is the risk regardless of which bay
+	the first one drew from.
+
+	12 Nov 2026 rebuild (BRD D.3) -- joins the Inquiry Item child table for
+	`item`; `linked_sales_order` stays a parent-level field (one combined order
+	per Inquiry now, not one per item -- see sales.quotation_api/order_api's
+	own rebuild notes), unchanged by the rebuild."""
+	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-hours)
+	rows = frappe.db.sql(
+		"""
+		select i.name as name, i.linked_sales_order as linked_sales_order, i.creation as creation
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where i.dealer = %(dealer)s and ii.item = %(item)s and i.linked_sales_order is not null
+			and i.creation >= %(cutoff)s
+		order by i.creation desc
+		limit 1
+		""",
+		{"dealer": dealer, "item": item, "cutoff": cutoff},
+		as_dict=True,
 	)
 	return rows[0] if rows else None
 

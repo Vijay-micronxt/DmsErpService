@@ -11,6 +11,9 @@ Phase 4: Purchase Orders, Requirements / reorder-suggestion engine. Implemented.
   `warehouse/allocation_api.py` links the Purchase Receipts it posts back to the
   PO line they fulfill. `custom_source_inquiry` is set when a PO is raised via
   `sales.inquiry_api.convert_to_purchase_requirement` rather than directly.
+  The manually maintained payment status/date and overdue-return flag are
+  `allow_on_submit` fields because the PO is submitted at creation and those
+  values change later through `po_api.mark_po_paid` / the overdue-return job.
   `list_pending_po_lines`/`list_materials_ready_for_pickup` (Phase 16) are public,
   line-level read helpers factored out of `dashboard.purchase_dashboard`'s inline
   SQL — shared by that dashboard tile and the `reports` module's Purchase Pickup

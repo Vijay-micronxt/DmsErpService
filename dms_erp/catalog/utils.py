@@ -89,6 +89,28 @@ def item_sqm_per_box(item_code: str) -> float | None:
 	return round(sqft_per_box * SQFT_TO_SQM, 4) if sqft_per_box is not None else None
 
 
+def item_images(item_code: str) -> list[dict]:
+	"""Client request, 12 Nov 2026 -- wherever a line item shows in a dealer-facing
+	screen (Quotation, Order, Invoice detail) and that screen wants the same
+	tap-to-zoom thumbnail the Enquiry detail page and catalog already have
+	(ClickableThumbnail, DMS-Dealer-Portal), it needs the item's real images in
+	the response -- none of those three carried them before this. Same shape
+	catalog.api._serialize_image already returns ({"image", "imageType",
+	"isPrimary"}), kept as its own small per-item query here rather than
+	importing that private helper across modules -- catalog.api's own bulk
+	version (list_all_products_bulk) is the one to reach for instead if a
+	caller ever needs this for many items at once in a single response."""
+	return [
+		{"image": r.image, "imageType": r.image_type, "isPrimary": bool(r.is_primary)}
+		for r in frappe.get_all(
+			"Product Image",
+			filters={"parent": item_code, "parenttype": "Item", "parentfield": "custom_images"},
+			fields=["image", "image_type", "is_primary"],
+			order_by="idx asc",
+		)
+	]
+
+
 def item_default_supplier(item_code: str) -> str | None:
 	"""BRD D.2: a Series carries the supplier/manufacturer that makes it (one Series
 	= one supplier). An item's own custom_default_supplier -- settable independently

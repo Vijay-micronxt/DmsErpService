@@ -46,18 +46,40 @@ def dealer_inquiry_report(dealer: str | None = None, status: str | None = None, 
 
 @frappe.whitelist(methods=["GET"])
 def missed_demand_report(from_date=None, to_date=None):
-	"""Every inquiry that current stock couldn't satisfy (Out of Stock / Pre-order
+	"""Every inquiry item real stock couldn't satisfy (Out of Stock / Pre-order
 	Required), each priced at the approved dealer price — the row-level version of
-	the Phase 8 sales dashboard's single missedDemandValue number."""
+	the Phase 8 sales dashboard's single missedDemandValue number.
+
+	12 Nov 2026 rebuild (BRD D.3) -- stock availability is each Inquiry Item row's
+	own availability_status now, not the whole Inquiry's status (workflow-only
+	since the split), so this is one row per missed item, not one row per Inquiry.
+	Also requires the parent Inquiry to still be "Open" -- availability_status is a
+	snapshot taken at creation and never revisited, so a long-since Quoted/Closed
+	Inquiry's row must not keep counting as missed demand forever (same bug
+	purchase.reorder_api._grouped_inquiry_qty's own docstring covers, caught the
+	same way there)."""
 	rows = []
 	total_value = 0
-	for r in inquiry_api.list_all_inquiries():
-		if r["status"] not in MISSED_DEMAND_STATUSES or not _in_range(r["date"], from_date, to_date):
+	for inquiry in inquiry_api.list_all_inquiries():
+		if inquiry["status"] != "Open" or not _in_range(inquiry["date"], from_date, to_date):
 			continue
-		price = get_dealer_price(r["productId"]) or 0
-		value = r["qty"] * price
-		total_value += value
-		rows.append({**r, "estimatedValue": value})
+		for item in inquiry["items"]:
+			if not item["productId"] or item["availabilityStatus"] not in MISSED_DEMAND_STATUSES:
+				continue
+			price = get_dealer_price(item["productId"]) or 0
+			value = item["qty"] * price
+			total_value += value
+			rows.append(
+				{
+					"inquiryId": inquiry["id"],
+					"dealerId": inquiry["dealerId"],
+					"date": inquiry["date"],
+					"productId": item["productId"],
+					"qty": item["qty"],
+					"availabilityStatus": item["availabilityStatus"],
+					"estimatedValue": value,
+				}
+			)
 
 	rows.sort(key=lambda r: r["estimatedValue"], reverse=True)
 	return {"rows": rows, "totalValue": total_value}
@@ -171,12 +193,22 @@ def duplicate_inquiry_report(window_days: int = DUPLICATE_INQUIRY_WINDOW_DAYS):
 	the BRD text, so this is a proposed one, easy to retune via `window_days`:
 	two or more still-open inquiries (not yet Converted to Order / Mapped to PO /
 	Rejected / Closed) for the same dealer and item, all logged within
-	`window_days` of each other."""
+	`window_days` of each other.
+
+	12 Nov 2026 rebuild (BRD D.3) -- groups by (dealer, item) across every still-
+	open Inquiry's own item rows now, not by one productId per whole Inquiry --
+	two different items raised together on the same multi-item Inquiry are not
+	duplicates of each other."""
 	open_inquiries = [i for i in inquiry_api.list_all_inquiries() if i["status"] not in CLOSED_INQUIRY_STATUSES]
 
 	groups: dict[tuple, list] = {}
 	for i in open_inquiries:
-		groups.setdefault((i["dealerId"], i["productId"]), []).append(i)
+		for item in i["items"]:
+			if not item["productId"]:
+				continue
+			groups.setdefault((i["dealerId"], item["productId"]), []).append(
+				{"id": i["id"], "date": i["date"], "qty": item["qty"], "status": i["status"]}
+			)
 
 	out = []
 	for (dealer, product), group in groups.items():

@@ -42,12 +42,30 @@ from dms_erp.catalog.utils import is_reorderable, status_label
 SALES_VELOCITY_WINDOW_DAYS = 180
 DEFAULT_TARGET_STOCK_MONTHS = 3
 
-PENDING_INQUIRY_STATUSES = ["Open", "Available", "Partially Available", "Quoted"]
+PENDING_INQUIRY_STATUSES = ["Available", "Partially Available", "Quoted"]
 MISSED_DEMAND_STATUSES = ["Out of Stock", "Pre-order Required"]
 
 URGENCY_STYLES_ORDER = ["Critical", "High", "Watch", "Healthy"]
 
 REORDER_REVIEW_NOTIFY_ROLES = ["DMS Purchase", "DMS Management"]
+
+
+# 12 Nov 2026 rebuild (BRD D.3) -- Inquiry.status is workflow-only now
+# (Open/Quoted/Converted to Order/Rejected/Mapped to PO/Closed); per-item stock
+# availability (Available/Partially Available/Out of Stock/Pre-order Required)
+# moved to each row's own Inquiry Item.availability_status. PENDING_INQUIRY_STATUSES/
+# MISSED_DEMAND_STATUSES each mix both kinds in one list, same as they always
+# have -- _grouped_inquiry_qty classifies which of the two a given status value
+# is and matches it against the right column, OR'd together, rather than
+# needing every call site rewritten. "Open" is deliberately NOT one of the
+# workflow values either list ever names any more: every still-pending Inquiry
+# has parent status "Open" regardless of its own items' real stock state now
+# (that split is the whole point of the rebuild), so matching plain "Open" as
+# a workflow criterion here would catch Out of Stock/Pre-order Required rows
+# too and inflate PENDING_INQUIRY_STATUSES with qty that belongs exclusively to
+# MISSED_DEMAND_STATUSES -- a real bug caught by test_reorder.py's own
+# pending-vs-missed assertions after the rebuild landed.
+_WORKFLOW_STATUSES = {"Open", "Quoted", "Converted to Order", "Rejected", "Mapped to PO", "Closed"}
 
 
 def _grouped_inquiry_qty(statuses: list[str]) -> dict[str, float]:
@@ -56,14 +74,36 @@ def _grouped_inquiry_qty(statuses: list[str]) -> dict[str, float]:
 	# fields list outright ("Use of sub-query or function is restricted"),
 	# confirmed live. Matches _grouped_recent_sales_qty just below, which
 	# already used raw SQL for the same reason.
+	workflow = [s for s in statuses if s in _WORKFLOW_STATUSES]
+	availability = [s for s in statuses if s not in _WORKFLOW_STATUSES]
+	conditions = []
+	params: dict = {}
+	if workflow:
+		conditions.append("i.status in %(workflow)s")
+		params["workflow"] = tuple(workflow)
+	if availability:
+		# availability_status is set once, at creation, and never revisited --
+		# it's a historical record of what the stock situation looked like then,
+		# not a live signal. Once the parent Inquiry itself has moved past "Open"
+		# (Quoted/Converted to Order/Rejected/Mapped to PO/Closed), that original
+		# stock snapshot no longer represents a real, unresolved gap, so it must
+		# also still be "Open" to count here -- otherwise a long-since-closed or
+		# -quoted inquiry's qty keeps inflating pending/missed demand forever. A
+		# real bug caught by test_reorder.py's own assertions once an inquiry in
+		# this test started outliving its "Out of Stock" snapshot.
+		conditions.append("(i.status = 'Open' and ii.availability_status in %(availability)s)")
+		params["availability"] = tuple(availability)
+	if not conditions:
+		return {}
 	rows = frappe.db.sql(
-		"""
-		select item, sum(qty) as qty
-		from `tabInquiry`
-		where status in %s
-		group by item
+		f"""
+		select ii.item, sum(ii.qty) as qty
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where ii.item is not null and ({" or ".join(conditions)})
+		group by ii.item
 		""",
-		(statuses,),
+		params,
 		as_dict=True,
 	)
 	return {r.item: r.qty for r in rows}

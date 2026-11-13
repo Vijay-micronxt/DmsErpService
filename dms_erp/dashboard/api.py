@@ -78,11 +78,26 @@ def sales_dashboard():
 		as_dict=True,
 	)[0]
 
+	# 12 Nov 2026 rebuild -- MISSED_DEMAND_STATUSES/ACTIONABLE_INQUIRY_STATUSES
+	# are stock-availability values, which now live on each Inquiry Item row
+	# (BRD D.3), not the Inquiry's own status (workflow-only since the rebuild).
+	# Both queries join against the child table instead of filtering the parent
+	# directly -- and both also require the parent to still be "Open": a row's
+	# availability_status is set once, at creation, and never revisited, so a
+	# long-since Quoted/Closed/etc. inquiry still carries its original "Out of
+	# Stock" snapshot forever; without this it keeps inflating missed demand and
+	# the actionable queue after it's already been resolved (same bug reorder_api.
+	# _grouped_inquiry_qty's own docstring covers, caught the same way there).
 	missed_demand_value = 0
-	for row in frappe.get_all(
-		"Inquiry",
-		filters={"status": ["in", list(MISSED_DEMAND_STATUSES)], "date": [">=", month_start]},
-		fields=["item", "qty"],
+	for row in frappe.db.sql(
+		"""
+		select ii.item, ii.qty
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where i.status = 'Open' and ii.availability_status in %(statuses)s and i.date >= %(month_start)s
+		""",
+		{"statuses": tuple(MISSED_DEMAND_STATUSES), "month_start": month_start},
+		as_dict=True,
 	):
 		price = get_dealer_price(row.item)
 		if price:
@@ -94,12 +109,17 @@ def sales_dashboard():
 		as_dict=True,
 	)
 
-	actionable = frappe.get_all(
-		"Inquiry",
-		filters={"status": ["in", ACTIONABLE_INQUIRY_STATUSES]},
-		fields=["name as id", "dealer as dealerId", "item as productId", "qty", "status"],
-		order_by="creation desc",
-		limit=5,
+	actionable = frappe.db.sql(
+		"""
+		select i.name as id, i.dealer as dealerId, ii.item as productId, ii.qty as qty, ii.availability_status as status
+		from `tabInquiry Item` ii
+		join `tabInquiry` i on i.name = ii.parent
+		where i.status = 'Open' and (ii.availability_status in %(statuses)s or ii.availability_status = 'Open')
+		order by i.creation desc
+		limit 5
+		""",
+		{"statuses": tuple(s for s in ACTIONABLE_INQUIRY_STATUSES if s != "Open")},
+		as_dict=True,
 	)
 
 	return {

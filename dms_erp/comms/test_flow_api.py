@@ -1011,10 +1011,12 @@ class TestCreateCustomStyleInquiry(FrappeTestCase):
 
 		from dms_erp.sales.inquiry_api import list_all_inquiries
 
-		inquiries = [i for i in list_all_inquiries(dealer=self.dealer) if i["requestedStyle"]]
+		# 12 Nov 2026 rebuild: requestedStyle/productId moved from the Inquiry
+		# itself onto its own items[] row.
+		inquiries = [i for i in list_all_inquiries(dealer=self.dealer) if i["items"] and i["items"][0]["requestedStyle"]]
 		self.assertEqual(len(inquiries), 1)
-		self.assertIsNone(inquiries[0]["productId"])
-		self.assertEqual(inquiries[0]["requestedStyle"], "Carrara Marble Look, 600x1200")
+		self.assertIsNone(inquiries[0]["items"][0]["productId"])
+		self.assertEqual(inquiries[0]["items"][0]["requestedStyle"], "Carrara Marble Look, 600x1200")
 		self.assertEqual(inquiries[0]["source"], "WhatsApp")
 		self.assertIsNone(inquiries[0]["linkedOpportunity"])
 

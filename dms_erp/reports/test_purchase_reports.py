@@ -41,8 +41,10 @@ class TestPurchaseReports(FrappeTestCase):
 		self.assertGreaterEqual(result["summary"]["totalReadyQty"], 300)
 
 	def test_inquiry_to_po_mapping_report_joins_inquiry_and_po(self):
+		# 12 Nov 2026 rebuild: an Inquiry stays "Open" (parent/workflow) at creation
+		# regardless of its item's own stock-derived availability -- no status
+		# override needed (or valid) before sending it to purchase.
 		inquiry = inquiry_api.create_inquiry(dealer=self.dealer, item=self.item, qty=40, source="Phone")
-		inquiry_api.update_inquiry(inquiry["id"], {"status": "Out of Stock"})
 		po = inquiry_api.convert_to_purchase_requirement(inquiry=inquiry["id"], supplier=self.supplier, expected_ready_date="2026-09-01")
 
 		result = purchase_reports.inquiry_to_po_mapping_report()

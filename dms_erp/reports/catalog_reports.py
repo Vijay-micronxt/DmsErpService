@@ -66,7 +66,8 @@ def product_activity_report(item: str | None = None):
 	rows = []
 	for p in products:
 		code = p["id"]
-		inquiry_count = frappe.db.count("Inquiry", {"item": code})
+		# 12 Nov 2026 rebuild -- item moved to the Inquiry Item child table.
+		inquiry_count = frappe.db.count("Inquiry Item", {"item": code, "parenttype": "Inquiry"})
 		order_qty = (
 			frappe.db.sql(
 				"""

@@ -28,9 +28,9 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Trigger",
-   "options": "Channel Override\nCredit Limit Exceeded\nOverdue Outstanding\nPricing Override\nDiscount Over Price List\nAmend Or Cancel Submitted Document",
+   "options": "Channel Override\nCredit Limit Exceeded\nOverdue Outstanding\nPricing Override\nDiscount Over Price List\nAmend Or Cancel Submitted Document\nDuplicate Order",
    "reqd": 1,
-   "description": "BRD C.11's six audit-locked override triggers. Only \"Channel Override\" is wired to an actual detection point today (sales.order_channel.gate_channel_override); the other five are reserved values for the same queue, not yet raised by any code path."
+   "description": "BRD C.11's six audit-locked override triggers, plus \"Duplicate Order\" (client request, 12 Nov 2026 -- same queue/notify/applier machinery, but not itself one of the BRD six: BRD C.2.4's own duplicate-inquiry window is 7 days and only ever a hint, never a hold; this is a separate, narrower rule -- a new order within 24h of one already placed for the same dealer+item needs Management's sign-off, not just a warning). \"Channel Override\" and \"Credit Limit Exceeded\" are wired to real detection points today (sales.order_channel.gate_channel_override, sales.credit_limit.gate_credit_limit); the rest besides Duplicate Order are reserved values for the same queue, not yet raised by any code path."
   },
   {
    "default": "Pending",

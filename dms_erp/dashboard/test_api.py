@@ -47,10 +47,21 @@ class TestDashboardApi(FrappeTestCase):
 		item = self._priced_item("DASH-SALES-ITEM", rate=500)
 		dealer = make_dealer("Dashboard Sales Dealer")
 
+		# 12 Nov 2026 rebuild: stock availability is the item row's own
+		# availability_status now, not the parent Inquiry's workflow status
+		# (which stays "Open" regardless) -- set it directly on the row.
 		i1 = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=20, source="Phone")
-		inquiry_api.update_inquiry(i1["id"], {"status": "Out of Stock"})
+		frappe.db.set_value("Inquiry Item", i1["items"][0]["lineId"], "availability_status", "Out of Stock")
 		i2 = inquiry_api.create_inquiry(dealer=dealer, item=item, qty=10, source="WhatsApp")
-		inquiry_api.update_inquiry(i2["id"], {"status": "Pre-order Required"})
+		frappe.db.set_value("Inquiry Item", i2["items"][0]["lineId"], "availability_status", "Pre-order Required")
+		# Real stock now, so this one auto-derives "Available" rather than also
+		# landing on "Out of Stock" by the same zero-stock default i1/i2 started
+		# from before being overridden above -- it has to genuinely stay out of
+		# missed demand, not just stay unedited.
+		make_bay("DASH-SALES-BAY", categories=["Vitrified"])
+		allocation_api.create_allocation(
+			item=item, batch_no="DASH-SALES-B1", total_qty=10, lines=[{"bay": "DASH-SALES-BAY", "qty": 10}], supplier=self.supplier
+		)
 		inquiry_api.create_inquiry(dealer=dealer, item=item, qty=5, source="Phone")  # stays Open
 
 		result = dashboard_api.sales_dashboard()

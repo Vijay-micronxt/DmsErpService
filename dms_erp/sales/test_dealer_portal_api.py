@@ -161,7 +161,7 @@ class TestDealerPortalApi(FrappeTestCase):
 		# ISS-2026-00644: inquiry is the allowed action on an unassigned item --
 		# convert_to_order below is what's actually blocked.
 		inquiry = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
-		self.assertEqual(inquiry["productId"], self.hidden_item)
+		self.assertEqual(inquiry["items"][0]["productId"], self.hidden_item)
 
 	def test_inquiries_carry_orderable_for_the_convert_button(self):
 		# ISS-2026-00644: the portal hides "Convert to order" when this is false.
@@ -169,9 +169,13 @@ class TestDealerPortalApi(FrappeTestCase):
 		unassigned = dealer_portal_api.raise_inquiry(item=self.hidden_item, qty=5)
 		self.assertTrue(assigned["orderable"])
 		self.assertFalse(unassigned["orderable"])
-		self.assertTrue(dealer_portal_api.get_my_inquiry(assigned["id"])["orderable"])
-		self.assertFalse(dealer_portal_api.get_my_inquiry(unassigned["id"])["orderable"])
-		listed = {i["id"]: i["orderable"] for i in dealer_portal_api.list_my_inquiries(limit=50)["items"]}
+		# 12 Nov 2026 rebuild: get_my_inquiry/list_my_inquiries go through
+		# _serialize_dealer_inquiry, which sets orderable per item row (an
+		# Inquiry can hold several items now); raise_inquiry's own return above
+		# still sets it at the top level, back-compat for its single-item shape.
+		self.assertTrue(dealer_portal_api.get_my_inquiry(assigned["id"])["items"][0]["orderable"])
+		self.assertFalse(dealer_portal_api.get_my_inquiry(unassigned["id"])["items"][0]["orderable"])
+		listed = {i["id"]: i["items"][0]["orderable"] for i in dealer_portal_api.list_my_inquiries(limit=50)["items"]}
 		self.assertFalse(listed[unassigned["id"]])
 
 	def test_raise_inquiry_damaged_stock_status_derives_from_damage_bay_only(self):
@@ -198,14 +202,14 @@ class TestDealerPortalApi(FrappeTestCase):
 
 		# Regular inquiry: on_hand=102 (blended total) comfortably covers qty=5.
 		normal = dealer_portal_api.raise_inquiry(item=item, qty=5)
-		self.assertEqual(normal["status"], "Available")
-		self.assertFalse(normal["damagedStock"])
+		self.assertEqual(normal["items"][0]["availabilityStatus"], "Available")
+		self.assertFalse(normal["items"][0]["damagedStock"])
 
 		# Damaged-stock inquiry for the same item: only 2 boxes actually sit in
 		# the Damages Bay, so qty=5 against it is Partially Available.
 		damaged = dealer_portal_api.raise_inquiry(item=item, qty=5, damaged_stock=True)
-		self.assertEqual(damaged["status"], "Partially Available")
-		self.assertTrue(damaged["damagedStock"])
+		self.assertEqual(damaged["items"][0]["availabilityStatus"], "Partially Available")
+		self.assertTrue(damaged["items"][0]["damagedStock"])
 
 	def test_raise_inquiries_accepts_damaged_stock_per_line(self):
 		result = dealer_portal_api.raise_inquiries(
@@ -423,18 +427,20 @@ class TestDealerPortalApi(FrappeTestCase):
 
 	# ---- Several items in one enquiry -----------------------------------------------
 
-	def test_raise_inquiries_makes_one_inquiry_per_item_sharing_a_group(self):
+	def test_raise_inquiries_creates_one_inquiry_with_every_item_as_a_row(self):
+		# 12 Nov 2026 rebuild (BRD D.3) -- these all land as rows on the SAME
+		# Inquiry now, not N separate records glued together by a request_group
+		# string (that field and the whole workaround are gone).
 		result = dealer_portal_api.raise_inquiries(
 			items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}], remarks="For a site in Mysore"
 		)
 		self.assertEqual(len(result["items"]), 2)
-		group = result["requestGroup"]
-		self.assertEqual(group, result["items"][0]["id"])
-		for row in result["items"]:
-			self.assertEqual(row["requestGroup"], group)
-			self.assertEqual(frappe.db.get_value("Inquiry", row["id"], "request_group"), group)
-			self.assertEqual(row["source"], "Web")
-			self.assertEqual(row["dealerId"], self.dealer)
+		inquiry_id = result["requestGroup"]
+		self.assertEqual(inquiry_id, result["enquiry"])
+		self.assertEqual(frappe.db.count("Inquiry Item", {"parent": inquiry_id}), 2)
+		self.assertEqual(frappe.db.get_value("Inquiry", inquiry_id, "source"), "Web")
+		self.assertEqual(frappe.db.get_value("Inquiry", inquiry_id, "dealer"), self.dealer)
+		self.assertEqual(frappe.db.get_value("Inquiry", inquiry_id, "remarks"), "For a site in Mysore")
 		by_item = {row["productId"]: row for row in result["items"]}
 		self.assertTrue(by_item[self.item]["orderable"])
 		self.assertFalse(by_item[self.hidden_item]["orderable"])
@@ -474,10 +480,6 @@ class TestDealerPortalApi(FrappeTestCase):
 		enquiry = enquiries[group]
 		self.assertEqual(enquiry["itemCount"], 3)
 		self.assertEqual({i["productId"] for i in enquiry["items"]}, {self.item, self.hidden_item, third})
-		# None of the group's inquiries shows up again as an enquiry of its own.
-		for row in result["items"]:
-			if row["id"] != group:
-				self.assertNotIn(row["id"], enquiries)
 		self.assertTrue(all(i.get("productName") for i in enquiry["items"]))
 
 	def test_a_single_item_enquiry_is_an_enquiry_of_one(self):
@@ -499,16 +501,20 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertEqual(first_page["items"][0]["itemCount"], 3)
 		self.assertGreaterEqual(first_page["total"], 2)
 
-	def test_an_enquiry_status_is_the_shared_one_or_mixed(self):
+	def test_an_enquiry_status_is_a_single_workflow_status_for_the_whole_inquiry(self):
+		# 12 Nov 2026 rebuild -- there's only one real Inquiry record per enquiry now
+		# (never several records glued together by request_group), so there's no
+		# "Mixed" status to compute any more: the whole enquiry's workflow status is
+		# just that one Inquiry's own status, whatever its items' own stock
+		# availability looks like individually.
 		third = self._third_item()
 		result = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 5}, {"item": third, "qty": 3}])
 		group = result["requestGroup"]
 		shared = dealer_portal_api.get_my_enquiry(group)
-		self.assertEqual(shared["status"], shared["items"][0]["status"])
+		self.assertEqual(shared["status"], "Open")
 
-		frappe.db.set_value("Inquiry", result["items"][1]["id"], "status", "Quoted")
-		frappe.db.set_value("Inquiry", result["items"][0]["id"], "status", "Out of Stock")
-		self.assertEqual(dealer_portal_api.get_my_enquiry(group)["status"], "Mixed")
+		frappe.db.set_value("Inquiry", group, "status", "Quoted")
+		self.assertEqual(dealer_portal_api.get_my_enquiry(group)["status"], "Quoted")
 
 	def test_get_my_enquiry_returns_a_group_or_a_single_and_never_another_dealers(self):
 		result = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 5}, {"item": self.hidden_item, "qty": 8}])
