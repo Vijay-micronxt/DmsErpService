@@ -74,6 +74,7 @@ def _serialize(doc) -> dict:
 		"id": doc.name,
 		"supplier": doc.supplier,
 		"vehicleType": doc.vehicle_type,
+		"transporterVehicle": doc.get("transporter_vehicle") or None,
 		"vehicleNumber": doc.vehicle_number,
 		"scheduledDate": doc.scheduled_date,
 		"status": doc.status,
@@ -82,7 +83,13 @@ def _serialize(doc) -> dict:
 	}
 
 
-def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude_pickup_run: str | None = None) -> tuple[int, list[dict]]:
+def _validate_lines(
+	supplier: str,
+	vehicle_type: str,
+	lines: list[dict],
+	exclude_pickup_run: str | None = None,
+	transporter_vehicle: str | None = None,
+) -> tuple[int, list[dict]]:
 	"""Validates and enriches a proposed set of {purchase_order_item, qty} lines
 	against both checks: the PO line's own remaining ready-for-pickup qty (per
 	line, netting out other Draft runs' reservations for that same line), and
@@ -91,7 +98,26 @@ def _validate_lines(supplier: str, vehicle_type: str, lines: list[dict], exclude
 	build/overwrite the doc's child table from. `exclude_pickup_run` should be
 	the run's own name when re-validating an existing run's lines, so its own
 	already-saved reservation isn't double-counted against itself."""
-	vt = frappe.get_doc("Vehicle Type", vehicle_type)
+	if transporter_vehicle:
+		vehicles = frappe.get_all(
+			"Transporter Vehicle",
+			filters={"name": transporter_vehicle},
+			fields=["name", "vehicle_type", "vehicle_number", "capacity_tonnes"],
+			limit_page_length=1,
+		)
+		if not vehicles:
+			frappe.throw(_("The selected registered vehicle no longer exists."), frappe.ValidationError)
+		vehicle = vehicles[0]
+		vt = frappe._dict(
+			{
+				"name": vehicle.name,
+				"vehicle_type_name": vehicle.vehicle_type,
+				"capacity_boxes": 0,
+				"capacity_tonnes": vehicle.capacity_tonnes,
+			}
+		)
+	else:
+		vt = frappe.get_doc("Vehicle Type", vehicle_type)
 
 	for line in lines:
 		if not line.get("purchase_order_item"):
@@ -255,19 +281,35 @@ def get_pickup_run(pickup_run: str):
 
 
 @frappe.whitelist(methods=["POST"])
-def create_pickup_run(supplier: str, vehicle_type: str, lines: list[dict], vehicle_number: str | None = None, scheduled_date=None):
+def create_pickup_run(
+	supplier: str,
+	vehicle_type: str,
+	lines: list[dict],
+	vehicle_number: str | None = None,
+	scheduled_date=None,
+	transporter_vehicle: str | None = None,
+):
 	_assert_can_manage_pickup_runs()
 
 	if not lines:
 		frappe.throw(_("A Pickup Run needs at least one line."), frappe.ValidationError)
 
-	total_boxes, enriched = _validate_lines(supplier, vehicle_type, lines)
+	if transporter_vehicle:
+		vehicle = frappe.db.get_value(
+			"Transporter Vehicle", transporter_vehicle, ["vehicle_type", "vehicle_number"], as_dict=True
+		)
+		if not vehicle:
+			frappe.throw(_("The selected registered vehicle no longer exists."), frappe.ValidationError)
+		vehicle_type = vehicle.vehicle_type
+		vehicle_number = vehicle.vehicle_number
+	total_boxes, enriched = _validate_lines(supplier, vehicle_type, lines, transporter_vehicle=transporter_vehicle)
 
 	doc = frappe.get_doc(
 		{
 			"doctype": "Pickup Run",
 			"supplier": supplier,
 			"vehicle_type": vehicle_type,
+			"transporter_vehicle": transporter_vehicle,
 			"vehicle_number": vehicle_number,
 			"scheduled_date": scheduled_date,
 			"status": "Draft",
@@ -290,7 +332,13 @@ def add_pickup_run_line(pickup_run: str, purchase_order_item: str, qty: int):
 	proposed = [{"purchase_order_item": row.purchase_order_item, "qty": row.qty} for row in doc.lines]
 	proposed.append({"purchase_order_item": purchase_order_item, "qty": qty})
 
-	total_boxes, enriched = _validate_lines(doc.supplier, doc.vehicle_type, proposed, exclude_pickup_run=doc.name)
+	total_boxes, enriched = _validate_lines(
+		doc.supplier,
+		doc.vehicle_type,
+		proposed,
+		exclude_pickup_run=doc.name,
+		transporter_vehicle=doc.get("transporter_vehicle"),
+	)
 
 	doc.set("lines", enriched)
 	doc.total_boxes = total_boxes
@@ -311,7 +359,13 @@ def advance_pickup_run_status(pickup_run: str, next_status: str):
 		# Re-validate right before committing to real Inward Trucks — something
 		# else may have consumed the same ready stock since this run was drafted.
 		proposed = [{"purchase_order_item": row.purchase_order_item, "qty": row.qty} for row in doc.lines]
-		_validate_lines(doc.supplier, doc.vehicle_type, proposed, exclude_pickup_run=doc.name)
+		_validate_lines(
+			doc.supplier,
+			doc.vehicle_type,
+			proposed,
+			exclude_pickup_run=doc.name,
+			transporter_vehicle=doc.get("transporter_vehicle"),
+		)
 
 		for row in doc.lines:
 			inward_api.add_truck(

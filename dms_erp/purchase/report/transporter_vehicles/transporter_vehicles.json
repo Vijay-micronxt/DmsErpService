@@ -1,0 +1,31 @@
+{
+ "add_total_row": 0,
+ "creation": "2026-11-13 00:00:00.000000",
+ "disabled": 0,
+ "docstatus": 0,
+ "doctype": "Report",
+ "is_standard": "Yes",
+ "module": "Purchase",
+ "modified": "2026-11-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "name": "Transporter Vehicles",
+ "owner": "Administrator",
+ "query": "SELECT\n\ttv.parent as \"Transporter:Link/Transporter:150\",\n\ttv.vehicle_number as \"Vehicle Number:Data:140\",\n\ttv.vehicle_type as \"Vehicle Type:Data:120\",\n\ttv.mode as \"Mode:Data:120\",\n\ttv.capacity_tonnes as \"Capacity (T):Float:100\",\n\ttv.transit_days as \"Transit Days:Int:100\",\n\ttv.standard_rate_basis as \"Standard Rate:Currency:120\",\n\ttv.owner_name as \"Owner:Data:140\",\n\ttv.driver_name as \"Driver:Data:140\",\n\ttv.driver_mobile as \"Driver Mobile:Data:120\"\nFROM `tabTransporter Vehicle` tv\nWHERE tv.parenttype = 'Transporter'\nORDER BY tv.parent, tv.vehicle_number",
+ "ref_doctype": "Transporter",
+ "report_name": "Transporter Vehicles",
+ "report_type": "Query Report",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "DMS Purchase"
+  },
+  {
+   "role": "DMS Warehouse"
+  },
+  {
+   "role": "DMS Management"
+  }
+ ]
+}
