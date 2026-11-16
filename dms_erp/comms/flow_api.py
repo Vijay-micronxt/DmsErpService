@@ -760,6 +760,8 @@ def create_dealer_opportunity(lead=None, **kwargs):
 			customer_address=customer_address,
 			shipping_address_name=shipping_address_name,
 			customer_po=po_number,
+			# Same bill-to-address GST rule as the staff builder (sales.utils.resolve_tax_for_dealer).
+			taxes_and_charges="auto",
 		)
 
 		def _create_after_duplicate_gate(**kwargs):
@@ -869,9 +871,11 @@ def _quotation_batch_line(doc) -> str | None:
 
 def _quotation_message(doc) -> str:
 	"""The quotation as a chat message. Rates are the dealer's own tier rate as
-	published (no markup); GST and freight are never part of an automatic quotation,
-	so the message says they're extra rather than leaving the total to be read as
-	final."""
+	published (no markup). GST follows the same bill-to-address rule the staff builder
+	suggests (sales.utils.resolve_tax_for_dealer) and gets its own line so the total
+	isn't a surprise at invoicing; with no template to apply the message keeps saying
+	GST is extra. Freight is never part of an automatic quotation, so the message says
+	so rather than leaving the total to be read as final."""
 	from frappe.utils import formatdate
 
 	lines = []
@@ -882,7 +886,12 @@ def _quotation_message(doc) -> str:
 	batch_line = _quotation_batch_line(doc)
 	if batch_line:
 		text += "\n" + batch_line
-	text += f"\nTotal: ₹{doc.grand_total:,.0f} (GST and freight extra)"
+	if doc.total_taxes_and_charges:
+		text += f"\nSubtotal: ₹{doc.net_total:,.0f}"
+		text += f"\nGST: ₹{doc.total_taxes_and_charges:,.0f}"
+		text += f"\nTotal: ₹{doc.grand_total:,.0f} (freight extra)"
+	else:
+		text += f"\nTotal: ₹{doc.grand_total:,.0f} (GST and freight extra)"
 	if doc.valid_till:
 		text += f"\nValid till {formatdate(doc.valid_till, 'dd MMM yyyy')}."
 	return text
@@ -965,6 +974,8 @@ def create_whatsapp_quotation(lead=None, **kwargs):
 			validity_days=WHATSAPP_QUOTATION_VALIDITY_DAYS,
 			inquiries=[inquiry["id"]],
 			channel=auto_classify_channel(dealer, lines),
+			# Same bill-to-address GST rule as the staff builder.
+			taxes_and_charges="auto",
 		)
 	except (frappe.PermissionError, frappe.ValidationError):
 		reply = (

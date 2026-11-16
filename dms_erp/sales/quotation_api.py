@@ -59,6 +59,7 @@ from dms_erp.sales.utils import (
 	apply_tax_template,
 	assert_address_belongs_to,
 	clear_unrequested_default_tax,
+	resolve_tax_template_arg,
 )
 from dms_erp.warehouse.utils import default_company
 
@@ -201,7 +202,10 @@ def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dic
 			# the never-stocked-item exception); re-checked again if/when this
 			# quotation becomes an order and again at dispatch, since stock can move
 			# at every one of those later points too.
-			from dms_erp.warehouse.utils import available_to_promise, sellable_stock_for_item
+			from dms_erp.warehouse.utils import (
+				available_to_promise,
+				sellable_stock_for_item,
+			)
 
 			total = sellable_stock_for_item(item)
 			free = available_to_promise(item)
@@ -683,7 +687,7 @@ def _create_quotation(
 			"items": items,
 		}
 	)
-	apply_tax_template(doc, taxes_and_charges)
+	apply_tax_template(doc, resolve_tax_template_arg(dealer, taxes_and_charges))
 	doc.insert(ignore_permissions=True)
 	clear_unrequested_default_tax(doc)
 	doc.flags.dms_prevalidated = True
@@ -1131,7 +1135,10 @@ def _convert_to_order(
 	the Quotation fresh (the wrapper above already loaded one, just for its
 	party_name/grand_total) since this also has to run standalone when replayed
 	from an approved request."""
-	from erpnext.selling.doctype.quotation.quotation import _make_sales_order, make_sales_order
+	from erpnext.selling.doctype.quotation.quotation import (
+		_make_sales_order,
+		make_sales_order,
+	)
 
 	from dms_erp.sales.order_api import finalize_new_order
 

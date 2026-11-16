@@ -590,7 +590,15 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	try:
 		return _run_as_system(
 			lambda: _create_order(
-				dealer, lines, expected_dispatch, customer_address, shipping_address_name, inquiry, customer_po=customer_po
+				dealer,
+				lines,
+				expected_dispatch,
+				customer_address,
+				shipping_address_name,
+				inquiry,
+				customer_po=customer_po,
+				# Same bill-to-address GST rule as the staff builder (sales.utils.resolve_tax_for_dealer).
+				taxes_and_charges="auto",
 			)
 		)
 	except (frappe.PermissionError, frappe.ValidationError) as e:

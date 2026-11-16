@@ -1138,6 +1138,97 @@ def list_item_groups(search: str | None = None, limit: int = 20, offset: int = 0
 
 
 @frappe.whitelist(methods=["GET"])
+def list_categories(search: str | None = None, used_only: bool = False, limit: int = 50, offset: int = 0):
+	"""The Categories settings page: every leaf category with how many items and how many
+	distinct Series sit in it. A Tally-migrated site has ~1,200 categories of which only
+	~650 hold items, so `used_only` hides the empty ones. Counts skip disabled items, matching
+	what the product list shows by default. Paginated -- unlike list_item_group_names this
+	carries counts, so it is not meant to be fetched whole."""
+	limit, offset = clamp(limit, offset)
+	filters: dict = {"is_group": 0}
+	if search:
+		filters["item_group_name"] = ["like", f"%{search}%"]
+	if cint(used_only):
+		used = frappe.db.sql_list("select distinct item_group from `tabItem` where disabled = 0 and ifnull(item_group, '') != ''")
+		filters["name"] = ["in", used or [""]]
+	total = frappe.db.count("Item Group", filters=filters)
+	rows = frappe.get_all(
+		"Item Group",
+		filters=filters,
+		fields=["name", "item_group_name", "parent_item_group"],
+		order_by="item_group_name asc",
+		limit_start=offset,
+		limit_page_length=limit,
+	)
+	counts = {}
+	if rows:
+		for r in frappe.db.sql(
+			"""select item_group, count(*) as item_count, count(distinct custom_series_ref) as series_count
+			from `tabItem` where disabled = 0 and item_group in %(names)s group by item_group""",
+			{"names": [r.name for r in rows]},
+			as_dict=True,
+		):
+			counts[r.item_group] = r
+	return {
+		"items": [
+			{
+				"id": r.name,
+				"name": r.item_group_name,
+				"parentItemGroup": r.parent_item_group,
+				"itemCount": counts[r.name].item_count if r.name in counts else 0,
+				"seriesCount": counts[r.name].series_count if r.name in counts else 0,
+			}
+			for r in rows
+		],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_category_items(category: str, limit: int = 100, offset: int = 0):
+	"""The items inside one category, for the Categories page's expandable rows. Disabled
+	items are left out, matching the counts list_categories shows. Stock is the sum of the
+	item's warehouse quantities, rounded to two places: a fractional-box balance such as
+	0.111111 (one piece of a nine-piece box) is noise on screen, not a figure anyone acts on."""
+	limit, offset = clamp(limit, offset)
+	filters = {"item_group": category, "disabled": 0}
+	total = frappe.db.count("Item", filters=filters)
+	rows = frappe.get_all(
+		"Item",
+		filters=filters,
+		fields=["name", "item_name", "custom_series_ref", "custom_discontinuation_status"],
+		order_by="item_name asc",
+		limit_start=offset,
+		limit_page_length=limit,
+	)
+	stock = {}
+	if rows:
+		for r in frappe.db.sql(
+			"select item_code, sum(actual_qty) as qty from `tabBin` where item_code in %(codes)s group by item_code",
+			{"codes": [r.name for r in rows]},
+			as_dict=True,
+		):
+			stock[r.item_code] = round(float(r.qty or 0), 2)
+	return {
+		"items": [
+			{
+				"code": r.name,
+				"name": r.item_name,
+				"series": r.custom_series_ref,
+				"status": r.custom_discontinuation_status or "Active",
+				"stock": stock.get(r.name, 0),
+			}
+			for r in rows
+		],
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
 def list_item_group_names() -> list[str]:
 	"""Every leaf category name, unpaginated. The staff app used list_item_groups' first
 	page (20) as "all categories", but a Tally-migrated site has ~1,100 of them -- so the

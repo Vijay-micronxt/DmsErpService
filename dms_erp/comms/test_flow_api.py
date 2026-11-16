@@ -1064,7 +1064,12 @@ class TestWhatsAppQuotationBeforeOrder(FrappeTestCase):
 		return {"event": "quotation.create", "phone": phone or self.PHONE, "message": message, "variables": variables}
 
 	def test_shows_a_real_quotation_for_the_typed_quantity(self):
-		result = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="220"))
+		from unittest import mock
+
+		# No GST template on file -> untaxed, so the message keeps saying GST is extra.
+		# (With one, the bill-to-address rule adds a GST line -- see the next test.)
+		with mock.patch("dms_erp.sales.utils._template_for_scope", return_value=None):
+			result = flow_api.create_whatsapp_quotation(lead=self._lead(self.item, qty="220"))
 
 		self.assertTrue(result["quotation_id"])
 		self.assertIn(result["quotation_id"], result["message"])
@@ -1075,6 +1080,7 @@ class TestWhatsAppQuotationBeforeOrder(FrappeTestCase):
 		self.assertIn("GST and freight extra", result["message"])
 
 		quotation = frappe.get_doc("Quotation", result["quotation_id"])
+		self.assertFalse(quotation.taxes_and_charges)
 		self.assertEqual(quotation.party_name, self.dealer)
 		self.assertEqual(quotation.docstatus, 1)
 		self.assertEqual((quotation.items[0].item_code, quotation.items[0].qty, quotation.items[0].rate), (self.item, 220, 360))

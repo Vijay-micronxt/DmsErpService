@@ -38,6 +38,7 @@ from dms_erp.sales.utils import (
 	assert_address_belongs_to,
 	clear_unrequested_default_tax,
 	is_interstate_delivery,
+	resolve_tax_template_arg,
 )
 from dms_erp.warehouse.utils import default_company
 
@@ -539,7 +540,10 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 		# can already be raised the same way, "Out of Stock" status, no block).
 		# This check only ever fires once the item has real stock that's already
 		# spoken for by someone else's open order.
-		from dms_erp.warehouse.utils import available_to_promise, sellable_stock_for_item
+		from dms_erp.warehouse.utils import (
+			available_to_promise,
+			sellable_stock_for_item,
+		)
 
 		total = sellable_stock_for_item(item)
 		free = available_to_promise(item)
@@ -631,7 +635,7 @@ def _create_order(
 			"items": items,
 		}
 	)
-	apply_tax_template(so, taxes_and_charges)
+	apply_tax_template(so, resolve_tax_template_arg(dealer, taxes_and_charges))
 
 	order = finalize_new_order(
 		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
