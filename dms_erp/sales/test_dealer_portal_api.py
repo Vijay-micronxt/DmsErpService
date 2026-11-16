@@ -375,7 +375,7 @@ class TestDealerPortalApi(FrappeTestCase):
 		frappe.set_user(self.dealer_user)
 
 		for o in (dealer_portal_api.get_my_order(order["id"]), *dealer_portal_api.list_my_orders()["items"]):
-			for key in ("channel", "owner", "advanceConfirmed", "reservation", "deliveryNotes"):
+			for key in ("channel", "owner", "advanceConfirmed", "advance", "reservation", "deliveryNotes"):
 				self.assertNotIn(key, o)
 			self.assertTrue(all("by" not in e for e in o["history"]))
 

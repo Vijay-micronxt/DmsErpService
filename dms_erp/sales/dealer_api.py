@@ -71,7 +71,7 @@ just ignored for pricing as long as the tag is set.
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
@@ -228,6 +228,92 @@ def list_price_lists(search: str | None = None):
 	return frappe.get_all("Price List", filters=filters, pluck="name", order_by="name asc")
 
 
+def _serialize_payment_terms(doc) -> dict:
+	return {
+		"id": doc.name,
+		"name": doc.template_name or doc.name,
+		"advancePct": flt(doc.get("custom_advance_pct")),
+		"terms": [
+			{
+				"description": t.description,
+				"portion": flt(t.invoice_portion),
+				"creditDays": t.credit_days or 0,
+				"dueDateBasedOn": t.due_date_based_on,
+			}
+			for t in doc.terms
+		],
+		"dealerCount": frappe.db.count("Customer", {"payment_terms": doc.name, "disabled": 0}),
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_payment_terms_templates():
+	"""BRD C.3.4 -- ERPNext's own Payment Terms Templates, with the advance % the
+	dispatch gate reads. Includes templates built in Desk (advance 0 until set)."""
+	names = frappe.get_all("Payment Terms Template", pluck="name", order_by="name asc")
+	return [_serialize_payment_terms(frappe.get_doc("Payment Terms Template", n)) for n in names]
+
+
+@frappe.whitelist(methods=["POST"])
+def create_payment_terms_template(name: str, advance_pct: float = 0, credit_days: int = 0):
+	"""A template in the two shapes Pacific's policy needs, so staff don't have to know
+	ERPNext's term-row model: `advance_pct`% due up front, the balance due `credit_days`
+	after invoice (0 + 100% advance = pay-before-dispatch; 0% advance = plain credit).
+	Anything more elaborate is still built in Desk and shows up here.
+
+	Management only, unlike dealer edits: a template decides who must pay up front, the
+	same control order_api.confirm_advance_payment already reserves for Management."""
+	if not set(frappe.get_roles(frappe.session.user)) & {"DMS Management", "System Manager"}:
+		frappe.throw(_("Only Management can create payment terms."), frappe.PermissionError)
+
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("A template name is required."), frappe.ValidationError)
+	if frappe.db.exists("Payment Terms Template", name):
+		frappe.throw(_("Payment terms {0} already exist.").format(name), frappe.DuplicateEntryError)
+	advance_pct = flt(advance_pct)
+	credit_days = cint(credit_days)
+	if not 0 <= advance_pct <= 100:
+		frappe.throw(_("Advance must be between 0 and 100%."), frappe.ValidationError)
+	if credit_days < 0:
+		frappe.throw(_("Credit days cannot be negative."), frappe.ValidationError)
+
+	terms = []
+	if advance_pct:
+		terms.append(
+			{
+				"description": f"{advance_pct:g}% advance",
+				"invoice_portion": advance_pct,
+				"due_date_based_on": "Day(s) after invoice date",
+				"credit_days": 0,
+			}
+		)
+	if advance_pct < 100:
+		terms.append(
+			{
+				"description": f"Balance {100 - advance_pct:g}% — {credit_days} day(s) credit" if credit_days else f"Balance {100 - advance_pct:g}% on invoice",
+				"invoice_portion": 100 - advance_pct,
+				"due_date_based_on": "Day(s) after invoice date",
+				"credit_days": credit_days,
+			}
+		)
+	doc = frappe.get_doc(
+		{
+			"doctype": "Payment Terms Template",
+			"template_name": name,
+			"custom_advance_pct": advance_pct,
+			"terms": terms,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return _serialize_payment_terms(doc)
+
+
+def _validate_payment_terms(template: str | None):
+	if template and not frappe.db.exists("Payment Terms Template", template):
+		frappe.throw(_("Unknown payment terms: {0}").format(template), frappe.ValidationError)
+
+
 def _validate_price_list(price_list: str | None):
 	if price_list and not frappe.db.exists("Price List", {"name": price_list, "enabled": 1, "selling": 1}):
 		frappe.throw(_("Invalid or disabled Price List: {0}").format(price_list), frappe.ValidationError)
@@ -253,9 +339,13 @@ def _serialize(
 	portal_status: dict | None = None,
 	price_list: str | None = None,
 	additional_phones: list | None = None,
+	payment_terms: str | None = None,
 ) -> dict:
 	portal_status = portal_status or _NO_PORTAL_ACCOUNT
 	return {
+		# BRD C.3.4 -- ERPNext's native Customer.payment_terms (a Payment Terms Template);
+		# its custom advance % is what gates dispatch (see sales.advance).
+		"paymentTerms": payment_terms,
 		"id": name,
 		"name": customer_name,
 		"group": customer_group,
@@ -437,6 +527,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_gstin",
 			"custom_address",
 			"default_price_list",
+			"payment_terms",
 		],
 		order_by="customer_name asc",
 	)
@@ -467,6 +558,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			portal_status.get(r.name),
 			r.default_price_list,
 			extra_phones.get(r.name),
+			r.payment_terms,
 		)
 		for r in rows
 	]
@@ -497,6 +589,7 @@ def get_dealer(dealer: str):
 		_portal_status_for([doc.name]).get(doc.name),
 		doc.default_price_list,
 		[{"phone": r.phone, "name": r.contact_name} for r in doc.get("custom_additional_phones") or []],
+		doc.payment_terms,
 	)
 
 
@@ -584,6 +677,7 @@ def create_dealer(
 	address: str | None = None,
 	price_list: str | None = None,
 	additional_phones: list | None = None,
+	payment_terms: str | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -602,8 +696,11 @@ def create_dealer(
 		frappe.throw(_("A dealer named {0} already exists.").format(name), frappe.DuplicateEntryError)
 	_validate_dealer_type(dealer_type)
 	_validate_price_list(price_list)
+	_validate_payment_terms(payment_terms)
 
 	values = {"doctype": "Customer", "customer_name": name, "customer_type": "Company"}
+	if payment_terms:
+		values["payment_terms"] = payment_terms
 	if group:
 		values["customer_group"] = group
 	if territory:
@@ -641,7 +738,7 @@ def create_dealer(
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible, email, outOfStation, gstin, address, priceList. Anything else —
+	phone, priceVisible, email, outOfStation, gstin, address, priceList, paymentTerms. Anything else —
 	including `classification`, which is recomputed nightly — is ignored.
 
 	`priceList` (null to clear) is the manual override of the automatic classification
@@ -655,7 +752,10 @@ def update_dealer(dealer: str, patch: dict):
 		"dealerType": "custom_dealer_type",
 		"salesperson": "custom_salesperson",
 		"priceList": "default_price_list",
+		"paymentTerms": "payment_terms",
 	}
+	if "paymentTerms" in patch:
+		_validate_payment_terms(patch["paymentTerms"])
 	if "dealerType" in patch:
 		_validate_dealer_type(patch["dealerType"])
 	if "priceList" in patch:

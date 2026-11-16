@@ -17,7 +17,7 @@ list_orders is paginated (`limit`/`offset`) and returns `{"items", "total",
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, now_datetime, today
+from frappe.utils import add_days, flt, getdate, now_datetime, today
 
 from dms_erp.catalog.utils import (
 	item_images,
@@ -29,6 +29,7 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
+from dms_erp.sales.advance import advance_status_for_order
 from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
 from dms_erp.sales.reservation import reservation_summary
 from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
@@ -47,6 +48,8 @@ ORDER_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 # order's advance payment).
 ADVANCE_CONFIRM_ROLES = {"DMS Management", "System Manager"}
 FORWARD_FLOW = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered"]
+# Stages at which update_order_details may still change the expected dispatch / dealer PO.
+EDITABLE_DETAIL_STAGES = {"Confirmed", "Picking", "Ready to Dispatch"}
 
 # Child-row fields a mapped draft row (make_sales_invoice/make_delivery_note) carries
 # that must NOT follow the row into a different/split row: each is either an identity
@@ -119,6 +122,7 @@ def _serialize(doc) -> dict:
 		"driverMobile": doc.get("custom_driver_mobile"),
 		# BRD C.3.4 — interim manual gate ahead of VALS API. See advance_order_stage.
 		"advanceConfirmed": bool(doc.custom_advance_confirmed),
+		"advance": advance_status_for_order(doc),
 		"owner": doc.owner,
 		"history": [
 			{"stage": row.stage, "at": row.at, "by": row.by, "note": row.note}
@@ -785,6 +789,60 @@ def confirm_advance_payment(order: str, confirmed: bool = True):
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
+def update_order_details(order: str, expected_dispatch=None, customer_po: str | None = None):
+	"""BRD C.11's submit-freeze model: a submitted document is frozen except a short list
+	of fields authorised users may change without cancelling -- the BRD's own example is
+	the delivery date. Every order here is submitted the moment it's created (there's no
+	draft phase), so this is the whole "edit a live order" path for those fields; changing
+	items/quantities is a full amendment and is deliberately not offered (that goes through
+	Approvals, not a direct edit).
+
+	Only while the order hasn't left the warehouse (Confirmed/Picking/Ready to Dispatch):
+	after Dispatched a new date or PO number would rewrite history. Both fields are
+	allow_on_submit natively on Sales Order, so no schema change is involved.
+
+	A line's own delivery date is moved along with the header only if it still equals the
+	old header date -- a line the dealer committed to a specific date for is left alone,
+	same rule _convert_to_order already applies when it fills line dates."""
+	_assert_can_manage_orders()
+
+	doc = frappe.get_doc("Sales Order", order)
+	stage = doc.custom_fulfillment_stage
+	if doc.docstatus != 1 or stage not in EDITABLE_DETAIL_STAGES:
+		frappe.throw(
+			_("{0} can only be edited while it is Confirmed, Picking or Ready to Dispatch (it is {1}).").format(order, stage),
+			frappe.ValidationError,
+		)
+
+	changes = []
+	if expected_dispatch:
+		new_date = getdate(expected_dispatch)
+		if new_date < getdate(today()):
+			frappe.throw(_("Expected dispatch can't be in the past."), frappe.ValidationError)
+		old_date = getdate(doc.delivery_date) if doc.delivery_date else None
+		if old_date != new_date:
+			for row in doc.items:
+				if row.delivery_date and getdate(row.delivery_date) == old_date:
+					row.delivery_date = new_date
+			doc.delivery_date = new_date
+			changes.append(_("Expected dispatch {0} -> {1}").format(old_date or "-", new_date))
+
+	if customer_po is not None:
+		new_po = customer_po.strip() or None
+		if (doc.po_no or None) != new_po:
+			changes.append(_("Dealer PO {0} -> {1}").format(doc.po_no or "-", new_po or "-"))
+			doc.po_no = new_po
+
+	if changes:
+		doc.save(ignore_permissions=True)
+		# A native timeline comment, not a custom_stage_history row: flow_api reads the latest
+		# row per stage as "when the order reached that stage", so a same-stage edit row would
+		# silently move that timestamp.
+		doc.add_comment("Info", "; ".join(changes))
+	return _serialize(doc)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
 def advance_order_stage(
 	order: str, next_stage: str, note: str | None = None, vehicle: str | None = None, driver_mobile: str | None = None
 ):
@@ -813,11 +871,15 @@ def advance_order_stage(
 	if not (is_forward_step or is_cancel):
 		frappe.throw(_("Cannot move an order from {0} to {1}.").format(current, next_stage), frappe.ValidationError)
 
-	if next_stage == "Ready to Dispatch" and not doc.custom_advance_confirmed:
-		frappe.throw(
-			_("{0}'s advance payment must be confirmed before it can move to Ready to Dispatch.").format(order),
-			frappe.ValidationError,
-		)
+	if next_stage == "Ready to Dispatch":
+		advance = advance_status_for_order(doc)
+		if not advance["satisfied"]:
+			frappe.throw(
+				_("{0} needs an advance of {1} ({2}% under {3}); {4} received. Record the payment or have Management confirm it before Ready to Dispatch.").format(
+					order, advance["required"], advance["percent"], advance["template"], advance["received"]
+				),
+				frappe.ValidationError,
+			)
 
 	if is_cancel:
 		from dms_erp.approvals.api import gate_authorized_action

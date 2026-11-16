@@ -7,7 +7,7 @@ from dms_erp.catalog.setup import setup_catalog
 from dms_erp.pricing import api as pricing_api
 from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_MASTER
 from dms_erp.pricing.setup import setup_pricing
-from dms_erp.sales import inquiry_api, order_api, picking_api
+from dms_erp.sales import dealer_api, inquiry_api, order_api, picking_api
 from dms_erp.warehouse import allocation_api
 from dms_erp.sales import utils as sales_utils
 from dms_erp.sales.dealer_address_api import create_dealer_address
@@ -37,6 +37,9 @@ class TestOrderApi(FrappeTestCase):
 		cls.supplier = make_supplier("Order Test Supplier")
 		cls.dealer = make_dealer("Order Test Dealer")
 		cls.billing_address, cls.shipping_address = make_dealer_addresses(cls.dealer)
+		# BRD C.3.4: the dispatch gate only applies to dealers whose payment terms ask for an advance.
+		cls.advance_terms = dealer_api.create_payment_terms_template("Order Test 30 Advance", advance_pct=30, credit_days=15)["id"]
+		frappe.db.set_value("Customer", cls.dealer, "payment_terms", cls.advance_terms)
 		cls.item = make_item("ORDER-TEST-ITEM", "Vitrified")
 		pricing_api.ensure_price_record(cls.item, cls.supplier, 300, 20, "2026-08-01")
 		pricing_api.approve_price(item=cls.item, final_price=360, reason="Launch")
@@ -266,6 +269,43 @@ class TestOrderApi(FrappeTestCase):
 		self.assertFalse(reversed_order["advanceConfirmed"])
 
 		order_api.advance_order_stage(order["id"], "Picking")
+		with self.assertRaises(frappe.ValidationError):
+			order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+
+	def test_order_reports_required_and_received_advance(self):
+		order = self._make_order()
+		advance = order["advance"]
+		self.assertTrue(advance["applies"])
+		self.assertEqual(advance["percent"], 30)
+		self.assertAlmostEqual(advance["required"], round(order["total"] * 0.30, 2), places=2)
+		self.assertEqual(advance["received"], 0)
+		self.assertFalse(advance["satisfied"])
+
+	def test_dealer_without_advance_terms_is_not_gated(self):
+		order = self._make_order()
+		frappe.db.set_value("Sales Order", order["id"], "payment_terms_template", None)
+		frappe.db.set_value("Customer", self.dealer, "payment_terms", None)
+		try:
+			order_api.advance_order_stage(order["id"], "Picking")
+			updated = order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+			self.assertEqual(updated["stage"], "Ready to Dispatch")
+			self.assertFalse(updated["advance"]["applies"])
+		finally:
+			frappe.db.set_value("Customer", self.dealer, "payment_terms", self.advance_terms)
+
+	def test_received_advance_opens_gate_without_manual_confirmation(self):
+		order = self._make_order()
+		order_api.advance_order_stage(order["id"], "Picking")
+		required = order["advance"]["required"]
+		frappe.db.set_value("Sales Order", order["id"], "advance_paid", required)
+		updated = order_api.advance_order_stage(order["id"], "Ready to Dispatch")
+		self.assertEqual(updated["stage"], "Ready to Dispatch")
+		self.assertFalse(updated["advanceConfirmed"])
+
+	def test_part_paid_advance_still_blocks_dispatch(self):
+		order = self._make_order()
+		order_api.advance_order_stage(order["id"], "Picking")
+		frappe.db.set_value("Sales Order", order["id"], "advance_paid", order["advance"]["required"] - 1)
 		with self.assertRaises(frappe.ValidationError):
 			order_api.advance_order_stage(order["id"], "Ready to Dispatch")
 
