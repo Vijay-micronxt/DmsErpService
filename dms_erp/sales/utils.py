@@ -354,6 +354,148 @@ def company_gst_state(company: str | None = None) -> str | None:
 	return frappe.db.get_value("Address", address_name, "state") if address_name else None
 
 
+AUTO_TAX = "auto"
+
+
+def _state_code(state: str | None) -> str | None:
+	"""GST state code ("29") for a state name, via india_compliance's own table so this
+	app keeps no copy of it. None when india_compliance isn't installed or the name is
+	not a state it knows."""
+	if not state:
+		return None
+	try:
+		from india_compliance.gst_india.constants import STATE_NUMBERS
+	except ImportError:
+		return None
+	return STATE_NUMBERS.get(state.strip())
+
+
+def company_gst_identity(company: str | None = None) -> tuple[str | None, str | None]:
+	"""(state, GST state code) of the company -- from its Address, since ERPNext keeps
+	neither on Company itself. The code prefers that address's own GSTIN (what the
+	taxman actually matches on) and otherwise derives it from the state name."""
+	company = company or default_company()
+	address_name = frappe.db.get_value(
+		"Dynamic Link",
+		{"link_doctype": "Company", "link_name": company, "parenttype": "Address"},
+		"parent",
+		order_by="creation asc",
+	)
+	if not address_name:
+		return None, None
+	state, gst_state, gstin = frappe.db.get_value("Address", address_name, ["state", "gst_state", "gstin"]) or (None, None, None)
+	state = gst_state or state
+	return state, (gstin[:2] if gstin and len(gstin) >= 2 else None) or _state_code(state)
+
+
+def _dealer_address_for_tax(customer: str) -> dict | None:
+	"""Which of the dealer's addresses decides the tax -- billing first, shipping only
+	when there is no usable billing address (BRD C.3.3 bill-to drives GST).
+
+	`is_primary_address` is the flag ERPNext keeps for a Billing address (there is no
+	`is_billing_address` field in Address), `is_shipping_address` its Shipping
+	counterpart. Several candidates: the flagged one, else the latest billing / the first
+	shipping. Disabled addresses never count."""
+	names = frappe.get_all(
+		"Dynamic Link", filters={"link_doctype": "Customer", "link_name": customer, "parenttype": "Address"}, pluck="parent"
+	)
+	if not names:
+		return None
+	fields = ["name", "address_type", "state", "gst_state", "gstin", "is_primary_address", "is_shipping_address", "creation"]
+	for address_type, flag, order in (("Billing", "is_primary_address", "creation desc"), ("Shipping", "is_shipping_address", "creation asc")):
+		rows = frappe.get_all(
+			"Address", filters={"name": ["in", names], "address_type": address_type, "disabled": 0}, fields=fields, order_by=order
+		)
+		if rows:
+			return next((r for r in rows if r.get(flag)), rows[0])
+	return None
+
+
+def _template_for_scope(scope: str, company: str) -> str | None:
+	"""The site's Sales Taxes and Charges Template for "In-State"/"Out-State", found by
+	ERPNext's own Tax Category on the template (india_compliance ships them tagged) --
+	never by name, which differs per company suffix and per site."""
+	rows = frappe.get_all(
+		"Sales Taxes and Charges Template",
+		filters={"company": company, "disabled": 0, "tax_category": scope},
+		fields=["name", "is_default"],
+		order_by="is_default desc, name asc",
+	)
+	return rows[0].name if rows else None
+
+
+def resolve_tax_for_dealer(customer: str, company: str | None = None) -> dict:
+	"""Which GST template a quotation/order for this dealer should carry: the dealer's
+	address state against the company's, else the GSTIN state-code prefix, else
+	In-State. `basis` says which rule decided, `assumed` is True only for the last-resort
+	default (which can under-charge an out-of-state dealer, so callers surface it rather
+	than hide it), and `reason` is a sentence a person can check.
+
+	Suggests, never imposes: staff can still pick any template or none. Rates are not
+	computed here -- the template's own rows do that (see apply_tax_template)."""
+	company = company or default_company()
+	co_state, co_code = company_gst_identity(company)
+	address = _dealer_address_for_tax(customer)
+	state = ((address.get("gst_state") or address.get("state")) if address else None) or None
+	gstin = None
+	if frappe.get_meta("Customer").has_field("gstin"):
+		gstin = frappe.db.get_value("Customer", customer, "gstin")
+	gstin = gstin or frappe.db.get_value("Customer", customer, "custom_gstin") or (address.get("gstin") if address else None)
+	gstin = gstin.strip().upper() if gstin else None
+	where = f"{address.address_type} address {address.name}" if address else "no address on file"
+
+	scope = basis = reason = warning = None
+	assumed = False
+	if state and co_state:
+		same = state.strip().lower() == co_state.strip().lower()
+		scope, basis = ("In-State" if same else "Out-State"), "address-state"
+		reason = f"{where} is in {state}; company is in {co_state}."
+	elif gstin and len(gstin) >= 2 and co_code:
+		same = gstin[:2] == co_code
+		scope, basis = ("In-State" if same else "Out-State"), "gstin"
+		reason = f"No usable state on {where}; GSTIN {gstin} starts with {gstin[:2]}, company's is {co_code}."
+	else:
+		scope, basis, assumed = "In-State", "default", True
+		missing = []
+		if not co_state and not co_code:
+			missing.append("the company's own address/state is not set up")
+		if not state and not (gstin and len(gstin) >= 2):
+			missing.append("the dealer has no address state and no GSTIN")
+		reason = "Assumed In-State: " + "; ".join(missing or ["state could not be compared"]) + "."
+		warning = reason + " Check before quoting an out-of-state dealer."
+
+	template = _template_for_scope(scope, company)
+	if not template:
+		warning = (warning + " " if warning else "") + f"No active {scope} Sales Taxes and Charges Template exists for {company}."
+	return {
+		"scope": scope,
+		"template": template,
+		"basis": basis,
+		"assumed": assumed,
+		"address": address.name if address else None,
+		"addressType": address.address_type if address else None,
+		"state": state,
+		"companyState": co_state,
+		"reason": reason,
+		"warning": warning,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def suggest_tax_for_dealer(dealer: str) -> dict:
+	"""For the Quotation/Order builders: pre-selects the template and shows why."""
+	return resolve_tax_for_dealer(dealer)
+
+
+def resolve_tax_template_arg(customer: str, value: str | None) -> str | None:
+	"""`taxes_and_charges` callers pass either a template name, nothing (untaxed -- the
+	long-standing meaning, kept so existing callers don't suddenly charge GST), or
+	"auto" to ask for the rule above."""
+	if value == AUTO_TAX:
+		return resolve_tax_for_dealer(customer)["template"]
+	return value
+
+
 def is_interstate_delivery(shipping_address_name: str | None, company: str | None = None) -> bool | None:
 	"""BRD C.3.3 -- tri-state on purpose: None (unknown -- no Company Address on
 	file, or the chosen Address has no state) must never silently collapse to

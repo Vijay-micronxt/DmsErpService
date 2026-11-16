@@ -86,3 +86,124 @@ class TestDealerContactLine(FrappeTestCase):
 		self.assertNotIn("internal@micronxt.com", msg)
 		self.assertIn("order.error.rep@example.com", msg)
 		self.assertIn("Name: Meena", msg)
+
+
+class TestResolveTaxForDealer(FrappeTestCase):
+	"""Deepak's GST rule: bill-to address state vs company, else GSTIN prefix, else In-State.
+	The company side is patched so the cases don't depend on this site's Company Address."""
+
+	def setUp(self):
+		super().setUp()
+		from unittest import mock
+
+		patches = [
+			mock.patch("dms_erp.sales.utils.company_gst_identity", return_value=("Karnataka", "29")),
+			mock.patch("dms_erp.sales.utils._template_for_scope", side_effect=lambda scope, company: f"T-{scope}"),
+		]
+		for p in patches:
+			p.start()
+			self.addCleanup(p.stop)
+		self.n = 0
+
+	def _dealer(self, gstin=None):
+		self.n += 1
+		name = make_dealer(f"Tax Rule Dealer {self.n}")
+		if gstin:
+			frappe.db.set_value("Customer", name, "custom_gstin", gstin)
+		return name
+
+	def _address(self, dealer, kind, state, flagged=0, disabled=0, title="a"):
+		self.n += 1
+		doc = frappe.get_doc(
+			{
+				"doctype": "Address",
+				"address_title": f"{title}{self.n}",
+				"address_type": kind,
+				"address_line1": "1 Test Rd",
+				"city": "Testville",
+				"state": state,
+				"gst_state": state,
+				"country": "India",
+				"pincode": "600001" if state == "Tamil Nadu" else "560001",
+				"is_primary_address": flagged if kind == "Billing" else 0,
+				"is_shipping_address": flagged if kind == "Shipping" else 0,
+				"disabled": disabled,
+				"links": [{"link_doctype": "Customer", "link_name": dealer}],
+			}
+		)
+		doc.flags.ignore_mandatory = True
+		doc.insert(ignore_permissions=True)
+		return doc.name
+
+	def test_billing_state_equal_to_company_is_in_state(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Karnataka", flagged=1)
+		result = resolve_tax_for_dealer(dealer)
+		self.assertEqual((result["scope"], result["template"], result["basis"]), ("In-State", "T-In-State", "address-state"))
+		self.assertFalse(result["assumed"])
+
+	def test_other_state_is_out_state(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Tamil Nadu", flagged=1)
+		self.assertEqual(resolve_tax_for_dealer(dealer)["template"], "T-Out-State")
+
+	def test_shipping_is_used_only_when_no_billing_address(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Shipping", "Tamil Nadu", flagged=1)
+		result = resolve_tax_for_dealer(dealer)
+		self.assertEqual((result["addressType"], result["scope"]), ("Shipping", "Out-State"))
+
+	def test_disabled_billing_is_ignored(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Karnataka", flagged=1, disabled=1)
+		self._address(dealer, "Shipping", "Tamil Nadu", flagged=1)
+		self.assertEqual(resolve_tax_for_dealer(dealer)["addressType"], "Shipping")
+
+	def test_flagged_billing_beats_a_newer_unflagged_one(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Karnataka", flagged=1)
+		self._address(dealer, "Billing", "Tamil Nadu", flagged=0)
+		self.assertEqual(resolve_tax_for_dealer(dealer)["scope"], "In-State")
+
+	def test_unflagged_billing_addresses_take_the_latest(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Karnataka")
+		self._address(dealer, "Billing", "Tamil Nadu")
+		self.assertEqual(resolve_tax_for_dealer(dealer)["scope"], "Out-State")
+
+	def test_gstin_prefix_decides_when_address_has_no_state(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		dealer = self._dealer(gstin="33ABAPY4895N1ZU")
+		addr = self._address(dealer, "Billing", "Karnataka", flagged=1)
+		frappe.db.set_value("Address", addr, {"state": None, "gst_state": None})
+		result = resolve_tax_for_dealer(dealer)
+		self.assertEqual((result["scope"], result["basis"]), ("Out-State", "gstin"))
+
+	def test_nothing_known_defaults_to_in_state_and_says_so(self):
+		from dms_erp.sales.utils import resolve_tax_for_dealer
+
+		result = resolve_tax_for_dealer(self._dealer())
+		self.assertEqual((result["scope"], result["basis"], result["assumed"]), ("In-State", "default", True))
+		self.assertTrue(result["warning"])
+
+	def test_auto_keyword_resolves_but_none_stays_untaxed(self):
+		from dms_erp.sales.utils import resolve_tax_template_arg
+
+		dealer = self._dealer()
+		self._address(dealer, "Billing", "Tamil Nadu", flagged=1)
+		self.assertEqual(resolve_tax_template_arg(dealer, "auto"), "T-Out-State")
+		self.assertIsNone(resolve_tax_template_arg(dealer, None))
+		self.assertEqual(resolve_tax_template_arg(dealer, "Some Template"), "Some Template")

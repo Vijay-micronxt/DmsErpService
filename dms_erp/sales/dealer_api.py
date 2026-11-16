@@ -147,6 +147,129 @@ def _real_billing_address_text_for(customer_names: list[str]) -> dict[str, str]:
 	return {by_name[row.name]: _format_address(row) for row in rows if _format_address(row)}
 
 
+_ADDRESS_FIELDS = ("address_line1", "address_line2", "city", "state", "pincode")
+
+
+def _address_block(row) -> dict:
+	return {
+		"id": row.name,
+		"line1": row.address_line1,
+		"line2": row.get("address_line2"),
+		"city": row.city,
+		"state": row.state,
+		"pincode": row.pincode,
+	}
+
+
+def _addresses_for(customer_names: list[str]) -> dict[str, dict]:
+	"""{customer: {billing, shipping, extraBilling, extraShipping}} -- the dealer's real
+	Address records for the panel/form, picked by the same priority the GST rule uses
+	(sales.utils._dealer_address_for_tax): among Billing the primary-flagged one, else the
+	latest; among Shipping the flagged one, else the first. Disabled never counts.
+	`shipping` is None when the dealer has no Shipping address, which the UI shows as "same as
+	billing" -- exactly what the order flow already falls back to."""
+	if not customer_names:
+		return {}
+	links = frappe.get_all(
+		"Dynamic Link",
+		filters={"link_doctype": "Customer", "link_name": ["in", customer_names], "parenttype": "Address"},
+		fields=["link_name", "parent"],
+	)
+	if not links:
+		return {}
+	rows = frappe.get_all(
+		"Address",
+		filters={
+			"name": ["in", list({link.parent for link in links})],
+			"address_type": ["in", ["Billing", "Shipping"]],
+			"disabled": 0,
+		},
+		fields=["name", "address_type", *_ADDRESS_FIELDS, "is_primary_address", "is_shipping_address"],
+		order_by="creation desc",
+	)
+	by_address = {row.name: row for row in rows}
+	grouped: dict[str, dict[str, list]] = {}
+	for link in links:
+		row = by_address.get(link.parent)
+		if row:
+			grouped.setdefault(link.link_name, {"Billing": [], "Shipping": []})[row.address_type].append(row)
+
+	result = {}
+	for customer, kinds in grouped.items():
+		billing = kinds["Billing"]
+		shipping = kinds["Shipping"]
+		# rows are newest-first: Billing's fallback is the newest, Shipping's the oldest.
+		bill = next((r for r in billing if r.is_primary_address), billing[0] if billing else None)
+		ship = next((r for r in shipping if r.is_shipping_address), shipping[-1] if shipping else None)
+		result[customer] = {
+			"billing": _address_block(bill) if bill else None,
+			"shipping": _address_block(ship) if ship else None,
+			"extraBilling": max(len(billing) - 1, 0),
+			"extraShipping": max(len(shipping) - 1, 0),
+		}
+	return result
+
+
+def _clean_address_values(values: dict, label: str) -> dict:
+	values = values or {}
+	cleaned = {
+		"address_line1": (values.get("line1") or "").strip(),
+		"address_line2": (values.get("line2") or "").strip() or None,
+		"city": (values.get("city") or "").strip(),
+		"state": (values.get("state") or "").strip(),
+		"pincode": (values.get("pincode") or "").strip(),
+	}
+	for field, name in (("address_line1", "address line"), ("city", "city"), ("state", "state"), ("pincode", "pincode")):
+		if not cleaned[field]:
+			frappe.throw(_("{0}: {1} is required.").format(label, name), frappe.ValidationError)
+	return cleaned
+
+
+def _save_dealer_address(customer: str, kind: str, values: dict) -> str:
+	"""Update the dealer's current Billing/Shipping Address in place, or create it. State is
+	required because the GST template is chosen from it. GSTIN stays on the Customer -- an
+	address-level GSTIN drags in india_compliance's registered/unregistered validation, which
+	this form isn't the place to resolve."""
+	cleaned = _clean_address_values(values, f"{kind} address")
+	current = (_addresses_for([customer]).get(customer) or {}).get(kind.lower())
+	if current:
+		doc = frappe.get_doc("Address", current["id"])
+		for field, value in cleaned.items():
+			doc.set(field, value)
+		doc.save(ignore_permissions=True)
+		return doc.name
+	doc = frappe.get_doc(
+		{
+			"doctype": "Address",
+			"address_type": kind,
+			**cleaned,
+			"country": "India",
+			"is_primary_address": 1 if kind == "Billing" else 0,
+			"is_shipping_address": 1 if kind == "Shipping" else 0,
+			"links": [{"link_doctype": "Customer", "link_name": customer}],
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+
+def _apply_dealer_addresses(customer: str, billing: dict | None, shipping: dict | None, same_as_billing: bool | None) -> None:
+	"""Billing/Shipping from the dealer form. `same_as_billing` retires the dealer's current
+	Shipping address (disabled, never deleted -- Desk can re-enable it, and old orders keep
+	pointing at it) so the order flow falls back to the Billing one; otherwise a given
+	`shipping` is saved. The free-text Customer.address is kept in step so the WhatsApp
+	contact card and older screens don't show a stale line."""
+	if billing is not None:
+		name = _save_dealer_address(customer, "Billing", billing)
+		frappe.db.set_value("Customer", customer, "custom_address", _format_address(frappe.get_doc("Address", name)))
+	if same_as_billing:
+		current = (_addresses_for([customer]).get(customer) or {}).get("shipping")
+		if current:
+			frappe.db.set_value("Address", current["id"], "disabled", 1)
+	elif shipping is not None:
+		_save_dealer_address(customer, "Shipping", shipping)
+
+
 def _update_billing_address_line1(customer: str, address_line1: str) -> None:
 	"""Writes the staff app's free-text address edit onto the dealer's real
 	Billing Address when one already exists -- never creates a new Address
@@ -340,9 +463,17 @@ def _serialize(
 	price_list: str | None = None,
 	additional_phones: list | None = None,
 	payment_terms: str | None = None,
+	addresses: dict | None = None,
 ) -> dict:
 	portal_status = portal_status or _NO_PORTAL_ACCOUNT
+	addresses = addresses or {}
 	return {
+		# Real Address records (BRD C.3.3). `address` below stays as the legacy single line
+		# for older screens; the dealer panel/form read these two blocks.
+		"billingAddress": addresses.get("billing"),
+		"shippingAddress": addresses.get("shipping"),
+		"extraBillingAddresses": addresses.get("extraBilling", 0),
+		"extraShippingAddresses": addresses.get("extraShipping", 0),
 		# BRD C.3.4 -- ERPNext's native Customer.payment_terms (a Payment Terms Template);
 		# its custom advance % is what gates dispatch (see sales.advance).
 		"paymentTerms": payment_terms,
@@ -537,6 +668,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 	portal_status = _portal_status_for([r.name for r in rows])
 	extra_phones = _additional_phones_for([r.name for r in rows])
 	real_addresses = _real_billing_address_text_for([r.name for r in rows])
+	address_blocks = _addresses_for([r.name for r in rows])
 	return [
 		_serialize(
 			r.name,
@@ -559,6 +691,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			r.default_price_list,
 			extra_phones.get(r.name),
 			r.payment_terms,
+			address_blocks.get(r.name),
 		)
 		for r in rows
 	]
@@ -590,6 +723,7 @@ def get_dealer(dealer: str):
 		doc.default_price_list,
 		[{"phone": r.phone, "name": r.contact_name} for r in doc.get("custom_additional_phones") or []],
 		doc.payment_terms,
+		_addresses_for([doc.name]).get(doc.name),
 	)
 
 
@@ -678,6 +812,9 @@ def create_dealer(
 	price_list: str | None = None,
 	additional_phones: list | None = None,
 	payment_terms: str | None = None,
+	billing_address: dict | None = None,
+	shipping_address: dict | None = None,
+	shipping_same_as_billing: bool | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -731,14 +868,24 @@ def create_dealer(
 		_set_additional_phones(doc, additional_phones)
 	if credit_limit is not None:
 		_set_credit_limit(doc, credit_limit)
+	# Validated before the Customer exists so a bad address can't leave a dealer behind.
+	if billing_address:
+		_clean_address_values(billing_address, "Billing address")
+	if shipping_address and not shipping_same_as_billing:
+		_clean_address_values(shipping_address, "Shipping address")
 	doc.insert(ignore_permissions=True)
+	_apply_dealer_addresses(
+		doc.name, billing_address or None, shipping_address or None, shipping_same_as_billing
+	)
 	return get_dealer(doc.name)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible, email, outOfStation, gstin, address, priceList, paymentTerms. Anything else —
+	phone, priceVisible, email, outOfStation, gstin, address, priceList, paymentTerms, plus
+	billingAddress / shippingAddress ({line1, line2, city, state, pincode}) and
+	shippingSameAsBilling -- real Address records, see _apply_dealer_addresses. Anything else —
 	including `classification`, which is recomputed nightly — is ignored.
 
 	`priceList` (null to clear) is the manual override of the automatic classification
@@ -754,6 +901,15 @@ def update_dealer(dealer: str, patch: dict):
 		"priceList": "default_price_list",
 		"paymentTerms": "payment_terms",
 	}
+	# Address blocks are applied after the Customer saves, not through the field loop below.
+	billing_address = patch.get("billingAddress")
+	shipping_address = patch.get("shippingAddress")
+	same_as_billing = patch.get("shippingSameAsBilling")
+	patch = {k: v for k, v in patch.items() if k not in ("billingAddress", "shippingAddress", "shippingSameAsBilling")}
+	if billing_address:
+		_clean_address_values(billing_address, "Billing address")
+	if shipping_address and not same_as_billing:
+		_clean_address_values(shipping_address, "Shipping address")
 	if "paymentTerms" in patch:
 		_validate_payment_terms(patch["paymentTerms"])
 	if "dealerType" in patch:
@@ -798,4 +954,5 @@ def update_dealer(dealer: str, patch: dict):
 		elif key == "additionalPhones":
 			_set_additional_phones(doc, value)
 	doc.save(ignore_permissions=True)
+	_apply_dealer_addresses(doc.name, billing_address or None, shipping_address or None, same_as_billing)
 	return get_dealer(doc.name)
