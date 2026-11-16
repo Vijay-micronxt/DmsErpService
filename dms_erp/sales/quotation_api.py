@@ -71,6 +71,19 @@ def _assert_can_manage_quotations():
 		frappe.throw(_("Only Sales or Management can manage quotations."), frappe.PermissionError)
 
 
+def _linked_sales_order(quotation: str) -> str | None:
+	"""The Sales Order this quotation became, if any -- convert_to_order stamps the
+	new order's custom_source_type/custom_source_ref back to this quotation (see
+	finalize_new_order's call there), so this is a reverse lookup on that, not a
+	stored field here. A cancelled order is excluded so a since-cancelled
+	conversion reads as not-yet-ordered again, matching quotation.status."""
+	return frappe.db.get_value(
+		"Sales Order",
+		{"custom_source_type": "Quotation", "custom_source_ref": quotation, "docstatus": ["!=", 2]},
+		"name",
+	)
+
+
 def _serialize(doc) -> dict:
 	return {
 		"id": doc.name,
@@ -83,6 +96,7 @@ def _serialize(doc) -> dict:
 		"freight": doc.custom_freight,
 		"deliveryPincode": doc.get("custom_delivery_pincode"),
 		"inquiryId": doc.custom_inquiry,
+		"linkedSalesOrder": _linked_sales_order(doc.name),
 		"channel": doc.custom_order_channel,
 		"customerAddress": doc.customer_address,
 		"shippingAddressName": doc.shipping_address_name,
