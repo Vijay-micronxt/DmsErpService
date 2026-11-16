@@ -42,7 +42,7 @@ from frappe import _
 from dms_erp.catalog.utils import item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.purchase import routing_client
-from dms_erp.purchase.po_api import remaining_ready_qty_for_line
+from dms_erp.purchase.po_api import list_materials_ready_for_pickup, remaining_ready_qty_for_line
 from dms_erp.warehouse import inward_api
 
 ROUTE_PLAN_WRITE_ROLES = {"DMS Purchase", "DMS Warehouse", "DMS Management", "System Manager"}
@@ -238,6 +238,15 @@ def list_route_plans(status: str | None = None, search: str | None = None, limit
 @frappe.whitelist(methods=["GET"])
 def get_route_plan(route_plan: str):
 	return _serialize(frappe.get_doc("Route Plan", route_plan))
+
+
+@frappe.whitelist(methods=["GET"])
+def list_available_pickup_lines():
+	"""Return PO lines with supplier-ready boxes left after inward bookings and
+	Draft Pickup Run/Route Plan reservations, so the route-plan picker matches
+	create/dispatch validation instead of showing raw ready_qty."""
+	_assert_can_manage_route_plans()
+	return list_materials_ready_for_pickup()
 
 
 @frappe.whitelist(methods=["POST"])

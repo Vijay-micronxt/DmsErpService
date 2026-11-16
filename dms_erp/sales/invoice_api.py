@@ -162,6 +162,11 @@ def _invoice_detail(doc) -> dict:
 	return {
 		**_serialize_row(doc),
 		"dueDate": doc.due_date,
+		# Several Sales Orders' worth of items can land on one consolidated invoice
+		# (create_consolidated_sales_invoice) -- every distinct source order via each
+		# line's own native sales_order field, not a stored link on the invoice itself.
+		# Mirrors order_api._serialize_invoice's own salesOrders field exactly.
+		"salesOrders": sorted({row.sales_order for row in doc.items if row.sales_order}),
 		# Only when every line's weight is known -- a partial sum would understate it.
 		"totalWeightKg": round(sum(line_weights), 2) if line_weights and None not in line_weights else None,
 		# Customer.gstin only exists where India Compliance is installed.

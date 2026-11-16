@@ -312,7 +312,14 @@ def default_billing_shipping_for(customer: str) -> tuple[str | None, str | None]
 	the dealer's own primary Billing/primary Shipping Address; falls back to
 	their only Billing/Shipping Address if exactly one exists; (None, None) if
 	neither can be resolved -- the caller still gets the same mandatory-field
-	throw a staff caller would, this just narrows how often that happens."""
+	throw a staff caller would, this just narrows how often that happens.
+
+	Ship-to falls back to bill-to when no Address is explicitly typed Shipping
+	-- the ordinary case (most dealers have a single Address on file, never
+	tagged Shipping specifically, and receive goods at the same place they're
+	billed). Only BRD C.3.3's drop-ship flow genuinely needs a distinct ship-to,
+	and that path carries its own customer_address/shipping_address_name from
+	the drop-ship Sales Order, never through this resolver."""
 
 	def _pick(address_type: str, primary_field: str) -> str | None:
 		names = frappe.get_all(
@@ -332,7 +339,9 @@ def default_billing_shipping_for(customer: str) -> tuple[str | None, str | None]
 			return primary
 		return rows[0].name if len(rows) == 1 else None
 
-	return _pick("Billing", "is_primary_address"), _pick("Shipping", "is_shipping_address")
+	billing = _pick("Billing", "is_primary_address")
+	shipping = _pick("Shipping", "is_shipping_address") or billing
+	return billing, shipping
 
 
 def company_gst_state(company: str | None = None) -> str | None:
