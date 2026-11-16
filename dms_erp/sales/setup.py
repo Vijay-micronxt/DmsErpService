@@ -41,6 +41,15 @@ ORDER_SOURCE_TYPES = ["Inquiry", "Quotation", "Direct"]
 ORDER_CHANNELS = ["Retail", "Bulk", "Project"]
 
 CUSTOM_FIELDS = {
+	"Payment Terms Template": [
+		{
+			"fieldname": "custom_advance_pct",
+			"fieldtype": "Percent",
+			"label": "Advance Required (%)",
+			"description": "BRD C.3.4 -- % of an order's total that must be received before it can move to Ready to Dispatch. 0 = no advance condition (credit terms). Read by sales.advance.",
+			"insert_after": "template_name",
+		},
+	],
 	"Quotation": [
 		{
 			"fieldname": "dms_quotation_section",

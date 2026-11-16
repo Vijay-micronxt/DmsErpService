@@ -736,7 +736,7 @@ def list_my_orders(stage: str | None = None, stage_group: str | None = None, lim
 # Internal to Pacific, never shown to a dealer: the retail/bulk channel (an internal
 # classification, already kept off the dealer's quotation), the staff owner's and every
 # stage-changer's user/email, the advance-payment sign-off and the reservation-review flags.
-_INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "reservation", "deliveryNotes")
+_INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "advance", "reservation", "deliveryNotes")
 
 
 def _dealer_order(doc) -> dict:

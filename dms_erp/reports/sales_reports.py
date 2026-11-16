@@ -279,6 +279,7 @@ def advance_payment_pending_report(dealer: str | None = None):
 	carries the dealer's current outstanding balance from the ledger, which is what
 	the person confirming the advance actually checks."""
 	from dms_erp.finance.ledger import party_balances
+	from dms_erp.sales.advance import advance_status
 	from dms_erp.warehouse.utils import default_company
 
 	filters = {
@@ -291,9 +292,18 @@ def advance_payment_pending_report(dealer: str | None = None):
 	orders = frappe.get_all(
 		"Sales Order",
 		filters=filters,
-		fields=["name", "customer", "customer_name", "transaction_date", "delivery_date", "grand_total", "custom_fulfillment_stage", "po_no"],
+		fields=[
+			"name", "customer", "customer_name", "transaction_date", "delivery_date", "grand_total",
+			"custom_fulfillment_stage", "po_no", "advance_paid", "payment_terms_template",
+		],
 		order_by="transaction_date asc",
 	)
+	# Only orders that actually owe an advance and haven't covered it -- a credit
+	# dealer's order is not "pending before loading" just because nobody ticked a box.
+	orders = [
+		o for o in orders
+		if not advance_status(o.customer, o.grand_total, o.advance_paid, False, o.payment_terms_template)["satisfied"]
+	]
 	dealers = sorted({o.customer for o in orders})
 	balances = party_balances("Customer", dealers, default_company()) if dealers else {}
 	today_ = getdate()

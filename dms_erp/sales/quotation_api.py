@@ -274,22 +274,70 @@ def _lines_from_items(rows) -> list[dict]:
 	]
 
 
+def _is_draft(quotation: str) -> bool:
+	return frappe.db.get_value("Quotation", quotation, "docstatus") == 0
+
+
 def _guard_editable(doc):
+	# BRD C.11 submit-freeze: a draft is freely editable (and edited in place -- see
+	# _amend_with_lines); only a submitted quotation needs the cancel+amend cycle and
+	# the Approvals gate.
+	if doc.docstatus == 0:
+		return
 	if doc.docstatus != 1:
-		frappe.throw(_("Only a submitted, open quotation can be edited."), frappe.ValidationError)
+		frappe.throw(_("Only a draft or a submitted, open quotation can be edited."), frappe.ValidationError)
 	if doc.status in NON_EDITABLE_STATUSES:
 		frappe.throw(_("Quotation {0} is {1} and can no longer be edited.").format(doc.name, doc.status), frappe.ValidationError)
 
 
-def _amend_with_lines(doc, lines: list[dict]) -> dict:
+def _apply_detail_edits(doc, edits: dict) -> None:
+	"""Sets the header fields update_quotation_details may change on `doc` (an unsaved
+	amended copy, or a draft about to be saved). Only the keys present in `edits` are
+	touched. An empty `taxes_and_charges` means "no tax", handled exactly as create_quotation
+	does it (see sales.utils.apply_tax_template) so a site's default template can't sneak in."""
+	if "freight" in edits:
+		doc.custom_freight = edits["freight"]
+	if "delivery_pincode" in edits:
+		doc.custom_delivery_pincode = edits["delivery_pincode"] or None
+	if "valid_till" in edits:
+		doc.valid_till = edits["valid_till"]
+	if "taxes_and_charges" in edits:
+		doc.set("taxes", [])
+		doc.taxes_and_charges = None
+		apply_tax_template(doc, edits["taxes_and_charges"] or None)
+
+
+def _amend_with_lines(
+	doc, lines: list[dict], markup_pct: float | None = None, edits: dict | None = None
+) -> dict:
 	"""Cancel `doc` and resubmit an amended copy with `lines` — every rate is
-	recomputed from the current approved price, not just the one line that changed."""
-	items = _priced_items(doc.party_name, doc.custom_markup_pct, lines)
+	recomputed from the current approved price, not just the one line that changed.
+	`markup_pct`, when given, replaces the quotation's stored markup (every line is
+	re-priced against it); left None, the existing markup is kept. `edits` carries the
+	header-field changes from update_quotation_details (freight/pincode/valid_till/tax)."""
+	markup = float(doc.custom_markup_pct or 0) if markup_pct is None else float(markup_pct)
+	items = _priced_items(doc.party_name, markup, lines)
+
+	if doc.docstatus == 0:
+		# A draft was never submitted, so there's nothing to cancel/amend: replace its rows
+		# in place. Same repricing as the amend path, so a draft's numbers are real too.
+		doc.custom_markup_pct = markup
+		if edits:
+			_apply_detail_edits(doc, edits)
+		doc.items = []
+		for item in items:
+			doc.append("items", item)
+		doc.save(ignore_permissions=True)
+		clear_unrequested_default_tax(doc)
+		return _serialize(doc)
 
 	original_name = doc.name
 	doc.cancel()
 
 	amended = frappe.copy_doc(doc)
+	amended.custom_markup_pct = markup
+	if edits:
+		_apply_detail_edits(amended, edits)
 	# copy_doc only resets docstatus outside tests (it keeps it when frappe.flags.in_test),
 	# so under tests the copy stayed Cancelled and insert() refused it -- set it explicitly
 	# so both run the same path.
@@ -299,6 +347,7 @@ def _amend_with_lines(doc, lines: list[dict]) -> dict:
 	for item in items:
 		amended.append("items", item)
 	amended.insert(ignore_permissions=True)
+	clear_unrequested_default_tax(amended)
 	amended.flags.dms_prevalidated = True
 	amended.submit()
 
@@ -654,6 +703,9 @@ def add_quotation_line(quotation: str, item: str, qty: float):
 	quotation, and nothing changes until Management approves it (see
 	approvals.api.gate_authorized_action / APPLIERS)."""
 	_assert_can_manage_quotations()
+	if _is_draft(quotation):
+		# Not a submitted document, so trigger #5 doesn't apply -- edit it directly.
+		return _add_quotation_line_action(quotation=quotation, item=item, qty=qty)
 	from dms_erp.approvals.api import gate_authorized_action
 
 	return gate_authorized_action(
@@ -686,6 +738,8 @@ def _add_quotation_line_action(quotation: str, item: str, qty: float) -> dict:
 def remove_quotation_line(quotation: str, item: str):
 	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	if _is_draft(quotation):
+		return _remove_quotation_line_action(quotation=quotation, item=item)
 	from dms_erp.approvals.api import gate_authorized_action
 
 	return gate_authorized_action(
@@ -717,6 +771,8 @@ def _remove_quotation_line_action(quotation: str, item: str) -> dict:
 def update_quotation_line_qty(quotation: str, item: str, qty: float):
 	"""BRD C.11 trigger #5 -- see add_quotation_line's docstring."""
 	_assert_can_manage_quotations()
+	if _is_draft(quotation):
+		return _update_quotation_line_qty_action(quotation=quotation, item=item, qty=qty)
 	from dms_erp.approvals.api import gate_authorized_action
 
 	return gate_authorized_action(
@@ -750,14 +806,156 @@ def _update_quotation_line_qty_action(quotation: str, item: str, qty: float) -> 
 	return _amend_with_lines(doc, lines)
 
 
+def _checked_markup(markup_pct) -> float:
+	"""A markup below 0 would quietly price under the approved dealer rate -- a discount
+	with no discount approval (BRD C.7.3 / C.11 #4) -- so it's refused outright."""
+	try:
+		value = float(markup_pct)
+	except (TypeError, ValueError):
+		frappe.throw(_("Markup must be a number."), frappe.ValidationError)
+	if not 0 <= value <= 100:
+		frappe.throw(_("Markup must be between 0 and 100%."), frappe.ValidationError)
+	return value
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_quotation_markup(quotation: str, markup_pct: float):
+	"""Retail markup is a quotation-level override (BRD C.7.2) that every line's price is
+	built from, so changing it re-prices the whole quotation. A draft is edited in place; a
+	submitted one goes through the same cancel+amend cycle -- and the same BRD C.11
+	trigger #5 approval gate for non-Management callers -- as a line edit."""
+	_assert_can_manage_quotations()
+	markup_pct = _checked_markup(markup_pct)
+	if _is_draft(quotation):
+		return _update_quotation_markup_action(quotation=quotation, markup_pct=markup_pct)
+	from dms_erp.approvals.api import gate_authorized_action
+
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is changing the markup to {markup_pct}% on quotation {quotation}.",
+		action_fn=_update_quotation_markup_action,
+		action_kwargs=dict(quotation=quotation, markup_pct=markup_pct),
+		applier_action="update_markup",
+	)
+
+
+def _update_quotation_markup_action(quotation: str, markup_pct: float) -> dict:
+	"""Unguarded core of update_quotation_markup -- see gate_authorized_action."""
+	doc = frappe.get_doc("Quotation", quotation)
+	_guard_editable(doc)
+	return _amend_with_lines(doc, _lines_from_items(doc.items), markup_pct=_checked_markup(markup_pct))
+
+
+def _checked_detail_edits(freight, delivery_pincode, valid_till, taxes_and_charges) -> dict:
+	"""Validates and normalises update_quotation_details' arguments into a JSON-safe dict
+	holding only what the caller actually sent (None = leave alone; "" for pincode/tax
+	means clear it). It's stored as-is in an Approvals request's payload, so every value
+	here must survive a JSON round trip."""
+	edits: dict = {}
+	if freight is not None:
+		try:
+			value = float(freight)
+		except (TypeError, ValueError):
+			frappe.throw(_("Freight must be a number."), frappe.ValidationError)
+		if value < 0:
+			frappe.throw(_("Freight can't be negative."), frappe.ValidationError)
+		edits["freight"] = value
+	if delivery_pincode is not None:
+		edits["delivery_pincode"] = str(delivery_pincode).strip()
+	if valid_till:
+		value = getdate(valid_till)
+		if value < getdate(today()):
+			frappe.throw(_("Valid till can't be in the past."), frappe.ValidationError)
+		edits["valid_till"] = str(value)
+	if taxes_and_charges is not None:
+		template = str(taxes_and_charges).strip()
+		if template and not frappe.db.exists("Sales Taxes and Charges Template", template):
+			frappe.throw(_("Tax template {0} doesn't exist.").format(template), frappe.ValidationError)
+		edits["taxes_and_charges"] = template
+	return edits
+
+
+def _describe_detail_edits(doc, edits: dict) -> str:
+	"""Human-readable before -> after for the Approvals queue's reason line."""
+	parts = []
+	if "freight" in edits:
+		parts.append(f"freight {flt(doc.custom_freight):g} -> {edits['freight']:g}")
+	if "taxes_and_charges" in edits:
+		parts.append(f"tax {doc.taxes_and_charges or 'none'} -> {edits['taxes_and_charges'] or 'none'}")
+	if "valid_till" in edits:
+		parts.append(f"valid till {doc.valid_till} -> {edits['valid_till']}")
+	if "delivery_pincode" in edits:
+		parts.append(f"delivery pincode {doc.custom_delivery_pincode or '-'} -> {edits['delivery_pincode'] or '-'}")
+	return ", ".join(parts)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_quotation_details(
+	quotation: str,
+	freight: float | None = None,
+	delivery_pincode: str | None = None,
+	valid_till=None,
+	taxes_and_charges: str | None = None,
+):
+	"""Edits a quotation's own header fields: freight, delivery pincode, valid-till date and
+	tax template. None of them changes a line's rate (the lines are re-priced unchanged);
+	freight and tax do change what the dealer pays, and the staff app's Total is items +
+	freight, same as the print and the dealer portal's "total payable".
+
+	A draft is edited in place. A submitted quotation takes the same cancel+amend cycle -- and
+	the same BRD C.11 trigger #5 approval gate for non-Management callers -- as a line or
+	markup edit; none of these fields is allow_on_submit, and that's the BRD's rule for
+	anything beyond a small named list of fields (delivery date is its example)."""
+	_assert_can_manage_quotations()
+	edits = _checked_detail_edits(freight, delivery_pincode, valid_till, taxes_and_charges)
+	if not edits:
+		frappe.throw(_("Nothing to change."), frappe.ValidationError)
+	if _is_draft(quotation):
+		return _update_quotation_details_action(quotation=quotation, edits=edits)
+	from dms_erp.approvals.api import gate_authorized_action
+
+	doc = frappe.get_doc("Quotation", quotation)
+	return gate_authorized_action(
+		trigger_type="Amend Or Cancel Submitted Document",
+		reference_doctype="Quotation",
+		reference_name=quotation,
+		reason=f"{frappe.session.user} is changing {_describe_detail_edits(doc, edits)} on quotation {quotation}.",
+		action_fn=_update_quotation_details_action,
+		action_kwargs=dict(quotation=quotation, edits=edits),
+		applier_action="update_details",
+	)
+
+
+def _update_quotation_details_action(quotation: str, edits: dict) -> dict:
+	"""Unguarded core of update_quotation_details -- see gate_authorized_action. Re-validates
+	`edits` too: for a queued request, Management may approve it days after it was raised."""
+	doc = frappe.get_doc("Quotation", quotation)
+	_guard_editable(doc)
+	edits = _checked_detail_edits(
+		edits.get("freight"), edits.get("delivery_pincode"), edits.get("valid_till"), edits.get("taxes_and_charges")
+	)
+	return _amend_with_lines(doc, _lines_from_items(doc.items), edits=edits)
+
+
 AMEND_ACTIONS = {
 	"add_line": _add_quotation_line_action,
 	"remove_line": _remove_quotation_line_action,
 	"update_qty": _update_quotation_line_qty_action,
+	"update_markup": _update_quotation_markup_action,
+	"update_details": _update_quotation_details_action,
 }
 
 
-def preview_amend(action: str, quotation: str, item: str, qty: float | None = None) -> dict:
+def preview_amend(
+	action: str,
+	quotation: str,
+	item: str | None = None,
+	qty: float | None = None,
+	markup_pct: float | None = None,
+	edits: dict | None = None,
+) -> dict:
 	"""BRD C.11 -- the side-by-side version Management approves against. Applies the
 	queued edit to a copy of the lines and re-prices them exactly as the amend would
 	(every line from the current approved price, _amend_with_lines), but saves nothing.
@@ -768,6 +966,7 @@ def preview_amend(action: str, quotation: str, item: str, qty: float | None = No
 		for row in doc.items
 	]
 	lines = _lines_from_items(doc.items)
+	markup = float(doc.custom_markup_pct or 0)
 	if action == "add_line":
 		lines.append({"item": item, "qty": qty})
 	elif action == "remove_line":
@@ -776,12 +975,17 @@ def preview_amend(action: str, quotation: str, item: str, qty: float | None = No
 		for l in lines:
 			if l["item"] == item:
 				l["qty"] = qty
+	elif action == "update_markup":
+		markup = _checked_markup(markup_pct)
+	elif action == "update_details":
+		# Lines are re-priced unchanged; what moves is the header, listed under "changes".
+		pass
 	else:
 		frappe.throw(_("Unknown quotation edit {0}.").format(action), frappe.ValidationError)
 
 	error = None
 	try:
-		priced = _priced_items(doc.party_name, doc.custom_markup_pct, lines)
+		priced = _priced_items(doc.party_name, markup, lines)
 		after = [
 			{
 				"item": p["item_code"],
@@ -801,7 +1005,68 @@ def preview_amend(action: str, quotation: str, item: str, qty: float | None = No
 		"beforeNetTotal": doc.net_total,
 		"afterNetTotal": sum(l["amount"] for l in after) if after is not None else None,
 		"error": error,
+		"changes": _detail_changes(doc, edits) if action == "update_details" and edits else [],
 	}
+
+
+def _detail_changes(doc, edits: dict) -> list[dict]:
+	"""The header fields an update_details edit would change, as before/after pairs, for the
+	Approvals diff -- the line table alone shows nothing for a freight or tax change."""
+	changes = []
+	if "freight" in edits:
+		changes.append({"field": "Freight", "before": flt(doc.custom_freight), "after": edits["freight"]})
+	if "taxes_and_charges" in edits:
+		changes.append(
+			{"field": "Tax template", "before": doc.taxes_and_charges or None, "after": edits["taxes_and_charges"] or None}
+		)
+	if "valid_till" in edits:
+		changes.append({"field": "Valid till", "before": str(doc.valid_till), "after": edits["valid_till"]})
+	if "delivery_pincode" in edits:
+		changes.append(
+			{
+				"field": "Delivery pincode",
+				"before": doc.custom_delivery_pincode or None,
+				"after": edits["delivery_pincode"] or None,
+			}
+		)
+	return changes
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_draft_quotation(quotation: str):
+	"""Finishes a draft left by the native "Create > Quotation" mapped-doc flow
+	(inquiry_api.make_quotation) from the staff app, instead of sending staff into Desk to
+	press Submit.
+
+	Re-prices every line from today's approved dealer price first (same _priced_items every
+	other entry point uses), so a draft can never go out at the stale/zero numbers it was
+	saved with -- a line with no approved price or no stock fails here with the same message
+	the Quotation Builder would give. It then submits WITHOUT dms_prevalidated, on purpose:
+	guard_native_submit still runs its address, catalog, discount-threshold and channel-
+	override checks, which _priced_items alone doesn't cover and which a submit-time hook
+	can only block, not route to Approvals.
+
+	Mirrors _create_quotation's last step: the source Inquiry becomes Quoted/linked -- only
+	if it is still Open, so submitting a draft late never overwrites an Inquiry that has
+	since moved on."""
+	_assert_can_manage_quotations()
+	doc = frappe.get_doc("Quotation", quotation)
+	if doc.docstatus != 0:
+		frappe.throw(_("Only a draft quotation can be submitted."), frappe.ValidationError)
+	if not doc.items:
+		frappe.throw(_("Add at least one line before submitting."), frappe.ValidationError)
+
+	items = _priced_items(doc.party_name, doc.custom_markup_pct or 0, _lines_from_items(doc.items))
+	doc.items = []
+	for item in items:
+		doc.append("items", item)
+	doc.save(ignore_permissions=True)
+	doc.submit()
+
+	if doc.custom_inquiry and frappe.db.get_value("Inquiry", doc.custom_inquiry, "status") == "Open":
+		frappe.db.set_value("Inquiry", doc.custom_inquiry, {"status": "Quoted", "linked_quotation": doc.name})
+
+	return _serialize(doc)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])
