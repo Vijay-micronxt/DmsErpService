@@ -36,23 +36,38 @@ def execute():
 	if "item" not in columns:
 		return  # already dropped from the parent table -- nothing left to migrate from
 
-	# duplicate_flag only ever existed on a handful of dev/test sites as a
-	# transient step of this same rebuild (added to the old parent doctype,
-	# then moved here to the child one before anything was ever committed) --
-	# a real site going straight from the last released schema to this one
-	# never had it on `tabInquiry` at all, so it's selected only when present
-	# rather than assumed, the same way the rebuild's own code never assumed
-	# it existed before adding it properly (see inquiry_item.json's own note).
-	has_duplicate_flag = "duplicate_flag" in columns
-	duplicate_flag_select = ", duplicate_flag" if has_duplicate_flag else ""
+	# Only `item` (checked above) and `status` are guaranteed on every site's old
+	# `tabInquiry`; every other legacy scalar column depends on which releases that
+	# site actually passed through, so each is selected only when present rather
+	# than assumed:
+	# - duplicate_flag only ever existed on a handful of dev/test sites as a transient
+	#   step of this same rebuild (see inquiry_item.json's own note).
+	# - preferred_batch_no was added to the parent by the ISS-2026-00712 release, so a
+	#   site that jumped from an older schema straight to the rebuild (tas-demo) never
+	#   had it -- selecting it unconditionally broke `bench migrate` there with
+	#   "Unknown column 'preferred_batch_no'", while pacific-inc (which had it) migrated.
+	# Every other column below is listed for the same reason: an older release may not
+	# have had it either, and a missing one just becomes an empty value on the new row.
+	optional = [
+		c
+		for c in (
+			"custom_requested_style",
+			"qty",
+			"entered_boxes",
+			"entered_qty",
+			"entered_uom",
+			"damaged_stock",
+			"preferred_batch_no",
+			"duplicate_flag",
+		)
+		if c in columns
+	]
+	select_cols = ", ".join(["name", "item", "status", *optional])
+	# `item` always exists (see above), so this is never empty.
+	conditions = [f"coalesce({c}, '') != ''" for c in ("item", "custom_requested_style") if c in columns]
 
 	rows = frappe.db.sql(
-		f"""
-		select name, item, custom_requested_style, qty, entered_boxes, entered_qty,
-			entered_uom, damaged_stock, preferred_batch_no, status{duplicate_flag_select}
-		from `tabInquiry`
-		where coalesce(item, '') != '' or coalesce(custom_requested_style, '') != ''
-		""",
+		f"select {select_cols} from `tabInquiry` where {' or '.join(conditions)}",
 		as_dict=True,
 	)
 
@@ -71,14 +86,14 @@ def execute():
 				"parentfield": "items",
 				"idx": 1,
 				"item": row.item,
-				"custom_requested_style": row.custom_requested_style,
-				"qty": row.qty,
-				"entered_boxes": row.entered_boxes,
-				"entered_qty": row.entered_qty,
-				"entered_uom": row.entered_uom,
-				"damaged_stock": row.damaged_stock,
+				"custom_requested_style": row.get("custom_requested_style"),
+				"qty": row.get("qty"),
+				"entered_boxes": row.get("entered_boxes"),
+				"entered_qty": row.get("entered_qty"),
+				"entered_uom": row.get("entered_uom"),
+				"damaged_stock": row.get("damaged_stock"),
 				"duplicate_flag": row.get("duplicate_flag") or 0,
-				"preferred_batch_no": row.preferred_batch_no,
+				"preferred_batch_no": row.get("preferred_batch_no"),
 				"availability_status": availability_status,
 			}
 		)
