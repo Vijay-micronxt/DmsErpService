@@ -75,7 +75,7 @@ from frappe.utils import cint, flt
 
 from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
-from dms_erp.sales.order_channel import DEALER_TYPES
+from dms_erp.sales.order_channel import is_valid_dealer_type
 from dms_erp.warehouse.utils import default_company
 
 SALES_WRITE_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -738,7 +738,7 @@ def set_dealer_salesperson(dealer: str, salesperson: str | None):
 
 
 def _validate_dealer_type(dealer_type: str | None):
-	if dealer_type and dealer_type not in DEALER_TYPES:
+	if dealer_type and not is_valid_dealer_type(dealer_type):
 		frappe.throw(_("Invalid dealer type: {0}").format(dealer_type), frappe.ValidationError)
 
 

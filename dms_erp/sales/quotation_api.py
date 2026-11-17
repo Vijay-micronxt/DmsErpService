@@ -53,8 +53,11 @@ from dms_erp.catalog.utils import (
 )
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
-from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
-from dms_erp.sales.setup import ORDER_CHANNELS
+from dms_erp.sales.order_channel import (
+	assert_valid_channel,
+	auto_classify_channel,
+	gate_channel_override,
+)
 from dms_erp.sales.utils import (
 	apply_tax_template,
 	assert_address_belongs_to,
@@ -607,8 +610,8 @@ def create_quotation(
 	default_channel = auto_classify_channel(dealer, lines)
 	if channel is None:
 		channel = default_channel
-	elif channel not in ORDER_CHANNELS:
-		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
+	else:
+		assert_valid_channel(channel)
 
 	create_kwargs = dict(
 		dealer=dealer,

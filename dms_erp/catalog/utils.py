@@ -65,7 +65,9 @@ def item_weight_per_box_kg(item_code: str) -> float | None:
 	"""BRD C.1.3: an item's standard weight — the fallback every transaction
 	document uses before a real batch (with its own possibly-different
 	custom_batch_weight_kg, see warehouse.utils.ensure_batch) is known."""
-	return frappe.get_cached_value("Item", item_code, "custom_weight_per_box_kg")
+	# The field defaults to 0 on an item nobody has weighed. 0 means "not set", not "weightless":
+	# returning it made every document total read "0 kg" instead of honestly showing no weight.
+	return frappe.get_cached_value("Item", item_code, "custom_weight_per_box_kg") or None
 
 
 def item_pieces_per_box(item_code: str) -> float | None:

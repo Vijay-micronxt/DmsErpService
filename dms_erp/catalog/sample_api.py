@@ -48,6 +48,11 @@ from frappe.utils import add_months, getdate, now_datetime, today
 from dms_erp.catalog.dealer_catalog_api import _set_product_visibility
 from dms_erp.pagination import clamp
 from dms_erp.qr_utils import qr_data_uri
+from dms_erp.sales.order_channel import (
+	default_channel,
+	non_retail_dealer_types,
+	retail_demand_channels,
+)
 from dms_erp.warehouse.utils import default_company, get_bay
 
 SAMPLE_REQUEST_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
@@ -105,11 +110,21 @@ def top_dealers(item: str | None = None, months: int = TOP_DEALER_WINDOW_MONTHS,
 		"si.docstatus = 1",
 		"si.posting_date >= %(since)s",
 		_type_condition("Sales"),
-		"ifnull(c.custom_dealer_type, '') not in ('Bulk', 'Project')",
+		# Dealer types pinned to a channel that isn't retail demand (Bulk, Project today) -- read
+		# from the Dealer Type / Order Channel masters, not written out here.
+		"ifnull(c.custom_dealer_type, '') not in %(non_retail_types)s",
 	]
 	if _has("custom_order_channel"):
-		conditions.append("ifnull(si.custom_order_channel, 'Retail') = 'Retail'")
-	params = {"since": add_months(today(), -int(months)), "limit": int(limit), "item": item}
+		# A missing channel (Tally-migrated invoices) counts as the default channel, as before.
+		conditions.append("ifnull(si.custom_order_channel, %(default_channel)s) in %(retail_channels)s")
+	params = {
+		"since": add_months(today(), -int(months)),
+		"limit": int(limit),
+		"item": item,
+		"non_retail_types": non_retail_dealer_types(),
+		"retail_channels": retail_demand_channels(),
+		"default_channel": default_channel(),
+	}
 	if item:
 		value_sql, item_join = "sum(sii.net_amount)", "inner join `tabSales Invoice Item` sii on sii.parent = si.name"
 		conditions.append("sii.item_code = %(item)s")

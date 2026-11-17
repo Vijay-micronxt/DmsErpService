@@ -27,18 +27,20 @@ equivalent for become Custom Fields:
   reloads the doc before touching any line.
 """
 
-import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 from dms_erp.catalog.utils import ORDER_UOMS
-from dms_erp.pricing.dealer_classification import DEALER_CLASSIFICATION_STANDARD, DEALER_CLASSIFICATIONS
-from dms_erp.sales.order_channel import DEALER_TYPES
+from dms_erp.pricing.dealer_classification import (
+	DEALER_CLASSIFICATION_STANDARD,
+	DEALER_CLASSIFICATIONS,
+)
+from dms_erp.sales.order_channel import seed_masters
 from dms_erp.setup.client_scripts import sync_client_scripts
 
 ORDER_STAGES = ["Confirmed", "Picking", "Ready to Dispatch", "Dispatched", "Delivered", "Cancelled"]
 ORDER_EVENT_STAGES = ["Created"] + ORDER_STAGES
 ORDER_SOURCE_TYPES = ["Inquiry", "Quotation", "Direct"]
-ORDER_CHANNELS = ["Retail", "Bulk", "Project"]
+DELIVERY_MODES = ["Our Transporter", "Dealer Own Vehicle"]
 
 CUSTOM_FIELDS = {
 	"Payment Terms Template": [
@@ -69,9 +71,9 @@ CUSTOM_FIELDS = {
 		{"fieldname": "custom_inquiry", "fieldtype": "Link", "label": "Source Inquiry", "options": "Inquiry", "insert_after": "custom_delivery_pincode"},
 		{
 			"fieldname": "custom_order_channel",
-			"fieldtype": "Select",
+			"fieldtype": "Link",
 			"label": "Channel",
-			"options": "\n".join(ORDER_CHANNELS),
+			"options": "Order Channel",
 			"default": "Retail",
 			"in_list_view": 1,
 			"in_standard_filter": 1,
@@ -121,7 +123,31 @@ CUSTOM_FIELDS = {
 			"allow_on_submit": 1,
 			"insert_after": "custom_vehicle",
 		},
-		{"fieldname": "dms_fulfillment_column_break", "fieldtype": "Column Break", "insert_after": "custom_driver_mobile"},
+		{
+			"fieldname": "custom_delivery_mode",
+			"fieldtype": "Select",
+			"label": "Who Carries It",
+			"options": "\n".join(["", *DELIVERY_MODES]),
+			"description": "Our transporter (picked from the Transporter master) or the dealer collecting with their own vehicle -- without this the order only ever knew a free-text vehicle number.",
+			"allow_on_submit": 1,
+			"insert_after": "custom_driver_mobile",
+		},
+		{
+			"fieldname": "custom_outward_transporter",
+			"fieldtype": "Link",
+			"options": "Transporter",
+			"label": "Outward Transporter",
+			"allow_on_submit": 1,
+			"insert_after": "custom_delivery_mode",
+		},
+		{
+			"fieldname": "custom_lr_no",
+			"fieldtype": "Data",
+			"label": "LR Number",
+			"allow_on_submit": 1,
+			"insert_after": "custom_outward_transporter",
+		},
+		{"fieldname": "dms_fulfillment_column_break", "fieldtype": "Column Break", "insert_after": "custom_lr_no"},
 		{"fieldname": "custom_source_type", "fieldtype": "Select", "label": "Source Type", "options": "\n".join(ORDER_SOURCE_TYPES), "insert_after": "dms_fulfillment_column_break"},
 		{"fieldname": "custom_source_ref", "fieldtype": "Data", "label": "Source Reference", "insert_after": "custom_source_type"},
 		{
@@ -134,9 +160,9 @@ CUSTOM_FIELDS = {
 		},
 		{
 			"fieldname": "custom_order_channel",
-			"fieldtype": "Select",
+			"fieldtype": "Link",
 			"label": "Channel",
-			"options": "\n".join(ORDER_CHANNELS),
+			"options": "Order Channel",
 			"default": "Retail",
 			"in_list_view": 1,
 			"in_standard_filter": 1,
@@ -239,9 +265,9 @@ CUSTOM_FIELDS = {
 	"Sales Invoice": [
 		{
 			"fieldname": "custom_order_channel",
-			"fieldtype": "Select",
+			"fieldtype": "Link",
 			"label": "Channel",
-			"options": "\n".join(ORDER_CHANNELS),
+			"options": "Order Channel",
 			"default": "Retail",
 			"in_list_view": 1,
 			"in_standard_filter": 1,
@@ -328,9 +354,9 @@ CUSTOM_FIELDS = {
 		},
 		{
 			"fieldname": "custom_dealer_type",
-			"fieldtype": "Select",
+			"fieldtype": "Link",
 			"label": "Dealer Type",
-			"options": "\n".join(DEALER_TYPES),
+			"options": "Dealer Type",
 			"default": "Retail",
 			"description": "BRD C.4.3 — drives the default order channel for this dealer's quotations/orders when the caller doesn't pass one explicitly. Manually set, never recomputed.",
 			"insert_after": "custom_dealer_classification",
@@ -633,5 +659,8 @@ frappe.ui.form.on('Quotation', {
 
 
 def setup_sales():
+	# The channel / dealer type masters first: the Link fields below point at them, and every
+	# existing document's channel ("Retail", "Bulk", "Project") must already be a valid entry.
+	seed_masters()
 	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
 	sync_client_scripts(CLIENT_SCRIPTS)

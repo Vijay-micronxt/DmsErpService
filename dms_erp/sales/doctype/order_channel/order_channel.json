@@ -1,0 +1,116 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:channel_name",
+ "creation": "2026-11-17 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "channel_name",
+  "enabled",
+  "section_break_rules",
+  "counts_as_retail_demand",
+  "is_default_channel",
+  "is_bulk_quantity_channel"
+ ],
+ "fields": [
+  {
+   "fieldname": "channel_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Channel",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "description": "Switch off to stop offering this channel on new quotations and orders. Documents already using it keep it.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_rules",
+   "fieldtype": "Section Break",
+   "label": "How the system treats this channel"
+  },
+  {
+   "default": "0",
+   "description": "BRD C.4.3 -- tick for retail-type sales: only these orders feed reorder suggestions, the demand forecast and the top-dealer / sample logic. Bulk and project orders are left out so one big order does not distort planning.",
+   "fieldname": "counts_as_retail_demand",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Counts as retail demand"
+  },
+  {
+   "default": "0",
+   "description": "The channel an ordinary order gets when nothing else decides it. Exactly one channel is the default; ticking this moves the tick off the previous one.",
+   "fieldname": "is_default_channel",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Default channel"
+  },
+  {
+   "default": "0",
+   "description": "The channel an order gets automatically when a line's quantity reaches its item's bulk threshold (set on the Series). At most one channel has this; ticking it moves the tick off the previous one.",
+   "fieldname": "is_bulk_quantity_channel",
+   "fieldtype": "Check",
+   "label": "Used when quantity reaches the bulk threshold"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sales",
+ "name": "Order Channel",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "DMS Sales"
+  },
+  {
+   "read": 1,
+   "role": "DMS Purchase"
+  },
+  {
+   "read": 1,
+   "role": "DMS Warehouse"
+  },
+  {
+   "read": 1,
+   "role": "DMS Finance"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
