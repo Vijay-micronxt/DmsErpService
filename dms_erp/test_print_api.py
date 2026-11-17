@@ -92,3 +92,36 @@ class TestPrintApi(FrappeTestCase):
 		frappe.set_user("Guest")
 		with self.assertRaises(frappe.PermissionError):
 			print_api.render_quotation_html("anything")
+
+	def test_dealer_price_list_prints_only_the_dealers_own_rate(self):
+		html = print_api.render_dealer_price_list_html(self.dealer)
+
+		self.assertIn("Price List", html)
+		self.assertIn("Prepared for", html)
+		self.assertIn("Print Test Dealer &amp; Sons", html)
+		# No "MRP" Price List on a fresh site, so no MRP column is invented.
+		self.assertNotIn("MRP / box", html)
+
+	def test_inquiry_prints_lines_and_total_weight(self):
+		inquiry = frappe.get_doc(
+			{
+				"doctype": "Inquiry",
+				"dealer": self.dealer,
+				"items": [{"item": self.item, "qty": 4}],
+				"remarks": "Needs <b>fast</b> delivery",
+			}
+		).insert(ignore_permissions=True)
+
+		html = print_api.render_inquiry_html(inquiry.name)
+
+		self.assertIn("Inquiry", html)
+		self.assertIn("PRINT-TEST-ITEM", html)
+		self.assertIn("100.0 kg", html)  # 4 boxes x 25 kg
+		self.assertIn("&lt;b&gt;fast", html)  # remarks escaped, not injected
+
+	def test_a_draft_delivery_note_or_invoice_is_not_printable(self):
+		for doctype, fn in (("Delivery Note", print_api.render_delivery_note_html), ("Sales Invoice", print_api.render_sales_invoice_html)):
+			draft = frappe.get_all(doctype, filters={"docstatus": 0}, limit=1, pluck="name")
+			if draft:
+				with self.assertRaises(frappe.DoesNotExistError):
+					fn(draft[0])
