@@ -1,0 +1,99 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:type_name",
+ "creation": "2026-11-17 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "type_name",
+  "enabled",
+  "section_break_rules",
+  "forces_channel"
+ ],
+ "fields": [
+  {
+   "fieldname": "type_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Dealer Type",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "description": "Switch off to stop offering this type on the dealer form. Dealers already of this type keep it.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_rules",
+   "fieldtype": "Section Break",
+   "label": "Effect on orders"
+  },
+  {
+   "description": "BRD C.4.3 -- when set, every quotation and order for a dealer of this type defaults to this channel whatever the quantity (a Bulk dealer's small order is still bulk). Leave empty to decide by quantity instead.",
+   "fieldname": "forces_channel",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Always uses channel",
+   "options": "Order Channel"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sales",
+ "name": "Dealer Type",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "DMS Sales"
+  },
+  {
+   "read": 1,
+   "role": "DMS Purchase"
+  },
+  {
+   "read": 1,
+   "role": "DMS Warehouse"
+  },
+  {
+   "read": 1,
+   "role": "DMS Finance"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

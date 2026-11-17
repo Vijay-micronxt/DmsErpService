@@ -18,6 +18,7 @@ import frappe
 from frappe import _
 
 from dms_erp.finance.payment_api import PAYMENT_READ_ROLES
+from dms_erp.sales.delivery_note_api import DELIVERY_NOTE_READ_ROLES
 from dms_erp.sales.invoice_api import INVOICE_READ_ROLES
 
 STAFF_ROLES = {"DMS Sales", "DMS Purchase", "DMS Warehouse", "DMS Management", "DMS Finance", "System Manager"}
@@ -64,8 +65,9 @@ SOURCES = [
 	 "search": ["name", "party", "party_name", "reference_no", "tally_voucher_no"]},
 	{"doctype": "Journal Entry", "label": "Journal Entries", "kind": "desk", "title": "name", "subtitle": ["title", "posting_date"],
 	 "search": ["name", "title", "cheque_no", "tally_voucher_no"]},
-	{"doctype": "Delivery Note", "label": "Delivery Notes", "kind": "desk", "title": "name", "subtitle": ["customer_name", "posting_date"],
-	 "search": ["name", "customer", "customer_name", "tally_voucher_no", "tally_lr_no", "tally_vehicle_no"]},
+	{"doctype": "Delivery Note", "label": "Delivery Notes", "kind": "app", "roles": DELIVERY_NOTE_READ_ROLES, "title": "name",
+	 "subtitle": ["customer_name", "posting_date"],
+	 "search": ["name", "customer", "customer_name", "vehicle_no", "lr_no", "transporter_name", "tally_voucher_no", "tally_lr_no", "tally_vehicle_no"]},
 ]
 
 

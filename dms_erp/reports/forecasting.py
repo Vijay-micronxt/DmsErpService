@@ -16,6 +16,8 @@ one is computed.
 import frappe
 from frappe.utils import add_days, today
 
+from dms_erp.sales.order_channel import retail_demand_channels
+
 FORECAST_HISTORY_WEEKS = 12
 
 
@@ -30,10 +32,10 @@ def demand_forecast(weeks_ahead: int = 4):
 		select soi.item_code as item, sum(soi.qty) as qty
 		from `tabSales Order Item` soi
 		inner join `tabSales Order` so on so.name = soi.parent
-		where so.docstatus = 1 and so.transaction_date >= %s and so.custom_order_channel = 'Retail'
+		where so.docstatus = 1 and so.transaction_date >= %s and so.custom_order_channel in %s
 		group by soi.item_code
 		""",
-		(since,),
+		(since, retail_demand_channels()),
 		as_dict=True,
 	)
 

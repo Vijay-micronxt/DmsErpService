@@ -30,9 +30,13 @@ from dms_erp.catalog.utils import (
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.advance import advance_status_for_order
-from dms_erp.sales.order_channel import auto_classify_channel, gate_channel_override
+from dms_erp.sales.order_channel import (
+	assert_valid_channel,
+	auto_classify_channel,
+	gate_channel_override,
+)
 from dms_erp.sales.reservation import reservation_summary
-from dms_erp.sales.setup import ORDER_CHANNELS, ORDER_STAGES
+from dms_erp.sales.setup import DELIVERY_MODES, ORDER_STAGES
 from dms_erp.sales.utils import (
 	apply_tax_template,
 	assert_address_belongs_to,
@@ -121,6 +125,9 @@ def _serialize(doc) -> dict:
 		"expectedDispatch": doc.delivery_date,
 		"vehicle": doc.custom_vehicle,
 		"driverMobile": doc.get("custom_driver_mobile"),
+		"deliveryMode": doc.get("custom_delivery_mode"),
+		"transporter": doc.get("custom_outward_transporter"),
+		"lrNo": doc.get("custom_lr_no"),
 		# BRD C.3.4 — interim manual gate ahead of VALS API. See advance_order_stage.
 		"advanceConfirmed": bool(doc.custom_advance_confirmed),
 		"advance": advance_status_for_order(doc),
@@ -291,8 +298,7 @@ def _serialize_line(row, qty_invoiced: float = 0) -> dict:
 def finalize_new_order(so, source_type: str, source_ref: str | None, channel: str = "Retail") -> dict:
 	"""Insert + submit a freshly-built (unsaved) Sales Order doc, stamping Pacific's
 	fulfillment-stage bookkeeping. Shared by create_order and quotation_api.convert_to_order."""
-	if channel not in ORDER_CHANNELS:
-		frappe.throw(_("Invalid channel: {0}").format(channel), frappe.ValidationError)
+	assert_valid_channel(channel)
 
 	so.custom_source_type = source_type
 	so.custom_source_ref = source_ref
@@ -848,7 +854,14 @@ def update_order_details(order: str, expected_dispatch=None, customer_po: str | 
 
 @frappe.whitelist(methods=["POST", "PUT"])
 def advance_order_stage(
-	order: str, next_stage: str, note: str | None = None, vehicle: str | None = None, driver_mobile: str | None = None
+	order: str,
+	next_stage: str,
+	note: str | None = None,
+	vehicle: str | None = None,
+	driver_mobile: str | None = None,
+	delivery_mode: str | None = None,
+	transporter: str | None = None,
+	lr_no: str | None = None,
 ):
 	"""Moving to "Cancelled" is BRD C.11 trigger #5 (amend/cancel of a submitted
 	document is audit-locked) -- an unauthorized caller gets
@@ -861,7 +874,13 @@ def advance_order_stage(
 	`vehicle`/`driver_mobile` (ISS-2026-00630) are optional on every forward step,
 	not just "Dispatched" -- the actual vehicle/driver is sometimes known earlier
 	(e.g. at Ready to Dispatch) and whoever's progressing the order can record it
-	as soon as it's known rather than being forced to wait for a specific stage."""
+	as soon as it's known rather than being forced to wait for a specific stage.
+
+	`delivery_mode`/`transporter`/`lr_no` say *who* is carrying it: "Our Transporter"
+	(a Transporter from the master, and one of that transporter's own vehicles) or
+	"Dealer Own Vehicle" (a typed vehicle number, no transporter). They're optional
+	here -- this endpoint predates them and other callers don't send them -- but the
+	combination is checked when given, and the staff app's dispatch step requires it."""
 	_assert_can_manage_orders()
 
 	if next_stage not in ORDER_STAGES:
@@ -898,6 +917,11 @@ def advance_order_stage(
 			applier_action="cancel",
 		)
 
+	if not is_cancel:
+		# Before anything is written, like the picked check below: a bad vehicle should
+		# leave the order as it was.
+		vehicle = _check_transport(doc, delivery_mode, transporter, vehicle)
+
 	if next_stage == "Dispatched":
 		# Validated before anything is written: a blocked dispatch should leave the
 		# order exactly as it was, not half-advanced with no stock movement to match.
@@ -908,6 +932,12 @@ def advance_order_stage(
 		doc.custom_vehicle = vehicle
 	if driver_mobile:
 		doc.custom_driver_mobile = driver_mobile
+	if delivery_mode:
+		doc.custom_delivery_mode = delivery_mode
+		# Switching to the dealer's own vehicle must not leave a stale transporter behind.
+		doc.custom_outward_transporter = transporter if delivery_mode == "Our Transporter" else None
+	if lr_no:
+		doc.custom_lr_no = lr_no.strip()
 	doc.append("custom_stage_history", {"stage": next_stage, "at": now_datetime(), "by": frappe.session.user, "note": note})
 	doc.save(ignore_permissions=True)
 
@@ -919,6 +949,54 @@ def advance_order_stage(
 		_create_delivery_note(order)
 
 	return _serialize(doc)
+
+
+def _check_transport(doc, delivery_mode: str | None, transporter: str | None, vehicle: str | None) -> str | None:
+	"""Returns the vehicle number to store (trimmed, upper-cased: a lorry number typed in
+	lower case would not match the master's or an e-Way Bill's). Nothing given means
+	nothing to check -- an order can still be moved forward before the carrier is known."""
+	vehicle = (vehicle or "").strip().upper() or None
+	if not delivery_mode:
+		if transporter:
+			frappe.throw(_("Say who carries it (Our Transporter or Dealer Own Vehicle) before naming a transporter."), frappe.ValidationError)
+		return vehicle
+	if delivery_mode not in DELIVERY_MODES:
+		frappe.throw(_("Invalid delivery mode: {0}").format(delivery_mode), frappe.ValidationError)
+	if delivery_mode == "Dealer Own Vehicle":
+		if transporter:
+			frappe.throw(_("A dealer's own vehicle has no transporter."), frappe.ValidationError)
+		if not vehicle and not doc.get("custom_vehicle"):
+			frappe.throw(_("Enter the dealer's vehicle number."), frappe.ValidationError)
+		return vehicle
+	if not transporter or not frappe.db.exists("Transporter", transporter):
+		frappe.throw(_("Pick the transporter from the Transporter list."), frappe.ValidationError)
+	if not vehicle:
+		frappe.throw(_("Pick the transporter's vehicle."), frappe.ValidationError)
+	own = {
+		(v or "").strip().upper()
+		for v in frappe.get_all("Transporter Vehicle", filters={"parent": transporter}, pluck="vehicle_number")
+	}
+	if vehicle not in own:
+		frappe.throw(_("Vehicle {0} is not on {1}'s vehicle list.").format(vehicle, transporter), frappe.ValidationError)
+	return vehicle
+
+
+def _stamp_transport(target, so) -> None:
+	"""Copies who-carried-it from the Sales Order onto its Delivery Note / Sales Invoice.
+	vehicle_no / lr_no / transporter_name are the core fields india_compliance's e-Way Bill
+	reads; the tally_* twins are what the invoice list, search and the Tally push already
+	show, so the carrier appears there without a second place to look."""
+	vehicle, lr_no = so.get("custom_vehicle"), so.get("custom_lr_no")
+	mode = so.get("custom_delivery_mode")
+	name = so.get("custom_outward_transporter") or ("Dealer's own vehicle" if mode == "Dealer Own Vehicle" else None)
+	if not (vehicle or lr_no or name):
+		return
+	target.vehicle_no = vehicle
+	target.lr_no = lr_no
+	target.transporter_name = name
+	target.tally_vehicle_no = vehicle
+	target.tally_lr_no = lr_no
+	target.tally_transporter = name
 
 
 def _assert_lines_ready_for_delivery(doc) -> None:
@@ -1044,6 +1122,7 @@ def _create_delivery_note(order: str) -> dict:
 			split_fields["batch_no"] = batch
 			dn.append("items", split_fields)
 
+	_stamp_transport(dn, doc)
 	dn.run_method("calculate_taxes_and_totals")
 	dn.insert(ignore_permissions=True)
 	dn.submit()
@@ -1198,6 +1277,7 @@ def create_sales_invoice(order: str, qty_by_item: dict | None = None):
 	invoice.custom_order_channel = doc.custom_order_channel
 	invoice.customer_address = doc.customer_address
 	invoice.shipping_address_name = doc.shipping_address_name
+	_stamp_transport(invoice, doc)
 	invoice.insert(ignore_permissions=True)
 	invoice.submit()
 
@@ -1266,6 +1346,8 @@ def create_consolidated_sales_invoice(orders: list[str]):
 	invoice.custom_order_channel = base.custom_order_channel
 	invoice.customer_address = base.customer_address
 	invoice.shipping_address_name = base.shipping_address_name
+	# One invoice, one carrier field: the first clubbed order that has one wins, like the addresses.
+	_stamp_transport(invoice, next((d for d in docs if d.get("custom_vehicle") or d.get("custom_lr_no") or d.get("custom_outward_transporter")), base))
 	for d in docs:
 		invoice.append(
 			"custom_clubbed_orders",

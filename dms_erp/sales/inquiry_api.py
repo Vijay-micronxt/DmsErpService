@@ -774,6 +774,51 @@ def create_inquiry(
 	)
 
 
+@frappe.whitelist(methods=["POST"])
+def create_inquiry_with_items(
+	dealer: str,
+	items: list[dict],
+	source: str,
+	expected_delivery=None,
+	follow_up_date=None,
+	assigned_to: str | None = None,
+	remarks: str | None = None,
+	contact_name: str | None = None,
+	contact_phone: str | None = None,
+):
+	"""One Inquiry holding several items -- what a salesperson logging a dealer's whole
+	call needs, instead of one Inquiry per item. A thin staff-facing wrapper over
+	_create_inquiry_multi (which already validates every row before inserting any of them).
+	`items` is `[{"item": code, "qty": boxes}, ...]`; the same item twice is refused rather than
+	silently merged, since two rows for one item on one Inquiry would double-count its demand."""
+	_assert_can_manage_inquiries()
+
+	cleaned, seen = [], set()
+	for entry in items or []:
+		code = (entry.get("item") or "").strip()
+		qty = float(entry.get("qty") or 0)
+		if not code:
+			frappe.throw(_("Every row needs an item."), frappe.ValidationError)
+		if qty <= 0:
+			frappe.throw(_("{0}: quantity must be greater than zero.").format(code), frappe.ValidationError)
+		if code in seen:
+			frappe.throw(_("{0} is listed more than once -- combine the quantities into one row.").format(code), frappe.ValidationError)
+		seen.add(code)
+		cleaned.append({"item": code, "qty": qty})
+
+	return _create_inquiry_multi(
+		dealer=dealer,
+		items=cleaned,
+		source=source,
+		expected_delivery=expected_delivery,
+		follow_up_date=follow_up_date,
+		assigned_to=assigned_to,
+		remarks=remarks,
+		contact_name=contact_name,
+		contact_phone=contact_phone,
+	)
+
+
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_inquiry(inquiry: str, patch: dict):
 	_assert_can_manage_inquiries()
