@@ -40,7 +40,7 @@ import frappe
 from frappe import _
 
 from dms_erp.catalog.utils import item_weight_per_box_kg
-from dms_erp.pagination import clamp
+from dms_erp.pagination import clamp, date_range_filter
 from dms_erp.purchase import routing_client
 from dms_erp.purchase.po_api import list_materials_ready_for_pickup, remaining_ready_qty_for_line
 from dms_erp.warehouse import inward_api
@@ -218,13 +218,29 @@ def _serialize(doc) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_route_plans(status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+def list_route_plans(
+	status: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
+	"""One page of route plans: status, scheduled-date range and search (plan number, transporter or
+	vehicle) all applied here."""
 	limit, offset = clamp(limit, offset)
 	filters = {}
 	if status:
 		filters["status"] = status
-	if search:
-		filters["name"] = ["like", f"%{search}%"]
+	date_range_filter(filters, "scheduled_date", from_date, to_date)
+	if search and search.strip():
+		pattern = ["like", f"%{search.strip()}%"]
+		matches = (
+			set(frappe.get_all("Route Plan", filters={**filters, "name": pattern}, pluck="name"))
+			| set(frappe.get_all("Route Plan", filters={**filters, "transporter": pattern}, pluck="name"))
+			| set(frappe.get_all("Route Plan", filters={**filters, "transporter_vehicle": pattern}, pluck="name"))
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Route Plan", filters=filters)
 	names = frappe.get_all("Route Plan", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit)
 	return {

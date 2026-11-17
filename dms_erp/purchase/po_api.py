@@ -17,7 +17,7 @@ from frappe import _
 from frappe.utils import add_days, getdate, today
 
 from dms_erp.catalog.utils import SQFT_TO_SQM, item_default_supplier, item_weight_per_box_kg
-from dms_erp.pagination import clamp
+from dms_erp.pagination import clamp, date_range_filter
 from dms_erp.qr_utils import qr_data_uri
 from dms_erp.warehouse.allocation_api import _BOX_STICKER_CSS
 from dms_erp.warehouse.bay_api import BAY_WRITE_ROLES
@@ -84,9 +84,32 @@ def _serialize(doc) -> dict:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_purchase_orders(search: str | None = None, limit: int = 20, offset: int = 0):
+def list_purchase_orders(
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	payment_status: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
+	"""One page of purchase orders with every filter applied here: payment status (Paid / Unpaid,
+	where a PO with none recorded counts as Unpaid), the order date range, and search over the PO
+	number, the supplier (id or name) and any item on it."""
 	limit, offset = clamp(limit, offset)
-	filters = {"name": ["like", f"%{search}%"]} if search else {}
+	filters = {}
+	if payment_status:
+		filters["custom_payment_status"] = payment_status if payment_status == "Paid" else ["in", ["Unpaid", ""]]
+	date_range_filter(filters, "transaction_date", from_date, to_date)
+	if search and search.strip():
+		pattern = ["like", f"%{search.strip()}%"]
+		matches = (
+			set(frappe.get_all("Purchase Order", filters={**filters, "name": pattern}, pluck="name"))
+			| set(frappe.get_all("Purchase Order", filters={**filters, "supplier": pattern}, pluck="name"))
+			| set(frappe.get_all("Purchase Order", filters={**filters, "supplier_name": pattern}, pluck="name"))
+			| set(frappe.get_all("Purchase Order Item", filters={"parenttype": "Purchase Order", "item_code": pattern}, pluck="parent"))
+			| set(frappe.get_all("Purchase Order Item", filters={"parenttype": "Purchase Order", "item_name": pattern}, pluck="parent"))
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Purchase Order", filters=filters)
 	names = frappe.get_all(
 		"Purchase Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

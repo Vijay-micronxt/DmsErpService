@@ -35,7 +35,7 @@ import math
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, today
+from frappe.utils import add_days, sbool, today
 
 from dms_erp.catalog.utils import is_reorderable, status_label
 from dms_erp.sales.order_channel import retail_demand_channels
@@ -198,12 +198,23 @@ def _last_purchase_dates() -> dict[str, str]:
 	return {r.item: r.last_date for r in rows}
 
 
+# Above this many codes, a batched helper reads the whole table instead of sending the codes back as
+# an IN list (reorder_suggestions asks about every item on the site).
+_WHOLE_MASTER = 500
+
+
 def _bulk_stock_for_items(item_codes: list[str]) -> dict[str, float]:
 	"""Same figure as total_stock_for_item, for every item in one query -- calling
 	that per item (one Bin query each) is the dominant cost of reorder_suggestions
 	across the full item master (used by the Purchase dashboard and reorder report)."""
 	if not item_codes:
 		return {}
+	if len(item_codes) > _WHOLE_MASTER:
+		# Asked for (nearly) every item: an IN list of thousands of codes only slows the query down
+		# and filters nothing. Same figures; extra keys dropped so the result is exactly as before.
+		wanted = set(item_codes)
+		rows = frappe.db.sql("select item_code, sum(actual_qty) as qty from `tabBin` group by item_code", as_dict=True)
+		return {r.item_code: float(r.qty or 0) for r in rows if r.item_code in wanted}
 	rows = frappe.db.sql(
 		"select item_code, sum(actual_qty) as qty from `tabBin` where item_code in %(items)s group by item_code",
 		{"items": item_codes},
@@ -218,7 +229,8 @@ def _bulk_resolve_moq(item_codes: list[str], default_supplier_by_item: dict[str,
 	DMS Purchase Settings isn't Redis-cached, so calling it once per item (most items
 	have neither an item- nor supplier-level MOQ, so every one of them falls through
 	to that query) was a real, uncached database round trip per item."""
-	items = {i.name: i.custom_moq for i in frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_moq"])}
+	item_filters = {"name": ["in", item_codes]} if len(item_codes) <= _WHOLE_MASTER else {}
+	items = {i.name: i.custom_moq for i in frappe.get_all("Item", filters=item_filters, fields=["name", "custom_moq"])}
 	suppliers = {s for s in default_supplier_by_item.values() if s}
 	supplier_moq = (
 		{s.name: s.custom_moq for s in frappe.get_all("Supplier", filters={"name": ["in", list(suppliers)]}, fields=["name", "custom_moq"])}
@@ -239,7 +251,13 @@ def _bulk_default_supplier(item_codes: list[str]) -> dict[str, str | None]:
 	Series' supplier), batched -- called twice per item in reorder_suggestions, so a
 	per-item get_cached_value round trip there means two cache hits per item for
 	every item in the master, not one real query; this makes it one query each way."""
-	items = frappe.get_all("Item", filters={"name": ["in", item_codes]}, fields=["name", "custom_default_supplier", "custom_series_ref"])
+	wanted = set(item_codes)
+	items = frappe.get_all(
+		"Item",
+		filters={"name": ["in", item_codes]} if len(item_codes) <= _WHOLE_MASTER else {},
+		fields=["name", "custom_default_supplier", "custom_series_ref"],
+	)
+	items = [i for i in items if i.name in wanted]
 	series_refs = {i.custom_series_ref for i in items if not i.custom_default_supplier and i.custom_series_ref}
 	supplier_by_series = (
 		{s.name: s.supplier for s in frappe.get_all("Product Series", filters={"name": ["in", list(series_refs)]}, fields=["name", "supplier"])}
@@ -253,7 +271,12 @@ def _bulk_default_supplier(item_codes: list[str]) -> dict[str, str | None]:
 
 
 @frappe.whitelist(methods=["GET"])
-def reorder_suggestions():
+def reorder_suggestions(include_healthy: bool | int | str = True):
+	"""Every item with its reorder suggestion. `include_healthy=0` leaves out the Healthy rows --
+	on a migrated catalog that is ~98% of them (4,242 of 4,340), none with a suggested quantity, and
+	they were ~2.5 MB of JSON on every visit to Purchase Requirements. Defaults to True so every other
+	caller (reports, dashboard, reorder plans) gets exactly what it always did."""
+	include_healthy = sbool(include_healthy)
 	items = frappe.get_all(
 		"Item", fields=["name", "custom_discontinuation_status", "lead_time_days", "custom_moq", "custom_reorder_frequency"]
 	)
@@ -287,6 +310,8 @@ def reorder_suggestions():
 		)
 		for item in items
 	]
+	if not include_healthy:
+		suggestions = [s for s in suggestions if s["urgency"] != "Healthy"]
 	rank = {u: i for i, u in enumerate(URGENCY_STYLES_ORDER)}
 	suggestions.sort(key=lambda s: rank[s["urgency"]])
 	return suggestions

@@ -39,7 +39,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, getdate, today
+from frappe.utils import add_days, flt, getdate, sbool, today
 
 from dms_erp.catalog.dealer_catalog_api import is_visible
 from dms_erp.catalog.utils import (
@@ -173,10 +173,39 @@ def _typed_rate(item: str, line: dict, discount_pct: float) -> float | None:
 	return round(rate, 2)
 
 
-def _priced_items(dealer: str, markup_pct: float, lines: list[dict]) -> list[dict]:
+def _priced_items(dealer: str, markup_pct: float, lines: list[dict], lenient: bool = False) -> list[dict]:
+	"""`lenient` is for saving a DRAFT: the catalog, sellability, price and stock checks are skipped
+	and an item with no approved price is saved at 0. Those same checks run in full, with the same
+	messages, when the draft is submitted (submit_draft_quotation re-prices through here without
+	`lenient`), so nothing unchecked can ever become a submitted quotation."""
 	items = []
 	for line in lines:
 		item = line["item"]
+		if lenient:
+			dealer_price = get_price_for_dealer(item, dealer) or 0
+			discount_pct = float(line.get("discount_percentage") or 0)
+			if not 0 <= discount_pct <= 100:
+				frappe.throw(_("Discount for {0} must be between 0 and 100%.").format(item), frappe.ValidationError)
+			price_list_rate = round(dealer_price * (1 + float(markup_pct) / 100))
+			rate = round(price_list_rate * (1 - discount_pct / 100))
+			typed_rate = _typed_rate(item, line, discount_pct)
+			if typed_rate is not None:
+				rate = typed_rate
+			items.append(
+				{
+					"item_code": item,
+					"qty": line["qty"],
+					"price_list_rate": price_list_rate,
+					"discount_percentage": discount_pct,
+					"rate": rate,
+					"custom_delivery_date": line.get("delivery_date"),
+					"custom_entered_qty": line.get("entered_qty"),
+					"custom_entered_uom": line.get("entered_uom"),
+					"custom_damaged_stock": bool(line.get("damaged_stock")),
+					"custom_preferred_batch_no": line.get("preferred_batch_no") or None,
+				}
+			)
+			continue
 		if not is_visible(dealer, item):
 			frappe.throw(_("{0} is not in this dealer's assigned catalog.").format(item), frappe.PermissionError)
 		status = frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"
@@ -361,16 +390,61 @@ def _amend_with_lines(
 	return _serialize(amended)
 
 
+# What the Quotations screen's Status filter offers. "Open" is ERPNext's name for a submitted
+# quotation (the staff app shows it as "Submitted"). Cancelled ones are never listed.
+QUOTATION_LIST_STATUSES = ["Draft", "Open", "Partially Ordered", "Ordered", "Lost", "Expired"]
+
+
 @frappe.whitelist(methods=["GET"])
-def list_quotations(dealer: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0):
+def list_quotations(
+	dealer: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	status: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
+	"""One page of quotations, with every filter the screen offers applied here (status, date range,
+	search), so a filter reaches the whole history and "Load more" continues that same filtered list.
+	`search` matches the quotation number, the dealer (id or name) and any item on it. Dates are the
+	quotation date."""
 	# Excludes cancelled quotations — an edited (Phase 12 amended) quotation leaves
 	# its pre-edit version behind as docstatus=2, which is history, not a live document.
 	limit, offset = clamp(limit, offset)
 	filters = {"quotation_to": "Customer", "docstatus": ["!=", 2]}
 	if dealer:
 		filters["party_name"] = dealer
-	if search:
-		filters["name"] = ["like", f"%{search}%"]
+	if status:
+		filters["status"] = status
+	if from_date and to_date:
+		filters["transaction_date"] = ["between", [from_date, to_date]]
+	elif from_date:
+		filters["transaction_date"] = [">=", from_date]
+	elif to_date:
+		filters["transaction_date"] = ["<=", to_date]
+	if search and search.strip():
+		pattern = ["like", f"%{search.strip()}%"]
+		matches = (
+			set(frappe.get_all("Quotation", filters={**filters, "name": pattern}, pluck="name"))
+			| set(frappe.get_all("Quotation", filters={**filters, "party_name": pattern}, pluck="name"))
+			| set(frappe.get_all("Quotation", filters={**filters, "customer_name": pattern}, pluck="name"))
+			| set(
+				frappe.get_all(
+					"Quotation Item",
+					filters={"parenttype": "Quotation", "item_code": pattern},
+					pluck="parent",
+				)
+			)
+			| set(
+				frappe.get_all(
+					"Quotation Item",
+					filters={"parenttype": "Quotation", "item_name": pattern},
+					pluck="parent",
+				)
+			)
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Quotation", filters=filters)
 	names = frappe.get_all(
 		"Quotation", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
@@ -547,8 +621,15 @@ def create_quotation(
 	inquiries: list[str] | None = None,
 	channel: str | None = None,
 	taxes_and_charges: str | None = None,
+	save_as_draft: bool = False,
 ):
-	"""Each line in `lines` may carry `discount_percentage` (0-100) and/or
+	"""`save_as_draft` saves the quotation without submitting it: still editable (lines, markup,
+	freight, tax, dates are all changed in place while it is a draft) and not yet visible to the
+	dealer as an issued quotation. It skips the pricing, catalog, stock and approval-gate checks
+	on purpose -- every one of them runs when the draft is submitted (submit_draft_quotation),
+	which is where the audit-locked overrides are enforced.
+
+	Each line in `lines` may carry `discount_percentage` (0-100) and/or
 	`delivery_date` -- see _priced_items. `taxes_and_charges` names an existing
 	Sales Taxes and Charges Template; see sales.utils.apply_tax_template. Both
 	carry forward automatically into the resulting Sales Order on
@@ -627,6 +708,9 @@ def create_quotation(
 		taxes_and_charges=taxes_and_charges,
 	)
 
+	if sbool(save_as_draft):
+		return _create_quotation(**create_kwargs, draft=True)
+
 	def _create_after_discount_gate(**kwargs):
 		# BRD C.7.3/C.11#4: a discount above DMS Sales Settings.
 		# discount_approval_threshold_pct is audit-locked -- 0 by default (see
@@ -664,13 +748,16 @@ def _create_quotation(
 	inquiries: list[str] | None = None,
 	channel: str = "Retail",
 	taxes_and_charges: str | None = None,
+	draft: bool = False,
 ) -> dict:
 	"""Unguarded core of create_quotation -- `channel` here is always already
 	resolved (never None) and already past the audit-locked-override gate. Also
 	called directly by approvals.api's Channel-Override applier once Management
 	approves a previously-queued override request: replaying this function IS the
-	gate's own resolution, so it must never call gate_channel_override itself."""
-	items = _priced_items(dealer, markup_pct, lines)
+	gate's own resolution, so it must never call gate_channel_override itself.
+
+	`draft` inserts the document and stops there (see create_quotation's `save_as_draft`)."""
+	items = _priced_items(dealer, markup_pct, lines, lenient=draft)
 
 	doc = frappe.get_doc(
 		{
@@ -693,6 +780,8 @@ def _create_quotation(
 	apply_tax_template(doc, resolve_tax_template_arg(dealer, taxes_and_charges))
 	doc.insert(ignore_permissions=True)
 	clear_unrequested_default_tax(doc)
+	if draft:
+		return _serialize(doc)
 	doc.flags.dms_prevalidated = True
 	doc.submit()
 
@@ -896,6 +985,54 @@ def _describe_detail_edits(doc, edits: dict) -> str:
 	if "delivery_pincode" in edits:
 		parts.append(f"delivery pincode {doc.custom_delivery_pincode or '-'} -> {edits['delivery_pincode'] or '-'}")
 	return ", ".join(parts)
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_draft_quotation(
+	quotation: str,
+	lines: list[dict],
+	markup_pct: float,
+	freight: float = 0,
+	delivery_pincode: str | None = None,
+	validity_days: int = 7,
+	taxes_and_charges: str | None = None,
+	channel: str | None = None,
+):
+	"""Saves the whole draft in place from the Quotation Builder: every line, the markup, freight,
+	pincode, validity, tax template and channel. This is what reopening a draft in the builder
+	and pressing Save draft does -- the counterpart of create_quotation(save_as_draft=True).
+
+	Same rule as saving a new draft: no pricing, stock, catalog or approval checks here; they all
+	run, with their usual messages, when the draft is submitted (submit_draft_quotation). A
+	submitted quotation can't be changed this way -- that is the amend path with its approval gate."""
+	_assert_can_manage_quotations()
+	doc = frappe.get_doc("Quotation", quotation)
+	if doc.docstatus != 0:
+		frappe.throw(_("Only a draft quotation can be saved this way."), frappe.ValidationError)
+	if not lines:
+		frappe.throw(_("At least one line is required."), frappe.ValidationError)
+	lines = normalize_order_line_uoms(lines)
+	if channel:
+		assert_valid_channel(channel)
+		doc.custom_order_channel = channel
+
+	items = _priced_items(doc.party_name, markup_pct, lines, lenient=True)
+	doc.custom_markup_pct = markup_pct
+	_apply_detail_edits(
+		doc,
+		{
+			"freight": freight,
+			"delivery_pincode": delivery_pincode,
+			"valid_till": add_days(today(), int(validity_days)),
+			"taxes_and_charges": resolve_tax_template_arg(doc.party_name, taxes_and_charges),
+		},
+	)
+	doc.items = []
+	for item in items:
+		doc.append("items", item)
+	doc.save(ignore_permissions=True)
+	clear_unrequested_default_tax(doc)
+	return _serialize(doc)
 
 
 @frappe.whitelist(methods=["POST", "PUT"])

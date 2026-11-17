@@ -15,7 +15,7 @@ from frappe.utils import getdate, today
 from dms_erp.catalog.utils import is_sellable, status_label
 from dms_erp.purchase.reorder_api import SALES_VELOCITY_WINDOW_DAYS, sales_velocity_by_item
 from dms_erp.warehouse.bay_api import list_all_bays
-from dms_erp.warehouse.utils import list_stock_lots, total_stock_for_item
+from dms_erp.warehouse.utils import list_stock_lots_cached, total_stock_for_item
 
 DISPLAY_BAY_TYPE = "display"
 # The reorder engine's old flat 100-box safety floor, kept here as this report's own
@@ -38,8 +38,11 @@ def bay_occupancy_report(warehouse: str | None = None, bay_type: str | None = No
 	if bay_type:
 		rows = [r for r in rows if r["type"] == bay_type]
 
-	total_capacity = sum(r["capacityBoxes"] or 0 for r in rows)
-	total_occupied = sum(r["occupiedBoxes"] or 0 for r in rows)
+	# Only bays that have a capacity: a bay with stock but no capacity set would add boxes to
+	# the numerator with nothing in the denominator and push the average over 100%.
+	sized = [r for r in rows if r["capacityBoxes"]]
+	total_capacity = sum(r["capacityBoxes"] for r in sized)
+	total_occupied = sum(r["occupiedBoxes"] or 0 for r in sized)
 	return {
 		"rows": rows,
 		"summary": {
@@ -61,7 +64,7 @@ def visual_stock_balance(warehouse: str | None = None):
 		bays = [b for b in bays if b["warehouse"] == warehouse]
 
 	lots_by_bay: dict[str, list] = {}
-	for lot in list_stock_lots():
+	for lot in list_stock_lots_cached():
 		lots_by_bay.setdefault(lot["bayId"], []).append(lot)
 
 	return [{**bay, "lots": lots_by_bay.get(bay["id"], [])} for bay in bays]
@@ -77,7 +80,7 @@ def stock_clearance_suggestions():
 	velocity = sales_velocity_by_item()
 
 	oldest_by_item: dict = {}
-	for lot in list_stock_lots():
+	for lot in list_stock_lots_cached():
 		stored_at = getdate(lot["storedAt"])
 		if lot["itemCode"] not in oldest_by_item or stored_at < oldest_by_item[lot["itemCode"]]:
 			oldest_by_item[lot["itemCode"]] = stored_at
@@ -128,7 +131,7 @@ def display_replacement_suggestions():
 		return []
 
 	velocity = sales_velocity_by_item()
-	displayed_lots = [l for l in list_stock_lots() if l["bayId"] in display_bay_ids]
+	displayed_lots = [l for l in list_stock_lots_cached() if l["bayId"] in display_bay_ids]
 	displayed_items = {l["itemCode"] for l in displayed_lots}
 
 	candidates_by_category: dict[str, list] = {}
@@ -191,7 +194,7 @@ def batch_wise_stock_report(category: str | None = None, search: str | None = No
 	be consolidated. Built on list_stock_lots, the same per-batch ledger aggregate the
 	Stock screen and the dealer portal's batch lists use, so the numbers agree."""
 	by_item: dict[str, dict] = {}
-	for lot in list_stock_lots():
+	for lot in list_stock_lots_cached():
 		if category and lot["category"] != category:
 			continue
 		if search and search.lower() not in f"{lot['itemCode']} {lot['itemName']}".lower():

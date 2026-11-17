@@ -14,7 +14,7 @@ from dms_erp.catalog.utils import (
 	item_sqm_per_box,
 	item_weight_per_box_kg,
 )
-from dms_erp.pagination import clamp
+from dms_erp.pagination import clamp, date_range_filter
 from dms_erp.warehouse.utils import ensure_batch
 
 INWARD_WRITE_ROLES = {"DMS Warehouse", "DMS Purchase", "DMS Management", "System Manager"}
@@ -78,7 +78,16 @@ def list_all_trucks() -> list[dict]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_trucks(search: str | None = None, limit: int = 20, offset: int = 0):
+def list_trucks(
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	status: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
+	"""One page of inward trucks: status, expected-arrival date range and search (LR number or
+	vehicle number) all applied here."""
 	limit, offset = clamp(limit, offset)
 	# Inward Truck's own name is a random hash (autoname: hash), not something a user
 	# would ever type. ISS-2026-00630 / BRD §C.12: LR Number is the primary search key
@@ -94,6 +103,9 @@ def list_trucks(search: str | None = None, limit: int = 20, offset: int = 0):
 		filters = {"name": ["in", list(matches) or [""]]}
 	else:
 		filters = {}
+	if status:
+		filters["status"] = status
+	date_range_filter(filters, "eta", from_date, to_date)
 	total = frappe.db.count("Inward Truck", filters=filters)
 	names = frappe.get_all(
 		"Inward Truck", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

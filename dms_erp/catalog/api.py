@@ -501,6 +501,72 @@ def list_all_products_bulk(
 	return _serialize_many(codes)
 
 
+def _orderable_conditions(dealer: str) -> tuple[list[str], dict]:
+	"""WHERE conditions (on `tabItem` aliased `i`) for "an item this dealer can be quoted or sold":
+	the dealer's own Dealer Catalog if they have one, otherwise everything, minus anything not
+	sellable (Pulled Back) or malformed (blank code or name). Same set as
+	dealer_catalog_api.catalog_for, resolved in SQL."""
+	from dms_erp.auth.api import STAFF_ROLES
+	from dms_erp.catalog.utils import _NOT_SELLABLE
+
+	if not set(frappe.get_roles(frappe.session.user)) & set(STAFF_ROLES):
+		frappe.throw(_("Only staff can search a dealer's items."), frappe.PermissionError)
+	conds = [
+		"i.item_code is not null and i.item_code != ''",
+		"i.item_name is not null and i.item_name != ''",
+		"ifnull(i.custom_discontinuation_status, 'Active') not in %(not_sellable)s",
+	]
+	params: dict = {"not_sellable": tuple(_NOT_SELLABLE)}
+	if frappe.db.exists("Dealer Catalog", dealer):
+		conds.append("i.name in (select item from `tabDealer Catalog Item` where parent = %(dealer)s)")
+		params["dealer"] = dealer
+	return conds, params
+
+
+@frappe.whitelist(methods=["GET"])
+def search_orderable_items(dealer: str, search: str | None = None, limit: int = 20, offset: int = 0):
+	"""One page of the items a dealer can be quoted or sold, for the staff app's "Add item" pickers.
+	The pickers used to take the whole catalog (about 4,500 items) out of the browser's memory, draw
+	every one as a row, and search it locally. Only the requested page is built (_serialize_many, a
+	fixed handful of queries). `search` is every word matched against code, name and series."""
+	limit, offset = clamp(limit, offset)
+	conds, params = _orderable_conditions(dealer)
+	for n, word in enumerate(w for w in (search or "").split() if w):
+		key = f"w{n}"
+		params[key] = f"%{word}%"
+		conds.append(
+			f"(i.item_code like %({key})s or i.item_name like %({key})s or i.custom_series like %({key})s)"
+		)
+	where = " and ".join(conds)
+
+	total = frappe.db.sql(f"select count(*) from `tabItem` i where {where}", params)[0][0]
+	codes = frappe.db.sql(
+		f"select i.name from `tabItem` i where {where} order by i.item_code asc limit %(limit)s offset %(offset)s",
+		{**params, "limit": limit, "offset": offset},
+		pluck=True,
+	)
+	return {"items": _serialize_many(codes), "total": total, "limit": limit, "offset": offset}
+
+
+@frappe.whitelist(methods=["POST"])
+def resolve_orderable_codes(dealer: str, codes: list[str] | str):
+	"""The items for a pasted list of item codes (Orders -> Add item -> Bulk add), looked up on
+	the server instead of in a copy of the whole catalog held in the browser. Exact code match
+	(case-insensitive), restricted to what this dealer can be sold; a code that isn't returned
+	is "not found" for that dealer. Up to 1,000 codes."""
+	codes = frappe.parse_json(codes) if isinstance(codes, str) else codes
+	wanted = sorted({str(c).strip() for c in (codes or []) if str(c).strip()})[:1000]
+	if not wanted:
+		return []
+	conds, params = _orderable_conditions(dealer)
+	conds.append("i.item_code in %(wanted)s")
+	params["wanted"] = tuple(wanted)
+	names = frappe.db.sql(
+		f"select i.name from `tabItem` i where {' and '.join(conds)} order by i.item_code asc", params, pluck=True
+	)
+	return _serialize_many(names)
+
+
 @frappe.whitelist(methods=["GET"])
 def get_item_prices(item: str) -> list[dict]:
 	"""Every selling Price List rate this item has -- the Tally-migrated lists

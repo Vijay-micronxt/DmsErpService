@@ -18,6 +18,7 @@ import frappe
 from frappe import _
 
 from dms_erp.finance.payment_api import PAYMENT_READ_ROLES
+from dms_erp.purchase.purchase_invoice_api import PURCHASE_INVOICE_READ_ROLES
 from dms_erp.sales.delivery_note_api import DELIVERY_NOTE_READ_ROLES
 from dms_erp.sales.invoice_api import INVOICE_READ_ROLES
 
@@ -58,7 +59,8 @@ SOURCES = [
 	{"doctype": "Sales Invoice", "label": "Sales Invoices", "kind": "app", "roles": INVOICE_READ_ROLES, "title": "name",
 	 "subtitle": ["customer_name", "posting_date"],
 	 "search": ["name", "customer", "customer_name", "tally_voucher_no", "tally_lr_no", "tally_vehicle_no", "tally_eway_bill_no"]},
-	{"doctype": "Purchase Invoice", "label": "Purchase Invoices", "kind": "desk", "title": "name", "subtitle": ["supplier_name", "posting_date"],
+	{"doctype": "Purchase Invoice", "label": "Purchase Invoices", "kind": "app", "roles": PURCHASE_INVOICE_READ_ROLES, "title": "name",
+	 "subtitle": ["supplier_name", "posting_date"],
 	 "search": ["name", "supplier", "supplier_name", "bill_no", "tally_voucher_no", "tally_lr_no", "tally_vehicle_no"]},
 	{"doctype": "Payment Entry", "label": "Payments", "kind": "app", "roles": PAYMENT_READ_ROLES, "title": "name",
 	 "subtitle": ["party_name", "posting_date"],
