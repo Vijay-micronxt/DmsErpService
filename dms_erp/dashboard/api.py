@@ -23,12 +23,12 @@ from dms_erp.auth.utils import resolve_app_roles
 from dms_erp.finance.claims_api import claim_summary
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase import po_api
-from dms_erp.purchase.reorder_api import reorder_suggestions
+from dms_erp.purchase.reorder_api import reorder_suggestions, sales_velocity_by_item
 from dms_erp.sales.picking_api import list_all_pick_tasks
 from dms_erp.warehouse.bay_api import list_all_bays
 from dms_erp.warehouse.inward_api import list_all_trucks
 from dms_erp.warehouse.transfer_api import list_all_transfers
-from dms_erp.warehouse.utils import default_company, list_stock_lots
+from dms_erp.warehouse.utils import default_company, list_stock_lots_cached
 
 SALES_READ_ROLES = {"DMS Sales", "DMS Management", "System Manager"}
 WAREHOUSE_READ_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
@@ -141,7 +141,7 @@ def _damage_lots_awaiting_claim() -> int:
 		return 0
 
 	awaiting = 0
-	for lot in list_stock_lots():
+	for lot in list_stock_lots_cached():
 		if lot["bayId"] not in damage_bays:
 			continue
 		# `claimRef` is already traced by list_stock_lots for damage/insurance-claim bays.
@@ -176,7 +176,7 @@ def _warehouse_alerts(bays, trucks, transfers, pick_tasks) -> list[dict]:
 			)
 
 	buffer_bay_ids = {b["id"] for b in bays if b["type"] == "buffer"}
-	buffer_lots = sum(1 for l in list_stock_lots() if l["bayId"] in buffer_bay_ids)
+	buffer_lots = sum(1 for l in list_stock_lots_cached() if l["bayId"] in buffer_bay_ids)
 	if buffer_lots:
 		alerts.append(
 			{
@@ -244,10 +244,15 @@ def warehouse_dashboard():
 	trucks = list_all_trucks()
 	transfers = list_all_transfers()
 	pick_tasks = list_all_pick_tasks()
-	lots = list_stock_lots()
+	lots = list_stock_lots_cached()
 
-	total_capacity = sum(b["capacityBoxes"] or 0 for b in bays)
-	total_used = sum(l["boxes"] for l in lots)
+	# Occupancy compares like with like: the boxes sitting in a bay against that bay's own
+	# capacity, and only for bays that have one. The old numerator was every box in the
+	# company (list_stock_lots includes the migrated warehouses that aren't registered bays)
+	# over the capacity of the few registered bays -- it read 104% with the bays 2% full.
+	sized_bays = [b for b in bays if b["capacityBoxes"]]
+	total_capacity = sum(b["capacityBoxes"] for b in sized_bays)
+	total_used = sum(b["occupiedBoxes"] or 0 for b in sized_bays)
 	buffer_bay_ids = {b["id"] for b in bays if b["type"] == "buffer"}
 
 	kpis = {
@@ -322,24 +327,18 @@ def management_dashboard():
 		(month_start,),
 	)[0][0]
 
-	top_item_row = frappe.db.sql(
-		"""
-		select soi.item_code as item, sum(soi.qty) as qty
-		from `tabSales Order Item` soi
-		inner join `tabSales Order` so on so.name = soi.parent
-		where so.docstatus = 1
-		group by soi.item_code
-		order by qty desc
-		limit 1
-		""",
-		as_dict=True,
-	)
+	# The same measure, and the same order, as the Product Movement report this tile opens on
+	# ("Fast movers"): boxes sold in the recent Retail window. The tile used to rank by all-time
+	# quantity across every order, so the item it named was not the top row of the list it linked
+	# to. Ties go to the lower item code, which is how the report breaks them too.
 	top_moving_item = None
-	if top_item_row:
+	velocity = sales_velocity_by_item()
+	if velocity:
 		from dms_erp.warehouse.utils import total_stock_for_item
 
-		item = top_item_row[0]
-		top_moving_item = {"itemCode": item.item, "unitsSold": item.qty, "currentStock": total_stock_for_item(item.item)}
+		code, qty = min(velocity.items(), key=lambda kv: (-kv[1], kv[0]))
+		if qty > 0:
+			top_moving_item = {"itemCode": code, "unitsSold": qty, "currentStock": total_stock_for_item(code)}
 
 	sales_by_dealer = frappe.db.sql(
 		"""

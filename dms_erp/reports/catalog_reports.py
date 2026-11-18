@@ -5,8 +5,7 @@ the report-vs-dashboard distinction this whole `reports` module follows.
 
 import frappe
 
-from dms_erp.catalog.api import list_all_products
-from dms_erp.pricing.api import get_price_record, list_all_price_records
+from dms_erp.pricing.api import list_all_price_records
 from dms_erp.purchase.reorder_api import sales_velocity_by_item
 
 
@@ -45,7 +44,7 @@ def product_movement_report(order: str = "slow"):
 		frappe.throw(f"Invalid order: {order}")
 
 	velocity = sales_velocity_by_item()
-	items = frappe.get_all("Item", fields=["name", "item_name", "item_group"])
+	items = frappe.get_all("Item", fields=["name", "item_name", "item_group"], order_by="item_code asc")
 	rows = [
 		{"productId": i.name, "itemName": i.item_name, "category": i.item_group, "recentSalesQty": velocity.get(i.name, 0)}
 		for i in items
@@ -58,54 +57,57 @@ def product_movement_report(order: str = "slow"):
 def product_activity_report(item: str | None = None):
 	"""The BRD's "Product activity report" — a per-item rollup across four
 	modules (Inquiry, Sales Order, Stock Entry transfers, price-approval history)
-	that no single existing list/get function crosses on its own."""
-	products = list_all_products()
-	if item:
-		products = [p for p in products if p["id"] == item]
+	that no single existing list/get function crosses on its own.
 
-	rows = []
-	for p in products:
-		code = p["id"]
-		# 12 Nov 2026 rebuild -- item moved to the Inquiry Item child table.
-		inquiry_count = frappe.db.count("Inquiry Item", {"item": code, "parenttype": "Inquiry"})
-		order_qty = (
-			frappe.db.sql(
-				"""
-				select coalesce(sum(soi.qty), 0)
-				from `tabSales Order Item` soi
-				inner join `tabSales Order` so on so.name = soi.parent
-				where soi.item_code = %s and so.docstatus = 1
-				""",
-				(code,),
-			)[0][0]
-			or 0
-		)
-		transfer_count = (
-			frappe.db.sql(
-				"""
-				select count(distinct sed.parent)
-				from `tabStock Entry Detail` sed
-				inner join `tabStock Entry` se on se.name = sed.parent
-				where sed.item_code = %s and se.docstatus = 1 and se.purpose = 'Material Transfer'
-				""",
-				(code,),
-			)[0][0]
-			or 0
-		)
-		price_record = get_price_record(code)
-		price_changes = len(price_record["history"]) if price_record else 0
+	Four grouped queries for the whole catalog, not four per item plus a full product
+	serialization per item: on the ~4,300 migrated items that was 15,000+ queries and
+	timed out. Same figures, same row order (stable sort over item_code order)."""
+	filters = {"name": item} if item else {}
+	products = frappe.get_all(
+		"Item", filters=filters, fields=["name", "item_name", "item_group"], order_by="item_code asc"
+	)
 
-		rows.append(
-			{
-				"productId": code,
-				"itemName": p["name"],
-				"category": p["category"],
-				"inquiryCount": inquiry_count,
-				"orderQty": order_qty,
-				"transferCount": transfer_count,
-				"priceChanges": price_changes,
-			}
+	inquiries = dict(
+		frappe.db.sql(
+			"""select item, count(*) from `tabInquiry Item`
+			where parenttype = 'Inquiry' and item is not null group by item"""
 		)
+	)
+	# 12 Nov 2026 rebuild -- item moved to the Inquiry Item child table.
+	ordered = dict(
+		frappe.db.sql(
+			"""select soi.item_code, coalesce(sum(soi.qty), 0)
+			from `tabSales Order Item` soi
+			inner join `tabSales Order` so on so.name = soi.parent
+			where so.docstatus = 1 group by soi.item_code"""
+		)
+	)
+	transfers = dict(
+		frappe.db.sql(
+			"""select sed.item_code, count(distinct sed.parent)
+			from `tabStock Entry Detail` sed
+			inner join `tabStock Entry` se on se.name = sed.parent
+			where se.docstatus = 1 and se.purpose = 'Material Transfer' group by sed.item_code"""
+		)
+	)
+	price_changes = dict(
+		frappe.db.sql(
+			"""select parent, count(*) from `tabItem Price Proposal History`
+			where parenttype = 'Item Price Proposal' group by parent"""
+		)
+	)
 
+	rows = [
+		{
+			"productId": p.name,
+			"itemName": p.item_name,
+			"category": p.item_group,
+			"inquiryCount": inquiries.get(p.name, 0),
+			"orderQty": ordered.get(p.name) or 0,
+			"transferCount": transfers.get(p.name, 0),
+			"priceChanges": price_changes.get(p.name, 0),
+		}
+		for p in products
+	]
 	rows.sort(key=lambda r: r["orderQty"], reverse=True)
 	return rows

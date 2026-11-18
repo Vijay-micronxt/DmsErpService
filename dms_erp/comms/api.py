@@ -124,6 +124,73 @@ def list_messages(dealer: str, search: str | None = None, limit: int = 20, offse
 	}
 
 
+_MESSAGE_FIELDS = ["name", "dealer", "direction", "text", "status", "related_type", "related_reference", "sent_at", "sent_by"]
+
+
+def _serialize_row(row) -> dict:
+	"""_serialize for a get_all/SQL row (no Document load): the same keys, so the staff app
+	reads one shape whichever endpoint produced the message."""
+	return {
+		"id": row.name,
+		"dealerId": row.dealer,
+		"direction": row.direction,
+		"text": row.text,
+		"status": row.status,
+		"relatedType": row.related_type,
+		"relatedRef": row.related_reference,
+		"sentAt": row.sent_at,
+		"sentBy": row.sent_by,
+	}
+
+
+def _assert_staff():
+	from dms_erp.auth.api import STAFF_ROLES
+
+	if not set(frappe.get_roles(frappe.session.user)) & set(STAFF_ROLES):
+		frappe.throw(_("Only staff can read dealer message threads."), frappe.PermissionError)
+
+
+@frappe.whitelist(methods=["GET"])
+def last_messages_by_dealer() -> list[dict]:
+	"""The latest message of every dealer that has one, in one query. The staff app used to
+	call list_messages once per dealer (about 395 requests) just to show a last-message line
+	and an "unreplied" badge; both come from the last message alone -- a dealer is waiting
+	on us exactly when their last message is Inbound -- so a dealer's full thread is only
+	fetched (recent_messages) when someone opens it."""
+	_assert_staff()
+	rows = frappe.db.sql(
+		"""
+		select m.name, m.dealer, m.direction, m.text, m.status, m.related_type, m.related_reference,
+			m.sent_at, m.sent_by
+		from `tabWhatsApp Message` m
+		join (select dealer, max(sent_at) as last_sent from `tabWhatsApp Message` group by dealer) x
+			on x.dealer = m.dealer and x.last_sent = m.sent_at
+		order by m.creation asc
+		""",
+		as_dict=True,
+	)
+	# Two messages can share the exact same timestamp; keep the one logged last.
+	latest = {row.dealer: row for row in rows}
+	return [_serialize_row(frappe._dict(row)) for row in latest.values()]
+
+
+@frappe.whitelist(methods=["GET"])
+def recent_messages(dealer: str, limit: int = 50) -> list[dict]:
+	"""A dealer's latest `limit` messages, oldest first. list_messages pages from the oldest end,
+	so for a dealer with more than a page of history it returned the first messages and never
+	the recent ones the panels actually show."""
+	_assert_staff()
+	limit, _offset = clamp(limit, 0)
+	rows = frappe.get_all(
+		"WhatsApp Message",
+		filters=_message_filters(dealer),
+		fields=_MESSAGE_FIELDS,
+		order_by="sent_at desc, creation desc",
+		limit_page_length=limit,
+	)
+	return [_serialize_row(row) for row in reversed(rows)]
+
+
 @frappe.whitelist(methods=["GET"])
 def last_message(dealer: str):
 	thread = list_all_messages(dealer)

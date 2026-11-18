@@ -69,6 +69,15 @@ doc_events = {
 	"Sales Order": {
 		"before_submit": "dms_erp.sales.order_api.guard_native_submit",
 	},
+	# Any stock movement makes warehouse.utils.list_stock_lots_cached stale.
+	"Stock Ledger Entry": {
+		"after_insert": "dms_erp.warehouse.utils.clear_stock_lots_cache",
+		"on_update": "dms_erp.warehouse.utils.clear_stock_lots_cache",
+	},
+	"Serial and Batch Bundle": {
+		"on_submit": "dms_erp.warehouse.utils.clear_stock_lots_cache",
+		"on_cancel": "dms_erp.warehouse.utils.clear_stock_lots_cache",
+	},
 }
 
 # BRD C.4.1: nobody is told a draft reorder plan needs review -- a daily digest to

@@ -339,3 +339,22 @@ Pick Tasks; everyone reads.
   against. Deliberately flat: one ₹ figure against all of a salesperson's dealer
   order value, no per-channel split and no dealer-level sub-targets -- nothing in
   the BRD or sheet asks for more than that.
+
+- **Dealer portal availability (17 Nov 2026)** — dealers no longer see stock. The portal
+  asks `dealer_portal_api.check_availability` once a quantity is typed and shows only
+  "Available" / "Not available" *for that quantity* (`_line_is_available`: the same
+  `available_to_promise` number the catalog used to print, compared with the boxes asked
+  for -- deliberately no "partly available" middle state), plus the batch split the system
+  will use (`_batch_split`, largest batch first, only the boxes asked for, never a batch's
+  own on-hand). The per-line `available` flag also rides on every dealer-facing inquiry row,
+  and `convert_to_order` refuses an enquiry with an unavailable line -- the portal hiding
+  "Create order" is a display hint; this is the real gate. A dealer can still raise an
+  enquiry or ask for a quotation on it. The batch *picker* is hidden in the portal UI
+  (`SHOW_BATCH_PICKER`) but `preferred_batch_no` and its backend checks are untouched.
+- **Dealer catalog speed** — `get_catalog` resolves the item set, filters, search and paging
+  in SQL (`_catalog_where`) instead of pulling ~4,300 codes into Python and back into `IN`
+  lists, and `item_codes_with_batch` reads the Batch table's own `item` link instead of
+  scanning the stock ledger per typed word. Listing rows load the Item through Frappe's
+  document cache; the detail page (`every_batch=True`) still loads it live. Output was checked
+  identical to the previous logic (selection for every scope/search/category; 150 serialized
+  items key-for-key).

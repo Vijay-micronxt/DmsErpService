@@ -19,13 +19,16 @@ this dealer session's own identity/scoping is the authorization for those calls,
 in place of the staff role checks those modules' whitelisted wrappers use.
 """
 
+import math
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime, today
 
+from dms_erp.catalog.api import _serialize as _serialize_item
 from dms_erp.catalog.api import get_product, resolve_dealer_code
 from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, browsable_catalog_for, catalog_for, is_visible
-from dms_erp.catalog.utils import is_sellable, item_images, item_weight_per_box_kg
+from dms_erp.catalog.utils import is_sellable, item_images, item_pieces_per_box, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales.dealer_api import _assert_email_available
@@ -36,7 +39,14 @@ from dms_erp.sales.inquiry_api import _create_inquiry, _create_inquiry_multi, _i
 from dms_erp.sales.order_api import _create_order
 from dms_erp.sales.order_api import _serialize as _serialize_order
 from dms_erp.sales.quotation_api import _convert_to_order
-from dms_erp.warehouse.utils import all_batches, item_codes_with_batch, top_batches, total_stock_for_item
+from dms_erp.warehouse.utils import (
+	all_batches,
+	available_to_promise,
+	item_codes_with_batch,
+	suggest_batch_combination,
+	top_batches,
+	total_stock_for_item,
+)
 
 
 MAX_ENQUIRY_ITEMS = 50
@@ -79,7 +89,10 @@ def _catalog_entry(item_code: str, dealer: str, every_batch: bool = False) -> di
 	Dealer Catalog assignment (dealer_catalog_api.is_visible) -- get_catalog now shows
 	every sellable item, assigned or not, so the frontend needs this flag to tell an
 	orderable item apart from one it should only let the dealer inquire on."""
-	product = get_product(item_code)
+	# The listing reads the Item from Frappe's document cache: loading a live Item doc costs a dozen
+	# queries (one per child table) and a page of 20 paid that 20 times. The detail page (every_batch)
+	# still loads it live, so what a dealer sees when they open an item is never from the cache.
+	product = _serialize_item(frappe.get_doc("Item", item_code) if every_batch else frappe.get_cached_doc("Item", item_code))
 	own_code = next((row["customerItemCode"] for row in product["dealerCodes"] if row["dealer"] == dealer), None)
 	del product["dealerCodes"]
 	product.pop("dealerPrice", None)
@@ -151,6 +164,49 @@ def _catalog_search_matches(candidate_codes: set[str], search: str) -> set[str]:
 	return matches
 
 
+def _catalog_where(dealer: str, scope: str | None, exact: dict, search: str | None) -> tuple[str, dict]:
+	"""WHERE clause (on `tabItem` aliased `i`) for the dealer's browsable catalog: every sellable
+	item, split by `scope` into the dealer's own assignment ("assigned": what they can order) or
+	the rest ("other": enquire only), narrowed by exact attribute filters and by `search`.
+	Same rules as dealer_catalog_api.catalog_for / browsable_catalog_for: a dealer with no Dealer
+	Catalog may order everything sellable; a malformed item (blank code or name) or a Pulled Back
+	one is never listed. `search` is every word matched against the name, code and four colour /
+	design attributes (all words must match), OR'd with an item that has stock in a batch whose
+	number contains the whole search (ISS-2026-00712)."""
+	from dms_erp.catalog.utils import _NOT_SELLABLE
+
+	conds = [
+		"i.item_code is not null and i.item_code != ''",
+		"i.item_name is not null and i.item_name != ''",
+		"ifnull(i.custom_discontinuation_status, 'Active') not in %(not_sellable)s",
+	]
+	params: dict = {"not_sellable": tuple(_NOT_SELLABLE), "dealer": dealer}
+	assigned = "i.name in (select item from `tabDealer Catalog Item` where parent = %(dealer)s)"
+	has_catalog = bool(frappe.db.exists("Dealer Catalog", dealer))
+	if scope == "assigned" and has_catalog:
+		conds.append(assigned)
+	elif scope == "other":
+		conds.append(f"not ({assigned})" if has_catalog else "1 = 0")
+	for column, value in exact.items():
+		if value:
+			conds.append(f"i.{column} = %({column})s")
+			params[column] = value
+	if search and search.strip():
+		words = [w for w in search.split() if w]
+		field_sql = " or ".join(f"i.{f} like %(w{{n}})s" for f in _CATALOG_SEARCH_FIELDS)
+		by_words = []
+		for n, word in enumerate(words):
+			params[f"w{n}"] = f"%{word}%"
+			by_words.append("(" + field_sql.replace("{n}", str(n)) + ")")
+		by_batch = item_codes_with_batch(search)
+		clause = "(" + " and ".join(by_words) + ")" if by_words else "1 = 0"
+		if by_batch:
+			params["by_batch"] = tuple(by_batch)
+			clause = f"({clause} or i.name in %(by_batch)s)"
+		conds.append(clause)
+	return " and ".join(conds), params
+
+
 @frappe.whitelist(methods=["GET"])
 def get_catalog(
 	search: str | None = None,
@@ -192,32 +248,27 @@ def get_catalog(
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 
-	item_codes = set(browsable_catalog_for(dealer))
-	if scope in ("assigned", "other"):
-		assigned = set(catalog_for(dealer))
-		item_codes = item_codes & assigned if scope == "assigned" else item_codes - assigned
-	filters = {"name": ["in", list(item_codes) or [""]]}
-	if category:
-		filters["item_group"] = category
-	if color:
-		filters["custom_color"] = color
-	if colour_attribute_1:
-		filters["custom_colour_attribute_1"] = colour_attribute_1
-	if colour_attribute_2:
-		filters["custom_colour_attribute_2"] = colour_attribute_2
-	if design_attribute_1:
-		filters["custom_design_attribute_1"] = design_attribute_1
-	if design_attribute_2:
-		filters["custom_design_attribute_2"] = design_attribute_2
-
-	if search:
-		pre_filtered = set(frappe.get_all("Item", filters=filters, pluck="name"))
-		matches = _catalog_search_matches(pre_filtered, search) | (item_codes_with_batch(search) & pre_filtered)
-		filters["name"] = ["in", list(matches) or [""]]
-
-	total = frappe.db.count("Item", filters=filters)
-	codes = frappe.get_all(
-		"Item", filters=filters, pluck="name", order_by="item_code asc", limit_start=offset, limit_page_length=limit
+	# The set of items, its filters and its search are all resolved in SQL. This used to take every
+	# sellable item code into Python, then send lists of ~4,300 codes back into three or four
+	# queries per request (and again for every typed word).
+	where, params = _catalog_where(
+		dealer,
+		scope,
+		{
+			"item_group": category,
+			"custom_color": color,
+			"custom_colour_attribute_1": colour_attribute_1,
+			"custom_colour_attribute_2": colour_attribute_2,
+			"custom_design_attribute_1": design_attribute_1,
+			"custom_design_attribute_2": design_attribute_2,
+		},
+		search,
+	)
+	total = frappe.db.sql(f"select count(*) from `tabItem` i where {where}", params)[0][0]
+	codes = frappe.db.sql(
+		f"select i.name from `tabItem` i where {where} order by i.item_code asc limit %(limit)s offset %(offset)s",
+		{**params, "limit": limit, "offset": offset},
+		pluck=True,
 	)
 	return {
 		"items": [_catalog_entry(code, dealer) for code in codes],
@@ -383,6 +434,8 @@ def raise_inquiry(
 		preferred_batch_no=preferred_batch_no,
 	)
 	data["orderable"] = is_visible(dealer, item)
+	for item_row in data["items"]:
+		item_row["available"] = _line_is_available(item_row["productId"], item_row["qty"], item_row["damagedStock"])
 	# BRD client request, Oct 2026: no price shown before a quotation exists --
 	# 12 Nov 2026 rebuild moved the old top-level `price` into a `prices` dict
 	# (one per line), same rule, same thing to strip here.
@@ -470,10 +523,83 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 	inquiry.pop("prices", None)
 	for item_row in inquiry["items"]:
 		item_row["orderable"] = is_visible(dealer, item_row["productId"]) if item_row["productId"] else False
+		item_row["available"] = _line_is_available(item_row["productId"], item_row["qty"], item_row["damagedStock"])
 	# requestGroup kept in the response shape (now just this one Inquiry's own id)
 	# for any caller still reading it after the rebuild -- real grouping is gone,
 	# this is the whole enquiry now.
 	return {"requestGroup": inquiry["id"], "enquiry": inquiry["id"], "items": inquiry["items"]}
+
+
+def _line_is_available(item: str | None, boxes: float, damaged_stock: bool = False) -> bool:
+	"""Whether `boxes` of `item` can be sold to a dealer right now -- the same number the catalog
+	used to show as "in stock" (available_to_promise: damage/display bays and other dealers' open
+	orders already taken off), judged against the quantity actually asked for, so a dealer is told
+	"Available" / "Not available" for *their* quantity, never given a "partly available" middle.
+	A damaged-stock line is a deliberate pick from the damage/claim bay, which the regular count
+	never includes, so it isn't judged against it."""
+	if not item:
+		return False
+	if damaged_stock:
+		return True
+	if not is_sellable(frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"):
+		return False
+	return available_to_promise(item) >= boxes
+
+
+def _batch_split(item: str, boxes: float) -> list[dict]:
+	"""Which batch(es) the system will draw `boxes` from, and how many boxes from each: the same
+	largest-batch-first plan the warehouse reply uses (suggest_batch_combination). Only the boxes
+	this dealer is asking for are returned, never a batch's own on-hand count -- batch stock is
+	not something a dealer is shown any more."""
+	plan = suggest_batch_combination(item, boxes)
+	remaining = boxes
+	split = []
+	for batch in plan["batches"]:
+		take = min(batch["boxes"], remaining)
+		if take <= 0:
+			break
+		split.append({"batchNumber": batch["batchNumber"], "boxes": take})
+		remaining -= take
+	return split
+
+
+@frappe.whitelist(methods=["GET"])
+def check_availability(items) -> list[dict]:
+	"""The portal's per-line "Available" / "Not available" and batch preview, for the quantity the
+	dealer has typed. `items` is a list of {item, qty (the Pcs part), enteredBoxes} -- the same
+	entry shape raise_inquiries takes -- JSON when sent as a query parameter. Read-only; nothing
+	is reserved. A line that isn't available comes back with no batches."""
+	_current_dealer()
+	entries = frappe.parse_json(items) if isinstance(items, str) else items
+	if not entries or len(entries) > MAX_ENQUIRY_ITEMS:
+		frappe.throw(_("Send between 1 and {0} items.").format(MAX_ENQUIRY_ITEMS), frappe.ValidationError)
+
+	result = []
+	for entry in entries:
+		item = entry.get("item")
+		if not item or not frappe.db.exists("Item", item):
+			frappe.throw(_("{0} is not a valid item.").format(item), frappe.PermissionError)
+		entered_boxes = entry.get("enteredBoxes")
+		if entered_boxes is None:
+			entered_boxes = entry.get("entered_boxes")
+		pieces = flt(entry.get("qty"))
+		boxes = flt(entered_boxes)
+		if pieces > 0:
+			per_box = item_pieces_per_box(item)
+			boxes += math.ceil(pieces / per_box) if per_box else 0
+		elif entered_boxes is None:
+			boxes = pieces
+		damaged = bool(entry.get("damagedStock") or entry.get("damaged_stock"))
+		available = boxes > 0 and _line_is_available(item, boxes, damaged)
+		result.append(
+			{
+				"item": item,
+				"boxes": boxes,
+				"available": available,
+				"batches": _batch_split(item, boxes) if available and not damaged else [],
+			}
+		)
+	return result
 
 
 @frappe.whitelist(methods=["GET"])
@@ -578,6 +704,17 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(
 			_("{0} isn't yet set up for ordering on your account. {1}").format(", ".join(not_orderable), dealer_contact_line(dealer)),
 			frappe.PermissionError,
+		)
+
+	# A line the dealer asked for more of than is on hand can't become an order: the portal hides the
+	# button, and this is the real gate. They can still ask for a quotation instead.
+	unavailable = [row.item for row in real_rows if not _line_is_available(row.item, row.qty, bool(row.get("damaged_stock")))]
+	if unavailable:
+		frappe.throw(
+			_("{0} is not available in the quantity asked for, so this enquiry can't be turned into an order. You can request a quotation instead.").format(
+				", ".join(unavailable)
+			),
+			frappe.ValidationError,
 		)
 
 	# ISS-2026-00712 -- carries each row's own batch choice (if any) from the
@@ -697,6 +834,7 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 	data = _serialize_inquiry(doc)
 	for row, item_row in zip(doc.items, data["items"]):
 		item_row["orderable"] = bool(row.item) and is_visible(dealer, row.item)
+		item_row["available"] = _line_is_available(row.item, row.qty, bool(row.get("damaged_stock")))
 		item_row["productName"] = frappe.get_cached_value("Item", row.item, "item_name") if row.item else None
 		item_row["images"] = item_images(row.item) if row.item else []
 	# inquiry_api's own serializer already set `prices` via the same

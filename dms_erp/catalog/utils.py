@@ -50,15 +50,25 @@ def status_label(status: str) -> str:
 	discontinuation status -- white-labeled via DMS Catalog Settings, never the
 	value is_reorderable/is_sellable/withdrawal_api match on or anything stores.
 	No configured row (including every status on a fresh site) falls back to the
-	raw internal value -- unconfigured is a no-op, not a Pacific-branded default."""
-	rows = frappe.get_all(
-		"DMS Catalog Status Label",
-		filters={"parent": "DMS Catalog Settings", "status": status},
-		fields=["label"],
-		order_by="idx desc",
-		limit=1,
-	)
-	return (rows[0].label if rows else None) or status
+	raw internal value -- unconfigured is a no-op, not a Pacific-branded default.
+
+	The label table is read once per request and reused: this runs once per item in the
+	reorder suggestions, the reorder report and the purchase dashboard, which meant one
+	query per item (about 4,300) for a table of a handful of rows. Where a status has
+	several rows the highest idx wins, exactly as the single-row lookup this replaces did.
+	Saving DMS Catalog Settings clears it (see DMSCatalogSettings.on_update)."""
+	labels = getattr(frappe.local, "dms_status_labels", None)
+	if labels is None:
+		labels = {}
+		for row in frappe.get_all(
+			"DMS Catalog Status Label",
+			filters={"parent": "DMS Catalog Settings"},
+			fields=["status", "label"],
+			order_by="idx asc",
+		):
+			labels[row.status] = row.label
+		frappe.local.dms_status_labels = labels
+	return labels.get(status) or status
 
 
 def item_weight_per_box_kg(item_code: str) -> float | None:

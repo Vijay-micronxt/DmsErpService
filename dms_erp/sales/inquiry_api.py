@@ -66,6 +66,7 @@ import math
 
 import frappe
 from frappe import _
+from frappe.utils import sbool
 
 from dms_erp.catalog.utils import (
 	convert_qty_to_boxes,
@@ -253,21 +254,122 @@ def list_all_inquiries(dealer: str | None = None, status: str | None = None, sea
 	return [_serialize(frappe.get_doc("Inquiry", name)) for name in names]
 
 
+# What the staff list's Status filter offers. The first five are an Inquiry's *item* stock state,
+# which is what the list shows while the Inquiry is still Open (see the staff app's effectiveStatus);
+# the rest are the Inquiry's own workflow stage.
+ITEM_STATE_STATUSES = {"Open", "Available", "Partially Available", "Out of Stock", "Pre-order Required"}
+NO_STOCK_STATES = ("Out of Stock", "Pre-order Required")
+
+# The row the list displays for an Inquiry: its first real item, or the first row if every row is a
+# custom-style request (same choice as the staff app's primaryItem).
+_PRIMARY_ITEM_IDX = (
+	"coalesce("
+	"(select min(p2.idx) from `tabInquiry Item` p2 where p2.parent = i.name and p2.parenttype = 'Inquiry'"
+	" and p2.item is not null and p2.item != ''),"
+	"(select min(p3.idx) from `tabInquiry Item` p3 where p3.parent = i.name and p3.parenttype = 'Inquiry'))"
+)
+
+
+def _staff_inquiry_where(
+	dealer=None, status=None, search=None, source=None, assigned_to=None, quote_requested=False, missed_only=False
+) -> tuple[str, dict]:
+	"""WHERE clause for the staff Inquiry list. Every filter the screen offers is applied here, in
+	the database, so a search or status finds matching inquiries anywhere in the history -- the
+	screen used to filter only the pages it had already loaded. Separate from _inquiry_filters on
+	purpose: the dealer portal and the reports share that one and must not change."""
+	conds, params = ["1 = 1"], {}
+	if dealer:
+		conds.append("i.dealer = %(dealer)s")
+		params["dealer"] = dealer
+	if source:
+		conds.append("i.source = %(source)s")
+		params["source"] = source
+	if assigned_to:
+		conds.append("i.assigned_to = %(assigned_to)s")
+		params["assigned_to"] = assigned_to
+	if quote_requested:
+		conds.append("i.dealer_requested_quote = 1")
+	if status:
+		if status in ITEM_STATE_STATUSES:
+			conds.append(
+				"i.status = 'Open' and exists (select 1 from `tabInquiry Item` p where p.parent = i.name"
+				" and p.parenttype = 'Inquiry' and ifnull(p.availability_status, 'Open') = %(status)s"
+				f" and p.idx = {_PRIMARY_ITEM_IDX})"
+			)
+		else:
+			conds.append("i.status = %(status)s")
+		params["status"] = status
+	if missed_only:
+		conds.append(
+			"i.status = 'Open' and exists (select 1 from `tabInquiry Item` m where m.parent = i.name"
+			" and m.parenttype = 'Inquiry' and m.availability_status in %(no_stock)s)"
+		)
+		params["no_stock"] = NO_STOCK_STATES
+	for n, word in enumerate(w for w in (search or "").split() if w):
+		key = f"w{n}"
+		params[key] = f"%{word}%"
+		conds.append(
+			f"(i.name like %({key})s or i.dealer like %({key})s or d.customer_name like %({key})s"
+			f" or i.contact_name like %({key})s or i.contact_phone like %({key})s"
+			" or exists (select 1 from `tabInquiry Item` s left join `tabItem` itm on itm.name = s.item"
+			f" where s.parent = i.name and s.parenttype = 'Inquiry' and (s.item like %({key})s"
+			f" or itm.item_name like %({key})s or s.custom_requested_style like %({key})s)))"
+		)
+	return " and ".join(conds), params
+
+
 @frappe.whitelist(methods=["GET"])
 def list_inquiries(
-	dealer: str | None = None, status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+	dealer: str | None = None,
+	status: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	source: str | None = None,
+	assigned_to: str | None = None,
+	quote_requested: bool = False,
+	missed_only: bool = False,
 ):
 	limit, offset = clamp(limit, offset)
-	filters = _inquiry_filters(dealer, status, search)
-	total = frappe.db.count("Inquiry", filters=filters)
-	names = frappe.get_all(
-		"Inquiry", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+	where, params = _staff_inquiry_where(
+		dealer, status, search, source, assigned_to, sbool(quote_requested), sbool(missed_only)
+	)
+	from_sql = "from `tabInquiry` i left join `tabCustomer` d on d.name = i.dealer"
+	total = frappe.db.sql(f"select count(*) {from_sql} where {where}", params)[0][0]
+	names = frappe.db.sql(
+		f"select i.name {from_sql} where {where} order by i.creation desc limit %(limit)s offset %(offset)s",
+		{**params, "limit": limit, "offset": offset},
+		pluck=True,
 	)
 	return {
 		"items": [_serialize(frappe.get_doc("Inquiry", name)) for name in names],
 		"total": total,
 		"limit": limit,
 		"offset": offset,
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def inquiry_facets() -> dict:
+	"""Figures the Inquiries screen shows beside its filters, over every inquiry rather than just
+	the loaded page: who owns inquiries (for the Owner filter), how many have a quote requested,
+	and how much open demand can't be supplied from stock."""
+	owners = frappe.db.sql(
+		"select distinct assigned_to from `tabInquiry` where assigned_to is not null and assigned_to != '' order by assigned_to",
+		pluck=True,
+	)
+	quote_requested = frappe.db.count("Inquiry", {"dealer_requested_quote": 1})
+	missed_items, missed_inquiries = frappe.db.sql(
+		"""select count(*), count(distinct i.name) from `tabInquiry` i
+		join `tabInquiry Item` m on m.parent = i.name and m.parenttype = 'Inquiry'
+		where i.status = 'Open' and m.availability_status in %(no_stock)s""",
+		{"no_stock": NO_STOCK_STATES},
+	)[0]
+	return {
+		"owners": owners,
+		"quoteRequestedCount": quote_requested,
+		"missedItems": missed_items,
+		"missedInquiries": missed_inquiries,
 	}
 
 

@@ -10,7 +10,7 @@ from dms_erp.warehouse import utils
 
 @frappe.whitelist(methods=["GET"])
 def list_stock(bay: str | None = None, item: str | None = None):
-	return utils.list_stock_lots(bay=bay, item=item)
+	return utils.list_stock_lots_cached(bay=bay, item=item)
 
 
 @frappe.whitelist(methods=["GET"])

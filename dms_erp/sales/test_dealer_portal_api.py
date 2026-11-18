@@ -46,9 +46,44 @@ class TestDealerPortalApi(FrappeTestCase):
 
 	def setUp(self):
 		frappe.set_user(self.dealer_user)
+		# These fixtures hold no stock; every test here that turns an enquiry into an order is about
+		# something other than availability, so the stock check is held "available" -- the tests that
+		# are about it (TestDealerPortalAvailability below) override it.
+		patcher = patch("dms_erp.sales.dealer_portal_api._line_is_available", return_value=True)
+		patcher.start()
+		self.addCleanup(patcher.stop)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+
+	def test_convert_to_order_refuses_an_enquiry_that_is_not_available(self):
+		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
+		with (
+			patch("dms_erp.sales.dealer_portal_api._line_is_available", return_value=False),
+			self.assertRaises(frappe.ValidationError) as ctx,
+		):
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-NOSTOCK")
+		self.assertIn("request a quotation", str(ctx.exception))
+		self.assertNotEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+
+	def test_inquiry_lines_say_whether_they_are_available(self):
+		with patch("dms_erp.sales.dealer_portal_api._line_is_available", return_value=False):
+			self.assertFalse(dealer_portal_api.raise_inquiry(item=self.item, qty=3)["items"][0]["available"])
+		self.assertTrue(dealer_portal_api.raise_inquiry(item=self.item, qty=3)["items"][0]["available"])
+
+	def test_check_availability_judges_the_entered_quantity_and_splits_it_across_batches(self):
+		batches = [{"batchNumber": "B-BIG", "boxes": 10}, {"batchNumber": "B-SMALL", "boxes": 4}]
+		with (
+			patch("dms_erp.sales.dealer_portal_api._line_is_available", side_effect=lambda item, boxes, damaged=False: boxes <= 12),
+			patch("dms_erp.sales.dealer_portal_api.suggest_batch_combination", return_value={"batches": batches}),
+		):
+			ok, over = dealer_portal_api.check_availability(
+				items=[{"item": self.item, "qty": 0, "enteredBoxes": 12}, {"item": self.item, "qty": 0, "enteredBoxes": 13}]
+			)
+		self.assertTrue(ok["available"])
+		self.assertEqual(ok["batches"], [{"batchNumber": "B-BIG", "boxes": 10}, {"batchNumber": "B-SMALL", "boxes": 2}])
+		self.assertFalse(over["available"])
+		self.assertEqual(over["batches"], [])
 
 	def test_get_catalog_shows_every_sellable_item_but_flags_unassigned_ones(self):
 		# ISS-2026-00644: hidden_item is sellable but never assigned to self.dealer --

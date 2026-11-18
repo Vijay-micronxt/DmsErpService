@@ -373,14 +373,28 @@ def _possible_duplicate_orders(so) -> list[str]:
 
 @frappe.whitelist(methods=["GET"])
 def list_orders(
-	dealer: str | None = None, stage: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+	dealer: str | None = None,
+	stage: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	from_date: str | None = None,
+	to_date: str | None = None,
 ):
+	"""One page of orders. Stage, date range (the order date) and search are all applied here, so a
+	filter reaches the whole history and "Load more" continues that same filtered list."""
 	limit, offset = clamp(limit, offset)
 	filters = {}
 	if dealer:
 		filters["customer"] = dealer
 	if stage:
 		filters["custom_fulfillment_stage"] = stage
+	if from_date and to_date:
+		filters["transaction_date"] = ["between", [from_date, to_date]]
+	elif from_date:
+		filters["transaction_date"] = [">=", from_date]
+	elif to_date:
+		filters["transaction_date"] = ["<=", to_date]
 	if search:
 		# ISS-2026-00630 / BRD §C.12: outward search is primarily by lorry number or
 		# driver mobile, secondarily by Sales Invoice number. The invoice match goes
@@ -393,6 +407,11 @@ def list_orders(
 			set(frappe.get_all("Sales Order", filters={"name": pattern}, pluck="name"))
 			| set(frappe.get_all("Sales Order", filters={"custom_vehicle": pattern}, pluck="name"))
 			| set(frappe.get_all("Sales Order", filters={"custom_driver_mobile": pattern}, pluck="name"))
+			# The order screen's search box also promises dealer and source (quotation / inquiry) -- these
+			# used to be matched only in the browser, on the orders already loaded.
+			| set(frappe.get_all("Sales Order", filters={"customer": pattern}, pluck="name"))
+			| set(frappe.get_all("Sales Order", filters={"customer_name": pattern}, pluck="name"))
+			| set(frappe.get_all("Sales Order", filters={"custom_source_ref": pattern}, pluck="name"))
 			| set(
 				frappe.get_all(
 					"Sales Invoice Item",
@@ -412,6 +431,19 @@ def list_orders(
 		"limit": limit,
 		"offset": offset,
 	}
+
+
+@frappe.whitelist(methods=["GET"])
+def order_facets() -> dict:
+	"""The three figures above the Orders list, over every order (they used to be counted from
+	whichever page of the list had been loaded): open orders, their value before tax, and how
+	many are on the road."""
+	open_count, open_value = frappe.db.sql(
+		"""select count(*), coalesce(sum(net_total), 0) from `tabSales Order`
+		where docstatus = 1 and custom_fulfillment_stage not in ('Delivered', 'Cancelled')"""
+	)[0]
+	dispatched = frappe.db.count("Sales Order", {"docstatus": 1, "custom_fulfillment_stage": "Dispatched"})
+	return {"open": open_count, "openValue": open_value, "dispatched": dispatched}
 
 
 @frappe.whitelist(methods=["GET"])

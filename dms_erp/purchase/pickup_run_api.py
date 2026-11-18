@@ -22,7 +22,7 @@ from dms_erp.catalog.utils import (
 	item_sqm_per_box,
 	item_weight_per_box_kg,
 )
-from dms_erp.pagination import clamp
+from dms_erp.pagination import clamp, date_range_filter
 from dms_erp.purchase.po_api import remaining_ready_qty_for_line
 from dms_erp.warehouse import inward_api
 
@@ -253,16 +253,31 @@ def create_vehicle_type(
 
 @frappe.whitelist(methods=["GET"])
 def list_pickup_runs(
-	supplier: str | None = None, status: str | None = None, search: str | None = None, limit: int = 20, offset: int = 0
+	supplier: str | None = None,
+	status: str | None = None,
+	search: str | None = None,
+	limit: int = 20,
+	offset: int = 0,
+	from_date: str | None = None,
+	to_date: str | None = None,
 ):
+	"""One page of pickup runs: status, scheduled-date range and search (run number, supplier or
+	vehicle number) all applied here."""
 	limit, offset = clamp(limit, offset)
 	filters = {}
 	if supplier:
 		filters["supplier"] = supplier
 	if status:
 		filters["status"] = status
-	if search:
-		filters["name"] = ["like", f"%{search}%"]
+	date_range_filter(filters, "scheduled_date", from_date, to_date)
+	if search and search.strip():
+		pattern = ["like", f"%{search.strip()}%"]
+		matches = (
+			set(frappe.get_all("Pickup Run", filters={**filters, "name": pattern}, pluck="name"))
+			| set(frappe.get_all("Pickup Run", filters={**filters, "supplier": pattern}, pluck="name"))
+			| set(frappe.get_all("Pickup Run", filters={**filters, "vehicle_number": pattern}, pluck="name"))
+		)
+		filters["name"] = ["in", list(matches) or [""]]
 	total = frappe.db.count("Pickup Run", filters=filters)
 	names = frappe.get_all(
 		"Pickup Run", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit

@@ -125,6 +125,33 @@ def list_delivery_notes(
 	return {"items": [_serialize_row(r) for r in rows], "total": total, "limit": limit, "offset": offset}
 
 
+def _linked_invoices(name: str, orders: list[str]) -> list[str]:
+	"""Posted invoices that bill this note or any of its sales orders. A migrated note has neither
+	a sales order nor a billing link, and then has no invoices here -- the old query matched
+	`sales_order in ('')`, which is every invoice line with no order, i.e. the whole ledger."""
+	or_filters = [["delivery_note", "=", name]]
+	if orders:
+		or_filters.append(["sales_order", "in", orders])
+	return frappe.get_all(
+		"Sales Invoice Item",
+		filters={"docstatus": 1},
+		or_filters=or_filters,
+		fields=["parent"],
+		distinct=True,
+		order_by="parent asc",
+		pluck="parent",
+	)
+
+
+@frappe.whitelist(methods=["GET"])
+def delivery_note_invoices(delivery_note: str, limit: int = 5, offset: int = 0):
+	"""The next few invoices linked to a Delivery Note, for the detail panel's "Show more"."""
+	_assert_can_read()
+	limit, offset = clamp(limit, offset)
+	invoices = _linked_invoices(delivery_note, _sales_orders(delivery_note))
+	return {"items": invoices[offset : offset + limit], "total": len(invoices), "limit": limit, "offset": offset}
+
+
 @frappe.whitelist(methods=["GET"])
 def get_delivery_note(delivery_note: str):
 	_assert_can_read()
@@ -133,14 +160,7 @@ def get_delivery_note(delivery_note: str):
 		frappe.throw(_("{0} is a draft, not a posted Delivery Note.").format(delivery_note), frappe.DoesNotExistError)
 
 	orders = _sales_orders(doc.name)
-	invoices = frappe.get_all(
-		"Sales Invoice Item",
-		filters={"sales_order": ["in", orders or [""]], "docstatus": 1},
-		fields=["parent"],
-		distinct=True,
-		order_by="parent asc",
-		pluck="parent",
-	)
+	invoices = _linked_invoices(doc.name, orders)
 
 	lines, line_weights = [], []
 	for row in doc.items:
@@ -167,7 +187,9 @@ def get_delivery_note(delivery_note: str):
 	return {
 		**_serialize_row(doc),
 		"salesOrders": orders,
-		"invoices": invoices,
+		# Only the first five; the rest come from delivery_note_invoices ("Show more").
+		"invoices": invoices[:5],
+		"invoiceTotal": len(invoices),
 		"address": doc.get("address_display"),
 		"shippingAddress": doc.get("shipping_address"),
 		"poNumber": doc.po_no,

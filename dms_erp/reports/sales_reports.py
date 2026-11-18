@@ -13,7 +13,6 @@ other list/get endpoint in this app works; only writes are role-gated.
 import frappe
 from frappe.utils import getdate
 
-from dms_erp.comms.api import last_message
 from dms_erp.pricing.api import get_dealer_price
 from dms_erp.purchase.reorder_api import MISSED_DEMAND_STATUSES
 from dms_erp.sales import dealer_api, inquiry_api
@@ -113,36 +112,57 @@ def retail_vs_bulk_report(from_date=None, to_date=None):
 	return {"byChannel": [{"channel": r.channel, "orderCount": r.order_count, "value": r.value} for r in rows]}
 
 
+def _orders_by_dealer() -> dict[str, tuple[int, float]]:
+	"""{dealer: (submitted order count, total value)} for every dealer in one query."""
+	return {
+		r[0]: (r[1], r[2])
+		for r in frappe.db.sql(
+			"""select customer, count(name), coalesce(sum(grand_total), 0)
+			from `tabSales Order` where docstatus = 1 group by customer"""
+		)
+	}
+
+
 @frappe.whitelist(methods=["GET"])
 def dealer_activity_report(dealer: str | None = None):
 	"""The BRD's "Dealer activity report" — a per-dealer rollup across four modules
 	(Inquiry, Quotation, Sales Order, WhatsApp Message) that no single existing
-	list/get function crosses on its own, unlike every other report in this file."""
+	list/get function crosses on its own, unlike every other report in this file.
+
+	Four grouped queries for every dealer at once, not four (plus a load of every message
+	in the dealer's thread) per dealer: with ~395 dealers that was about 2,000 queries."""
 	dealers = [dealer_api.get_dealer(dealer)] if dealer else dealer_api.list_dealers()
+
+	inquiries = dict(frappe.db.sql("select dealer, count(*) from `tabInquiry` group by dealer"))
+	quotations = dict(
+		frappe.db.sql(
+			"""select party_name, count(*) from `tabQuotation`
+			where quotation_to = 'Customer' and docstatus != 2 group by party_name"""
+		)
+	)
+	orders = _orders_by_dealer()
+	messages = {
+		r[0]: (r[1], r[2])
+		for r in frappe.db.sql(
+			"select dealer, count(*), max(sent_at) from `tabWhatsApp Message` group by dealer"
+		)
+	}
 
 	rows = []
 	for d in dealers:
 		did = d["id"]
-		inquiry_count = frappe.db.count("Inquiry", {"dealer": did})
-		quotation_count = frappe.db.count("Quotation", {"party_name": did, "quotation_to": "Customer", "docstatus": ["!=", 2]})
-		order_agg = frappe.db.sql(
-			"select count(name) as cnt, coalesce(sum(grand_total), 0) as value from `tabSales Order` where customer=%s and docstatus=1",
-			(did,),
-			as_dict=True,
-		)[0]
-		message_count = frappe.db.count("WhatsApp Message", {"dealer": did})
-		last = last_message(did)
-
+		order_count, order_value = orders.get(did, (0, 0))
+		message_count, last_contact = messages.get(did, (0, None))
 		rows.append(
 			{
 				"dealerId": did,
 				"dealerName": d["name"],
-				"inquiryCount": inquiry_count,
-				"quotationCount": quotation_count,
-				"orderCount": order_agg.cnt,
-				"orderValue": order_agg.value,
+				"inquiryCount": inquiries.get(did, 0),
+				"quotationCount": quotations.get(did, 0),
+				"orderCount": order_count,
+				"orderValue": order_value,
 				"messageCount": message_count,
-				"lastContact": last["sentAt"] if last else None,
+				"lastContact": last_contact,
 			}
 		)
 
@@ -161,15 +181,12 @@ def salesperson_assignment_report():
 	nothing silently drops off the report."""
 	dealers = dealer_api.list_dealers()
 
+	orders = _orders_by_dealer()
 	by_salesperson: dict[str | None, list[dict]] = {}
 	for d in dealers:
-		order_agg = frappe.db.sql(
-			"select count(name) as cnt, coalesce(sum(grand_total), 0) as value from `tabSales Order` where customer=%s and docstatus=1",
-			(d["id"],),
-			as_dict=True,
-		)[0]
+		order_count, order_value = orders.get(d["id"], (0, 0))
 		by_salesperson.setdefault(d["salesperson"], []).append(
-			{"dealerId": d["id"], "dealerName": d["name"], "orderCount": order_agg.cnt, "orderValue": order_agg.value}
+			{"dealerId": d["id"], "dealerName": d["name"], "orderCount": order_count, "orderValue": order_value}
 		)
 
 	rows = []
