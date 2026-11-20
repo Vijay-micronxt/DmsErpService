@@ -1,0 +1,247 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "DPO-.YYYY.-.#####",
+ "creation": "2026-11-20 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dealer",
+  "dealer_name",
+  "customer_po_number",
+  "po_date",
+  "status",
+  "column_break_links",
+  "inquiry",
+  "quotation",
+  "sales_order",
+  "section_file",
+  "po_file",
+  "file_name",
+  "column_break_file",
+  "attached_by",
+  "attached_on",
+  "reviewed_by",
+  "reviewed_on",
+  "section_check",
+  "flag_count",
+  "checked_on",
+  "column_break_check",
+  "check_summary",
+  "check_result"
+ ],
+ "fields": [
+  {
+   "fieldname": "dealer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Dealer",
+   "options": "Customer",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fetch_from": "dealer.customer_name",
+   "fieldname": "dealer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Dealer Name",
+   "read_only": 1
+  },
+  {
+   "description": "The PO number printed on the document -- read off it by the automatic check when left empty, or typed by staff.",
+   "fieldname": "customer_po_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer PO Number",
+   "search_index": 1
+  },
+  {
+   "fieldname": "po_date",
+   "fieldtype": "Date",
+   "label": "PO Date"
+  },
+  {
+   "default": "Attached",
+   "description": "Outcome of the background check of the PO against the linked inquiry/quotation/order. Staff-only; never shown to a dealer.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "\nAttached\nChecking\nMatched\nNeeds review\nUnavailable\nReviewed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_links",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "inquiry",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Inquiry",
+   "options": "Inquiry",
+   "search_index": 1
+  },
+  {
+   "fieldname": "quotation",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Quotation",
+   "options": "Quotation",
+   "search_index": 1
+  },
+  {
+   "description": "Set when an order is made from the linked inquiry/quotation; the same file is then linked to that order.",
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Sales Order",
+   "options": "Sales Order",
+   "search_index": 1
+  },
+  {
+   "fieldname": "section_file",
+   "fieldtype": "Section Break",
+   "label": "PO Document"
+  },
+  {
+   "fieldname": "po_file",
+   "fieldtype": "Link",
+   "label": "PO File",
+   "options": "File",
+   "read_only": 1
+  },
+  {
+   "fieldname": "file_name",
+   "fieldtype": "Data",
+   "label": "File Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_file",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "attached_by",
+   "fieldtype": "Link",
+   "label": "Attached By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attached_on",
+   "fieldtype": "Datetime",
+   "label": "Attached On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Link",
+   "label": "Reviewed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reviewed_on",
+   "fieldtype": "Datetime",
+   "label": "Reviewed On",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_check",
+   "fieldtype": "Section Break",
+   "label": "Automatic Check"
+  },
+  {
+   "fieldname": "flag_count",
+   "fieldtype": "Int",
+   "label": "Flags",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checked_on",
+   "fieldtype": "Datetime",
+   "label": "Checked On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_check",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "check_summary",
+   "fieldtype": "Small Text",
+   "label": "What the Check Found",
+   "read_only": 1
+  },
+  {
+   "description": "JSON: what was read off the PO, how each row matched an item, and the review flags.",
+   "fieldname": "check_result",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Check Result",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-20 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sales",
+ "name": "Dealer Purchase Order",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Sales",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DMS Management",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "DMS Warehouse"
+  },
+  {
+   "read": 1,
+   "role": "DMS Purchase"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "dealer_name",
+ "track_changes": 1
+}

@@ -65,9 +65,14 @@ after_migrate = "dms_erp.setup.install.after_migrate"
 doc_events = {
 	"Quotation": {
 		"before_submit": "dms_erp.sales.quotation_api.guard_native_submit",
+		# A quotation made from an inquiry that has a Dealer Purchase Order belongs to it.
+		"after_insert": "dms_erp.sales.customer_po.link_po_to_quotation",
 	},
 	"Sales Order": {
 		"before_submit": "dms_erp.sales.order_api.guard_native_submit",
+		# The Dealer Purchase Order of the inquiry/quotation this order came from records the order and
+		# gets its file linked onto it (see sales.customer_po).
+		"after_insert": "dms_erp.sales.customer_po.link_po_to_order",
 	},
 	# Any stock movement makes warehouse.utils.list_stock_lots_cached stale.
 	"Stock Ledger Entry": {
