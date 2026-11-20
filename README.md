@@ -259,7 +259,7 @@ everyone can read.
 | `dms_erp.reports.warehouse_reports.batch_wise_stock_report` | optional `category`, `search` |
 | `dms_erp.pricing.api.list_price_records` / `get_price_record` | landing cost + suggested price computed on the fly, never stored; `list_price_records` is paginated (`limit`/`offset`, `{items, total}`) |
 | `dms_erp.pricing.api.save_cost_inputs` | write-restricted; creates the proposal if the item has none yet |
-| `dms_erp.pricing.api.approve_price` | write-restricted; publishes to the native `Item Price` (Dealer price list) and appends an audit-trail row; `approved_by` is always the authenticated caller, never client-supplied |
+| `dms_erp.pricing.api.approve_price` | write-restricted; publishes to the native `Item Price` on the chosen `price_list` (Standard Dealer / Dealer / Master Dealer, default Dealer) and appends an audit-trail row recording the list; `approved_by` is always the authenticated caller, never client-supplied |
 
 Product responses match the frontend's `Product` shape (camelCase) field-for-field,
 with `stockQty`/`bay`/`lastSoldDays` stubbed (`0`/`"—"`/`0`) pending Phase 3/5.
@@ -322,6 +322,12 @@ Manager`). Everyone reads.
 | `inquiry_api.list_inquiries` / `get_inquiry` | paginated (`limit`/`offset`, `{items, total}`); optional `dealer`/`status`/`search` filters |
 | `inquiry_api.create_inquiry` | write-restricted; always starts `Open` |
 | `inquiry_api.update_inquiry` | write-restricted; `patch` is a partial `Inquiry`-shaped dict |
+| `customer_po.list_dealer_pos` / `get_dealer_po` | read; every Dealer Purchase Order (`search` matches dealer, PO number, file, inquiry/quotation/order ids; `status`; paged) / one in full (links, status, flags, what the check read) |
+| `customer_po.get_dealer_po_for` | read; the PO of an Inquiry, Quotation or Sales Order (`doctype`, `name`) -- an empty box when there is none, so the panel can offer to attach one |
+| `customer_po.create_dealer_po` / `replace_dealer_po_file` | write-restricted; multipart (`file` = JPG/PNG/PDF up to 10 MB). Create takes the links it is for (the dealer defaults to theirs); replace is refused once an order exists |
+| `customer_po.update_dealer_po` / `recheck_dealer_po` / `review_dealer_po` | write-restricted; correct the number/links (each link must be the PO's own dealer's) / run the check again / stamp who reviewed it |
+| `customer_po.get_dealer_po_file` | read; the file's bytes as base64 (private files can't be opened with the JWT directly) |
+| `dealer_portal_api.attach_po` / `get_my_po` | a dealer's own enquiry only; multipart upload (creates or replaces that enquiry's Dealer Purchase Order) / `{required, attached, fileName}` -- never any check result |
 | `quotation_api.list_quotations` / `get_quotation` | native Quotation; paginated, optional `dealer`/`search` filters |
 | `quotation_api.create_quotation` | write-restricted; rejects items outside the dealer's catalog or with no approved price; rate = approved dealer price × (1 + markup%) |
 | `quotation_api.convert_to_order` | write-restricted; wraps ERPNext's native Quotation→Sales Order mapper |

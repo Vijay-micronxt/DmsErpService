@@ -17,7 +17,7 @@ list_orders is paginated (`limit`/`offset`) and returns `{"items", "total",
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, getdate, now_datetime, today
+from frappe.utils import add_days, flt, getdate, now_datetime, sbool, today
 
 from dms_erp.catalog.utils import (
 	item_images,
@@ -114,7 +114,8 @@ def _serialize(doc) -> dict:
 			for row in doc.taxes
 		],
 		"totalTaxesAndCharges": doc.total_taxes_and_charges,
-		"stage": doc.custom_fulfillment_stage,
+		# A saved-but-unsubmitted order is "Draft" whatever its stage field holds (finalize_new_order).
+		"stage": "Draft" if doc.docstatus == 0 else doc.custom_fulfillment_stage,
 		# ISS-2026-00710 -- native ERPNext field, kept in sync by core on every Sales
 		# Invoice submit/cancel against this order; never computed here. "Partly
 		# Billed" is what create_sales_invoice's partial-qty support (see below)
@@ -295,19 +296,43 @@ def _serialize_line(row, qty_invoiced: float = 0) -> dict:
 	}
 
 
-def finalize_new_order(so, source_type: str, source_ref: str | None, channel: str = "Retail") -> dict:
+def finalize_new_order(
+	so, source_type: str, source_ref: str | None, channel: str = "Retail", draft: bool = False
+) -> dict:
 	"""Insert + submit a freshly-built (unsaved) Sales Order doc, stamping Pacific's
-	fulfillment-stage bookkeeping. Shared by create_order and quotation_api.convert_to_order."""
+	fulfillment-stage bookkeeping. Shared by create_order and quotation_api.convert_to_order.
+
+	`so` may also be an existing DRAFT being submitted (create_order's `draft_order`): it is
+	saved instead of inserted, and keeps the "Created" history entry it got when it was drafted.
+	`draft` stops after the insert/save -- a saved, unsubmitted order: no stock reserved, no
+	duplicate flag, nothing a dealer can see (every reservation, dashboard and dealer-facing
+	query reads docstatus = 1 only)."""
 	assert_valid_channel(channel)
 
 	so.custom_source_type = source_type
 	so.custom_source_ref = source_ref
 	so.custom_order_channel = channel
+	# The Select has no "Draft" option (adding one needs a migrate); a draft keeps the field's
+	# default and _serialize reports it as "Draft" from docstatus instead.
 	so.custom_fulfillment_stage = "Confirmed"
 
 	now = now_datetime()
-	created_note = f"Converted from {source_ref}" if source_ref else "Created directly, no source Inquiry/Quotation"
-	so.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": created_note})
+	if not any(row.stage == "Created" for row in so.get("custom_stage_history") or []):
+		created_note = f"Converted from {source_ref}" if source_ref else "Created directly, no source Inquiry/Quotation"
+		if draft:
+			created_note = f"{created_note} -- saved as draft"
+		so.append("custom_stage_history", {"stage": "Created", "at": now, "by": frappe.session.user, "note": created_note})
+
+	if draft:
+		if so.is_new():
+			so.insert(ignore_permissions=True)
+		else:
+			so.save(ignore_permissions=True)
+		clear_unrequested_default_tax(so)
+		out = _serialize(so)
+		out["possibleDuplicates"] = []
+		return out
+
 	duplicates = _possible_duplicate_orders(so)
 	# The flag rides on the Confirmed entry's note rather than an extra history row, so
 	# the stage history stays one row per stage.
@@ -318,7 +343,10 @@ def finalize_new_order(so, source_type: str, source_ref: str | None, channel: st
 	)
 	so.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user, "note": confirmed_note})
 
-	so.insert(ignore_permissions=True)
+	if so.is_new():
+		so.insert(ignore_permissions=True)
+	else:
+		so.save(ignore_permissions=True)
 	clear_unrequested_default_tax(so)
 	if frappe.flags.get("dms_credit_limit_approved"):
 		# BRD C.11: Management approved this order over the credit limit (see
@@ -387,8 +415,13 @@ def list_orders(
 	filters = {}
 	if dealer:
 		filters["customer"] = dealer
-	if stage:
+	if stage == "Draft":
+		filters["docstatus"] = 0
+	elif stage:
+		# A draft's stage field still reads "Confirmed" (finalize_new_order), so a stage filter
+		# means submitted orders only.
 		filters["custom_fulfillment_stage"] = stage
+		filters["docstatus"] = ["!=", 0]
 	if from_date and to_date:
 		filters["transaction_date"] = ["between", [from_date, to_date]]
 	elif from_date:
@@ -522,17 +555,24 @@ def guard_native_submit(doc, method=None):
 		doc.append("custom_stage_history", {"stage": "Confirmed", "at": now, "by": frappe.session.user, "note": None})
 
 
-def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date) -> dict:
+def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date, lenient: bool = False) -> dict:
 	"""discount_percentage (0-100, optional) only ever scales down the server-
 	resolved dealer-tier rate -- it's never a substitute for it. price_list_rate
 	keeps the undiscounted rate on the row (native Sales Order Item field, same
 	as ERPNext's own discount UI) so the discount is always auditable against
 	what the dealer's tier actually approved. delivery_date (optional) overrides
 	the order-level expected_dispatch for just this line -- a part shipment on a
-	different date than the rest of the order."""
+	different date than the rest of the order.
+
+	`lenient` is for saving a DRAFT (same rule as quotation_api._priced_items): an item with no
+	approved price is saved at 0 and the batch / stock checks are skipped. Submitting the draft
+	re-prices every line through here without `lenient`, so the same checks and messages apply
+	before anything is reserved."""
 	price_list_rate = get_price_for_dealer(item, dealer)
 	if price_list_rate is None:
-		frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
+		if not lenient:
+			frappe.throw(_("{0} has no approved dealer price yet.").format(item), frappe.ValidationError)
+		price_list_rate = 0
 	discount_pct = float(line.get("discount_percentage") or 0)
 	if not 0 <= discount_pct <= 100:
 		frappe.throw(_("Discount for {0} must be between 0 and 100%.").format(item), frappe.ValidationError)
@@ -551,7 +591,9 @@ def _priced_order_line(item: str, dealer: str, line: dict, default_delivery_date
 	# _resolve_delivery_picks re-checks it again at dispatch time regardless,
 	# since stock can move between order and dispatch.
 	preferred_batch_no = line.get("preferred_batch_no") or None
-	if preferred_batch_no:
+	if lenient:
+		pass
+	elif preferred_batch_no:
 		from dms_erp.warehouse.utils import all_batches
 
 		available = next((b["boxes"] for b in all_batches(item) if b["batchNumber"] == preferred_batch_no), 0)
@@ -621,8 +663,16 @@ def _create_order(
 	channel: str | None = None,
 	customer_po: str | None = None,
 	taxes_and_charges: str | None = None,
+	draft: bool = False,
+	draft_order: str | None = None,
 ) -> dict:
-	"""Unguarded core of create_order -- also called directly by
+	"""`draft` saves the order without submitting it (create_order's `save_as_draft`). `draft_order`
+	names an existing draft to fill with these lines/header and submit IN PLACE rather than
+	building a new Sales Order -- what submit_draft_order does, through create_order's full gates.
+	Being a plain kwarg, it survives the JSON round trip an Approval Request makes, so a draft whose
+	submit needed Management's approval is the same draft that gets submitted once approved.
+
+	Unguarded core of create_order -- also called directly by
 	sales.dealer_portal_api.convert_to_order, whose own DMS Dealer session (scoped
 	to its own dealer identity) is the authorization for that path, not
 	ORDER_WRITE_ROLES. `customer_po` (BRD C.13.1 — the dealer's own PO number) sets
@@ -658,27 +708,47 @@ def _create_order(
 	if channel is None:
 		channel = auto_classify_channel(dealer, lines)
 
-	items = [_priced_order_line(line["item"], dealer, line, expected_dispatch) for line in lines]
+	items = [_priced_order_line(line["item"], dealer, line, expected_dispatch, lenient=draft) for line in lines]
 
-	so = frappe.get_doc(
-		{
-			"doctype": "Sales Order",
-			"customer": dealer,
-			"company": default_company(),
-			"transaction_date": today(),
-			"delivery_date": expected_dispatch,
-			"po_no": customer_po,
-			"customer_address": customer_address,
-			"shipping_address_name": shipping_address_name,
-			"items": items,
-		}
-	)
+	if draft_order:
+		so = _load_draft_order(draft_order, dealer)
+		so.update(
+			{
+				"transaction_date": today(),
+				"delivery_date": expected_dispatch,
+				"po_no": customer_po,
+				"customer_address": customer_address,
+				"shipping_address_name": shipping_address_name,
+			}
+		)
+		so.items = []
+		for item in items:
+			so.append("items", item)
+		# apply_tax_template leaves an existing tax table alone; start from empty so a changed
+		# template (or none) is what the order ends up with.
+		so.taxes = []
+		so.taxes_and_charges = None
+	else:
+		so = frappe.get_doc(
+			{
+				"doctype": "Sales Order",
+				"customer": dealer,
+				"company": default_company(),
+				"transaction_date": today(),
+				"delivery_date": expected_dispatch,
+				"po_no": customer_po,
+				"customer_address": customer_address,
+				"shipping_address_name": shipping_address_name,
+				"items": items,
+			}
+		)
 	apply_tax_template(so, resolve_tax_template_arg(dealer, taxes_and_charges))
 
 	order = finalize_new_order(
-		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel
+		so, source_type="Inquiry" if inquiry else "Direct", source_ref=inquiry, channel=channel, draft=draft
 	)
-	if inquiry:
+	# The source Inquiry is only closed when the order is really placed, not when it's drafted.
+	if inquiry and not draft:
 		values = {"status": "Converted to Order", "linked_sales_order": order["id"]}
 		if customer_po:
 			values["customer_po"] = customer_po
@@ -698,8 +768,15 @@ def create_order(
 	channel: str | None = None,
 	customer_po: str | None = None,
 	taxes_and_charges: str | None = None,
+	save_as_draft: bool = False,
+	draft_order: str | None = None,
 ):
-	"""Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
+	"""`save_as_draft` saves the order without submitting it, same as the Quotation Builder's
+	Save as draft: no approval gates, no price/stock checks, no stock reserved, the Inquiry is not
+	closed. Everything skipped runs when the draft is submitted (submit_draft_order), which comes
+	back through here with `draft_order` set so every gate below applies unchanged.
+
+	Direct Inquiry -> Order conversion (no Quotation, no retail markup — matches
 	how o1/o4/o6 in the frontend's seed data go straight from Inquiry to Order at
 	plain approved dealer-price rates). The Quotation-sourced path is
 	quotation_api.convert_to_order.
@@ -750,6 +827,12 @@ def create_order(
 		customer_po=customer_po,
 		taxes_and_charges=taxes_and_charges,
 	)
+	if draft_order:
+		# Only when submitting a draft, so an ordinary create's approval payload is unchanged.
+		create_kwargs["draft_order"] = draft_order
+
+	if sbool(save_as_draft):
+		return _create_order(**create_kwargs, draft=True)
 
 	def _create_after_duplicate_gate(**kwargs):
 		# Client request, 12 Nov 2026 -- innermost gate, nested same as the others:
@@ -795,6 +878,101 @@ def create_order(
 		reference_doctype="Sales Order",
 		create_fn=_create_after_credit_gate,
 		create_kwargs=create_kwargs,
+	)
+
+
+def _load_draft_order(order: str, dealer: str | None = None):
+	doc = frappe.get_doc("Sales Order", order)
+	if doc.docstatus != 0:
+		frappe.throw(_("{0} is not a draft any more.").format(order), frappe.ValidationError)
+	if dealer and doc.customer != dealer:
+		frappe.throw(_("{0} is a draft for {1}, not {2}.").format(order, doc.customer, dealer), frappe.ValidationError)
+	return doc
+
+
+def _draft_order_lines(doc) -> list[dict]:
+	"""The draft's lines back in create_order's own `lines` shape. A rate is carried over only
+	when it isn't simply the price-list rate less the line's discount, i.e. when staff typed it
+	(BRD C.11 #3) -- so submitting re-prices everything else from today's dealer price and still
+	sends a typed rate through the discount gate."""
+	lines = []
+	for row in doc.items:
+		line = {
+			"item": row.item_code,
+			"qty": row.qty,
+			"discount_percentage": row.discount_percentage or 0,
+			"delivery_date": row.delivery_date,
+			"entered_qty": row.get("custom_entered_qty"),
+			"entered_uom": row.get("custom_entered_uom"),
+			"damaged_stock": bool(row.get("custom_damaged_stock")),
+			"preferred_batch_no": row.get("custom_preferred_batch_no"),
+		}
+		computed = round(flt(row.price_list_rate) * (1 - flt(row.discount_percentage) / 100), 2)
+		if not row.discount_percentage and flt(row.rate) > 0 and abs(flt(row.rate) - computed) > 0.005:
+			line["rate"] = row.rate
+		lines.append(line)
+	return lines
+
+
+@frappe.whitelist(methods=["POST", "PUT"])
+def update_draft_order(
+	order: str,
+	lines: list[dict],
+	expected_dispatch,
+	customer_address: str,
+	shipping_address_name: str,
+	customer_po: str | None = None,
+	taxes_and_charges: str | None = None,
+	channel: str | None = None,
+):
+	"""Saves a draft order in place from the order builder (reopened with ?draft=). Same rules as
+	saving a new draft: no approval gates, no price/stock checks. The dealer and source can't change."""
+	_assert_can_manage_orders()
+	doc = _load_draft_order(order)
+	inquiry = doc.custom_source_ref if doc.custom_source_type == "Inquiry" else None
+	return create_order(
+		dealer=doc.customer,
+		lines=lines,
+		expected_dispatch=expected_dispatch,
+		customer_address=customer_address,
+		shipping_address_name=shipping_address_name,
+		inquiry=inquiry,
+		channel=channel,
+		customer_po=customer_po,
+		taxes_and_charges=taxes_and_charges,
+		save_as_draft=True,
+		draft_order=order,
+	)
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_draft_order(order: str):
+	"""Places a draft order: exactly what Create order does for a new one -- today's prices, the
+	stock / batch checks, then the channel, credit-limit, discount and duplicate-order gates -- but
+	the draft itself is what gets submitted, not a copy. If a gate needs Management's approval, the
+	draft stays a draft and the approval, once given, submits this same draft."""
+	_assert_can_manage_orders()
+	doc = _load_draft_order(order)
+	if not doc.items:
+		frappe.throw(_("Add at least one line before submitting."), frappe.ValidationError)
+	inquiry = doc.custom_source_ref if doc.custom_source_type == "Inquiry" else None
+	# An explicit channel is the audited override (BRD C.11 #6); only pass one if the draft's
+	# channel differs from what the order would be classified as anyway.
+	lines = _draft_order_lines(doc)
+	channel = doc.custom_order_channel
+	if channel == auto_classify_channel(doc.customer, lines):
+		channel = None
+	return create_order(
+		dealer=doc.customer,
+		lines=lines,
+		expected_dispatch=doc.delivery_date,
+		customer_address=doc.customer_address,
+		shipping_address_name=doc.shipping_address_name,
+		inquiry=inquiry,
+		channel=channel,
+		customer_po=doc.po_no,
+		taxes_and_charges=doc.taxes_and_charges or None,
+		draft_order=order,
 	)
 
 
@@ -919,9 +1097,11 @@ def advance_order_stage(
 		frappe.throw(_("Invalid stage: {0}").format(next_stage), frappe.ValidationError)
 
 	doc = frappe.get_doc("Sales Order", order)
+	if doc.docstatus == 0:
+		frappe.throw(_("{0} is still a draft -- submit it before moving it on.").format(order), frappe.ValidationError)
 	current = doc.custom_fulfillment_stage
 
-	is_forward_step = current in FORWARD_FLOW and next_stage in FORWARD_FLOW and FORWARD_FLOW.index(next_stage) == FORWARD_FLOW.index(current) + 1
+	is_forward_step =current in FORWARD_FLOW and next_stage in FORWARD_FLOW and FORWARD_FLOW.index(next_stage) == FORWARD_FLOW.index(current) + 1
 	is_cancel = next_stage == "Cancelled" and current != "Delivered" and current != "Cancelled"
 	if not (is_forward_step or is_cancel):
 		frappe.throw(_("Cannot move an order from {0} to {1}.").format(current, next_stage), frappe.ValidationError)
@@ -1167,6 +1347,8 @@ def _cancel_order_action(order: str, note: str | None = None) -> dict:
 	since nothing stops it moving on between an unauthorized request being
 	queued and Management deciding it."""
 	doc = frappe.get_doc("Sales Order", order)
+	if doc.docstatus == 0:
+		frappe.throw(_("{0} is still a draft -- there is nothing to cancel.").format(order), frappe.ValidationError)
 	current = doc.custom_fulfillment_stage
 	if current in ("Delivered", "Cancelled"):
 		frappe.throw(_("Cannot move an order from {0} to Cancelled.").format(current), frappe.ValidationError)

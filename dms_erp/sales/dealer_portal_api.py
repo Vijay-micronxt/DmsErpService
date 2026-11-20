@@ -31,6 +31,7 @@ from dms_erp.catalog.dealer_catalog_api import _dealer_catalog_export_html, brow
 from dms_erp.catalog.utils import is_sellable, item_images, item_pieces_per_box, item_weight_per_box_kg
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
+from dms_erp.sales import customer_po as po_files
 from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.invoice_api import _has as _invoice_has
 from dms_erp.sales.invoice_api import _invoice_detail
@@ -444,8 +445,11 @@ def raise_inquiry(
 
 
 @frappe.whitelist(methods=["POST"])
-def raise_inquiries(items, remarks: str | None = None) -> dict:
+def raise_inquiries(items, remarks: str | None = None, customer_po: str | None = None) -> dict:
 	"""Several items enquired on in one go (the enquiry list on the portal).
+	`customer_po` (optional, 20 Nov 2026) is the dealer's own PO number, asked for on the screen that sends
+	the enquiry; it is kept on the Inquiry (and carried onto a PO attached afterwards and onto an order made
+	from it), never required.
 	12 Nov 2026 rebuild: these all become rows on the SAME Inquiry now (BRD
 	D.3) -- one real multi-item record, not N separate ones glued together by a
 	`request_group` string (that field, and the whole workaround, is gone).
@@ -521,6 +525,9 @@ def raise_inquiries(items, remarks: str | None = None) -> dict:
 
 	inquiry = _create_inquiry_multi(dealer, rows, source="Web", remarks=remarks)
 	inquiry.pop("prices", None)
+	po_number = (customer_po or "").strip()[:140]
+	if po_number:
+		frappe.db.set_value("Inquiry", inquiry["id"], "customer_po", po_number, update_modified=False)
 	for item_row in inquiry["items"]:
 		item_row["orderable"] = is_visible(dealer, item_row["productId"]) if item_row["productId"] else False
 		item_row["available"] = _line_is_available(item_row["productId"], item_row["qty"], item_row["damagedStock"])
@@ -563,17 +570,65 @@ def _batch_split(item: str, boxes: float) -> list[dict]:
 	return split
 
 
+def _sellable_boxes_now(item: str) -> float:
+	"""How many boxes of `item` could be sold to a dealer right now -- the same figure
+	_line_is_available compares against, returned instead of a yes/no so a short line can say how
+	much of the quantity asked for there is."""
+	if not is_sellable(frappe.get_cached_value("Item", item, "custom_discontinuation_status") or "Active"):
+		return 0
+	return max(flt(available_to_promise(item)), 0)
+
+
+def _in_transit_by_item(items: set[str]) -> dict[str, dict]:
+	"""{item: {boxes, eta, days, totalBoxes}} for stock already on an open, warehouse-bound Purchase
+	Order. `boxes`/`eta` are the *first* arrival only (the lines due on the earliest expected date),
+	not the whole pending quantity: "300 boxes in 5 days" would be untrue when only 100 of them are
+	due then. `totalBoxes` is everything on order, so the screen can say that too. `days` is None
+	when no PO line carries an expected date, and 0 when that date has already passed (the PO is
+	late -- the dealer is told "soon", never a date in the past). Drop-ship lines are left out:
+	they go straight to someone else's site and never reach Pacific's stock. One pass over the
+	pending PO lines for the whole request, not one per item."""
+	out: dict[str, dict] = {}
+	if not items:
+		return out
+	from dms_erp.purchase.po_api import list_pending_po_lines
+
+	by_item: dict[str, list[dict]] = {}
+	for row in list_pending_po_lines():
+		if row["itemCode"] in items and not row["dropShip"]:
+			by_item.setdefault(row["itemCode"], []).append(row)
+	today_date = getdate(today())
+	for code, rows in by_item.items():
+		dated = [r for r in rows if r["expectedReadyDate"]]
+		eta = min((getdate(r["expectedReadyDate"]) for r in dated), default=None)
+		first = sum(flt(r["pendingQty"]) for r in dated if getdate(r["expectedReadyDate"]) == eta) if eta else 0
+		out[code] = {
+			"boxes": first if eta else sum(flt(r["pendingQty"]) for r in rows),
+			"eta": str(eta) if eta else None,
+			"days": max((eta - today_date).days, 0) if eta else None,
+			"totalBoxes": sum(flt(r["pendingQty"]) for r in rows),
+		}
+	return out
+
+
 @frappe.whitelist(methods=["GET"])
 def check_availability(items) -> list[dict]:
-	"""The portal's per-line "Available" / "Not available" and batch preview, for the quantity the
-	dealer has typed. `items` is a list of {item, qty (the Pcs part), enteredBoxes} -- the same
-	entry shape raise_inquiries takes -- JSON when sent as a query parameter. Read-only; nothing
-	is reserved. A line that isn't available comes back with no batches."""
+	"""The portal's per-line availability and batch preview, for the quantity the dealer has typed.
+	`items` is a list of {item, qty (the Pcs part), enteredBoxes} -- the same entry shape
+	raise_inquiries takes -- JSON when sent as a query parameter. Read-only; nothing is reserved.
+
+	`available` still means *the whole quantity* can be supplied -- it is what the order gate and the
+	inquiry rows use, unchanged, so a partly-available line is not orderable. What a short line adds
+	is `availableBoxes` (how much of it there is now), `shortfallBoxes`, and `batches` for that part
+	only: the dealer is told which batches the available boxes would come from instead of a bare
+	"Not available". `inTransit` is stock already on an open Purchase Order and when the first of it
+	is due, so a short line can also say when the rest may arrive."""
 	_current_dealer()
 	entries = frappe.parse_json(items) if isinstance(items, str) else items
 	if not entries or len(entries) > MAX_ENQUIRY_ITEMS:
 		frappe.throw(_("Send between 1 and {0} items.").format(MAX_ENQUIRY_ITEMS), frappe.ValidationError)
 
+	transit = _in_transit_by_item({e.get("item") for e in entries if e.get("item")})
 	result = []
 	for entry in entries:
 		item = entry.get("item")
@@ -591,12 +646,17 @@ def check_availability(items) -> list[dict]:
 			boxes = pieces
 		damaged = bool(entry.get("damagedStock") or entry.get("damaged_stock"))
 		available = boxes > 0 and _line_is_available(item, boxes, damaged)
+		# A damaged-stock pick is not judged against the regular count, so it has no "part" either.
+		available_boxes = boxes if available else (0 if damaged or boxes <= 0 else min(boxes, _sellable_boxes_now(item)))
 		result.append(
 			{
 				"item": item,
 				"boxes": boxes,
 				"available": available,
-				"batches": _batch_split(item, boxes) if available and not damaged else [],
+				"availableBoxes": available_boxes,
+				"shortfallBoxes": max(boxes - available_boxes, 0),
+				"batches": _batch_split(item, available_boxes) if available_boxes > 0 and not damaged else [],
+				"inTransit": transit.get(item),
 			}
 		)
 	return result
@@ -635,6 +695,40 @@ def suggest_alternatives(item: str, limit: int = 5) -> list[dict]:
 	for entry in entries:
 		entry["isRecommended"] = entry["id"] in picks
 	return entries
+
+
+def _own_inquiry_name(inquiry: str, dealer: str) -> str:
+	"""The inquiry's name once it is confirmed to be this dealer's -- one error for "no such inquiry"
+	and "someone else's", so a dealer cannot probe which inquiry ids exist."""
+	if frappe.db.get_value("Inquiry", inquiry, "dealer") != dealer:
+		frappe.throw(_("Inquiry {0} does not belong to you.").format(inquiry), frappe.PermissionError)
+	return inquiry
+
+
+@frappe.whitelist(methods=["POST"])
+def attach_po(inquiry: str):
+	"""The dealer attaches (or replaces) their purchase order on one of their own enquiries -- a
+	photo or PDF, multipart with the form field "file". The same file is reused on the order made
+	from this enquiry. Returns only whether a PO is on file and under what name: whatever the
+	background check makes of it is for staff and is never sent here (sales.customer_po.po_state)."""
+	dealer = _current_dealer()
+	_own_inquiry_name(inquiry, dealer)
+	if "file" not in frappe.request.files:
+		frappe.throw(_("No file uploaded."), frappe.ValidationError)
+	uploaded = frappe.request.files["file"]
+	# One byte past the limit is read, so an oversized upload is refused without loading all of it.
+	content = uploaded.stream.read(po_files.MAX_PO_BYTES + 1)
+	po_files.attach_po(inquiry, uploaded.filename, content, by=frappe.session.user)
+	return po_files.po_state(inquiry)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_po(inquiry: str):
+	"""Whether a PO is on this enquiry (and its file name) and whether the site requires one before an
+	order -- all the portal needs to draw its upload box and to hold the Create order button."""
+	dealer = _current_dealer()
+	_own_inquiry_name(inquiry, dealer)
+	return po_files.po_state(inquiry)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -681,6 +775,9 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		frappe.throw(_("Inquiry {0} does not belong to you.").format(inquiry), frappe.PermissionError)
 	if doc.status in {"Converted to Order", "Rejected", "Closed"}:
 		frappe.throw(_("Inquiry {0} is {1} and can no longer be converted.").format(inquiry, doc.status), frappe.ValidationError)
+	# No PO, no order -- only when the site has switched require_po_attachment on, and never
+	# conditional on what the background check made of the PO (see sales.customer_po).
+	po_files.assert_po_attached(doc)
 
 	# 12 Nov 2026 rebuild (BRD D.3) -- one Inquiry can hold several items now;
 	# every real (non-Custom-Style) row becomes one line on a single combined
@@ -717,6 +814,11 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 			frappe.ValidationError,
 		)
 
+	# The dealer's order waits for Pacific: one draft per enquiry, so a second tap (or a second device)
+	# cannot raise a duplicate while the first is being reviewed.
+	if frappe.db.exists("Sales Order", {"custom_source_type": "Inquiry", "custom_source_ref": inquiry, "docstatus": 0}):
+		frappe.throw(_("You have already sent an order for this enquiry. Pacific is reviewing it."), frappe.ValidationError)
+
 	# ISS-2026-00712 -- carries each row's own batch choice (if any) from the
 	# enquiry onto its resulting order line; _priced_order_line re-validates it
 	# against real on-hand stock (it may have moved since the enquiry).
@@ -725,7 +827,7 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 
 	customer_address, shipping_address_name = default_billing_shipping_for(dealer)
 	try:
-		return _run_as_system(
+		order = _run_as_system(
 			lambda: _create_order(
 				dealer,
 				lines,
@@ -736,8 +838,17 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 				customer_po=customer_po,
 				# Same bill-to-address GST rule as the staff builder (sales.utils.resolve_tax_for_dealer).
 				taxes_and_charges="auto",
+				# 20 Nov 2026: what a dealer sends is a request, not a confirmed order. It is saved as a
+				# DRAFT Sales Order -- no stock reserved, nothing dispatched -- and Pacific reviews it
+				# (and the PO attached to it) and submits it from the staff app (order_api.submit_draft_order),
+				# which re-runs every gate (credit limit, channel, duplicate PO) exactly as for a staff order.
+				draft=True,
 			)
 		)
+		# Marks this draft as the dealer's own: it is the only kind of draft the dealer ever sees
+		# (a draft staff are working on is never theirs -- see _is_dealer_draft).
+		frappe.db.set_value("Inquiry", inquiry, "linked_sales_order", order["id"], update_modified=False)
+		return order
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		from dms_erp.sales.utils import safe_customer_message
 
@@ -862,14 +973,30 @@ OPEN_ORDER_STAGES = ("Confirmed", "Picking", "Ready to Dispatch", "Dispatched")
 def list_my_orders(stage: str | None = None, stage_group: str | None = None, limit: int = 20, offset: int = 0):
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
-	filters = {"customer": dealer}
+	# A draft staff are working on is never shown to the dealer; the dealer's own sent order is (it waits for
+	# Pacific's confirmation, see convert_to_order). It counts as open, and has no other stage to filter by.
+	values: dict = {"dealer": dealer, "limit": limit, "offset": offset}
+	submitted = "so.docstatus != 0"
 	if stage:
-		filters["custom_fulfillment_stage"] = stage
+		values["stage"] = stage
+		include_drafts = stage == "Draft"
+		submitted = "(so.docstatus != 0 and so.custom_fulfillment_stage = %(stage)s)"
 	elif stage_group == "open":
-		filters["custom_fulfillment_stage"] = ["in", OPEN_ORDER_STAGES]
-	total = frappe.db.count("Sales Order", filters=filters)
-	names = frappe.get_all(
-		"Sales Order", filters=filters, pluck="name", order_by="creation desc", limit_start=offset, limit_page_length=limit
+		submitted = "(so.docstatus != 0 and so.custom_fulfillment_stage in %(open_stages)s)"
+		values["open_stages"] = OPEN_ORDER_STAGES
+		include_drafts = True
+	else:
+		include_drafts = True
+	draft = (
+		"(so.docstatus = 0 and exists (select 1 from `tabInquiry` i where i.name = so.custom_source_ref and i.linked_sales_order = so.name))"
+	)
+	visible = f"({submitted} or {draft})" if include_drafts else submitted
+	where = "so.customer = %(dealer)s and " + visible
+	total = frappe.db.sql(f"select count(*) from `tabSales Order` so where {where}", values)[0][0]
+	names = frappe.db.sql(
+		f"select so.name from `tabSales Order` so where {where} order by so.creation desc limit %(limit)s offset %(offset)s",
+		values,
+		pluck=True,
 	)
 	return {
 		"items": [_dealer_order(frappe.get_doc("Sales Order", name)) for name in names],
@@ -883,6 +1010,16 @@ def list_my_orders(stage: str | None = None, stage_group: str | None = None, lim
 # classification, already kept off the dealer's quotation), the staff owner's and every
 # stage-changer's user/email, the advance-payment sign-off and the reservation-review flags.
 _INTERNAL_ORDER_KEYS = ("channel", "owner", "advanceConfirmed", "advance", "reservation", "deliveryNotes")
+
+
+def _is_dealer_draft(doc) -> bool:
+	"""A draft Sales Order that is this dealer's own request (made by convert_to_order, which links it from its
+	Inquiry) rather than a draft staff are preparing -- the only draft a dealer may see."""
+	return bool(
+		doc.docstatus == 0
+		and doc.get("custom_source_type") == "Inquiry"
+		and frappe.db.get_value("Inquiry", doc.get("custom_source_ref"), "linked_sales_order") == doc.name
+	)
 
 
 def _dealer_order(doc) -> dict:
@@ -902,7 +1039,7 @@ def _dealer_order(doc) -> dict:
 def get_my_order(order: str) -> dict:
 	dealer = _current_dealer()
 	doc = frappe.get_doc("Sales Order", order)
-	if doc.customer != dealer:
+	if doc.customer != dealer or (doc.docstatus == 0 and not _is_dealer_draft(doc)):
 		frappe.throw(_("Order {0} does not belong to you.").format(order), frappe.PermissionError)
 	return _dealer_order(doc)
 

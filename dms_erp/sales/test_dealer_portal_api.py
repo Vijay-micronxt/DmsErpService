@@ -66,6 +66,12 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertIn("request a quotation", str(ctx.exception))
 		self.assertNotEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
 
+	def test_raise_inquiries_keeps_an_optional_po_number(self):
+		with_po = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 0, "enteredBoxes": 2}], customer_po="  PO/2026/77 ")
+		without = dealer_portal_api.raise_inquiries(items=[{"item": self.item, "qty": 0, "enteredBoxes": 2}])
+		self.assertEqual(frappe.db.get_value("Inquiry", with_po["enquiry"], "customer_po"), "PO/2026/77")
+		self.assertFalse(frappe.db.get_value("Inquiry", without["enquiry"], "customer_po"))
+
 	def test_inquiry_lines_say_whether_they_are_available(self):
 		with patch("dms_erp.sales.dealer_portal_api._line_is_available", return_value=False):
 			self.assertFalse(dealer_portal_api.raise_inquiry(item=self.item, qty=3)["items"][0]["available"])
@@ -84,6 +90,55 @@ class TestDealerPortalApi(FrappeTestCase):
 		self.assertEqual(ok["batches"], [{"batchNumber": "B-BIG", "boxes": 10}, {"batchNumber": "B-SMALL", "boxes": 2}])
 		self.assertFalse(over["available"])
 		self.assertEqual(over["batches"], [])
+
+	def test_check_availability_shows_the_batches_of_the_part_that_is_available(self):
+		# 20 asked, 14 sellable: not orderable as a whole (`available` stays False, which is what the
+		# order gate reads) but the dealer is told which batches the 14 would come from.
+		batches = [{"batchNumber": "B-BIG", "boxes": 10}, {"batchNumber": "B-SMALL", "boxes": 4}]
+		with (
+			patch("dms_erp.sales.dealer_portal_api._line_is_available", side_effect=lambda item, boxes, damaged=False: boxes <= 14),
+			patch("dms_erp.sales.dealer_portal_api._sellable_boxes_now", return_value=14),
+			patch("dms_erp.sales.dealer_portal_api.suggest_batch_combination", return_value={"batches": batches}),
+		):
+			(short,) = dealer_portal_api.check_availability(items=[{"item": self.item, "qty": 0, "enteredBoxes": 20}])
+		self.assertFalse(short["available"])
+		self.assertEqual(short["availableBoxes"], 14)
+		self.assertEqual(short["shortfallBoxes"], 6)
+		self.assertEqual(short["batches"], batches)
+
+	def test_check_availability_has_no_part_when_nothing_is_sellable(self):
+		with (
+			patch("dms_erp.sales.dealer_portal_api._line_is_available", return_value=False),
+			patch("dms_erp.sales.dealer_portal_api._sellable_boxes_now", return_value=0),
+		):
+			(none,) = dealer_portal_api.check_availability(items=[{"item": self.item, "qty": 0, "enteredBoxes": 5}])
+		self.assertEqual((none["availableBoxes"], none["shortfallBoxes"], none["batches"]), (0, 5, []))
+
+	def test_check_availability_reports_the_first_arrival_of_in_transit_stock(self):
+		def line(po, qty, eta, drop_ship=False):
+			return {"itemCode": self.item, "po": po, "pendingQty": qty, "expectedReadyDate": eta, "dropShip": drop_ship}
+
+		pending = [
+			line("PO-A", 100, add_days(today(), 5)),
+			line("PO-B", 40, add_days(today(), 5)),
+			line("PO-C", 300, add_days(today(), 30)),
+			line("PO-D", 999, add_days(today(), 2), drop_ship=True),  # never reaches Pacific's stock
+		]
+		with patch("dms_erp.purchase.po_api.list_pending_po_lines", return_value=pending):
+			transit = dealer_portal_api._in_transit_by_item({self.item, "NOT-ON-ORDER"})
+		self.assertEqual(transit[self.item], {"boxes": 140, "eta": add_days(today(), 5), "days": 5, "totalBoxes": 440})
+		self.assertNotIn("NOT-ON-ORDER", transit)
+
+	def test_in_transit_that_is_overdue_counts_as_due_now_and_an_undated_line_has_no_days(self):
+		overdue = [{"itemCode": self.item, "po": "PO-LATE", "pendingQty": 12, "expectedReadyDate": add_days(today(), -4), "dropShip": False}]
+		with patch("dms_erp.purchase.po_api.list_pending_po_lines", return_value=overdue):
+			self.assertEqual(dealer_portal_api._in_transit_by_item({self.item})[self.item]["days"], 0)
+		undated = [{"itemCode": self.item, "po": "PO-NODATE", "pendingQty": 8, "expectedReadyDate": None, "dropShip": False}]
+		with patch("dms_erp.purchase.po_api.list_pending_po_lines", return_value=undated):
+			self.assertEqual(
+				dealer_portal_api._in_transit_by_item({self.item})[self.item],
+				{"boxes": 8, "eta": None, "days": None, "totalBoxes": 8},
+			)
 
 	def test_get_catalog_shows_every_sellable_item_but_flags_unassigned_ones(self):
 		# ISS-2026-00644: hidden_item is sellable but never assigned to self.dealer --
@@ -264,14 +319,45 @@ class TestDealerPortalApi(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="")
 
-	def test_convert_to_order_sets_po_no_and_closes_the_inquiry(self):
+	def test_convert_to_order_sets_po_no_and_the_inquiry_closes_when_pacific_submits(self):
 		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
 		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-DEALER-001")
 
+		# What a dealer sends is a draft: Pacific reviews and submits it, and that is what closes the enquiry.
+		self.assertEqual(order["stage"], "Draft")
 		self.assertEqual(order["customerPo"], "PO-DEALER-001")
 		self.assertEqual(order["dealerId"], self.dealer)
+		frappe.set_user("Administrator")
+		self.assertNotEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
+		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["linkedSalesOrder"], order["id"])
+		order_api.submit_draft_order(order["id"])
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["status"], "Converted to Order")
 		self.assertEqual(inquiry_api.get_inquiry(inquiry["id"])["customerPo"], "PO-DEALER-001")
+
+	def test_a_dealers_order_is_a_draft_they_can_see_and_a_staff_draft_is_not(self):
+		inquiry = dealer_portal_api.raise_inquiry(item=self.item, qty=10)
+		order = dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-DRAFT")
+
+		self.assertEqual(frappe.db.get_value("Sales Order", order["id"], "docstatus"), 0)
+		self.assertIn(order["id"], [row["id"] for row in dealer_portal_api.list_my_orders()["items"]])
+		self.assertIn(order["id"], [row["id"] for row in dealer_portal_api.list_my_orders(stage_group="open")["items"]])
+		self.assertEqual(dealer_portal_api.get_my_order(order["id"])["stage"], "Draft")
+		with self.assertRaises(frappe.ValidationError):  # one draft per enquiry
+			dealer_portal_api.convert_to_order(inquiry=inquiry["id"], expected_dispatch=add_days(today(), 7), customer_po="PO-DRAFT-2")
+
+		frappe.set_user("Administrator")
+		staff_draft = order_api.create_order(
+			dealer=self.dealer,
+			lines=[{"item": self.item, "qty": 1}],
+			expected_dispatch=add_days(today(), 5),
+			customer_address=self.billing_address,
+			shipping_address_name=self.shipping_address,
+			save_as_draft=True,
+		)
+		frappe.set_user(self.dealer_user)
+		self.assertNotIn(staff_draft["id"], [row["id"] for row in dealer_portal_api.list_my_orders()["items"]])
+		with self.assertRaises(frappe.PermissionError):
+			dealer_portal_api.get_my_order(staff_draft["id"])
 
 	def test_convert_to_order_rejects_an_inquiry_that_belongs_to_another_dealer(self):
 		frappe.set_user(self.other_dealer_user)

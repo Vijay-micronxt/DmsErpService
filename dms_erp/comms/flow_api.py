@@ -553,8 +553,13 @@ def get_recent_orders(lead=None, **kwargs):
 	if not dealer:
 		return {"message": "We couldn't find a dealer account for this WhatsApp number. Please contact support."}
 
+	# docstatus != 0: a draft is staff work in progress, never something to show the dealer.
 	names = frappe.get_all(
-		"Sales Order", filters={"customer": dealer}, fields=["name", "custom_fulfillment_stage"], order_by="creation desc", limit_page_length=5
+		"Sales Order",
+		filters={"customer": dealer, "docstatus": ["!=", 0]},
+		fields=["name", "custom_fulfillment_stage"],
+		order_by="creation desc",
+		limit_page_length=5,
 	)
 	if not names:
 		reply = "You don't have any orders yet."
