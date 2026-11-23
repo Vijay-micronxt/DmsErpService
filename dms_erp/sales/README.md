@@ -344,13 +344,51 @@ Pick Tasks; everyone reads.
   asks `dealer_portal_api.check_availability` once a quantity is typed and shows only
   "Available" / "Not available" *for that quantity* (`_line_is_available`: the same
   `available_to_promise` number the catalog used to print, compared with the boxes asked
-  for -- deliberately no "partly available" middle state), plus the batch split the system
-  will use (`_batch_split`, largest batch first, only the boxes asked for, never a batch's
-  own on-hand). The per-line `available` flag also rides on every dealer-facing inquiry row,
+  for). `available` stays whole-quantity -- it is what the order gate and the inquiry rows read, so a
+  line that is only partly there is still not orderable. (19 Nov 2026: the response now also says
+  how much of a short line there is -- `availableBoxes`/`shortfallBoxes` -- and the screen shows
+  "Partly available" instead of a bare "Not available".) Plus the batch split the system will use
+  (`_batch_split`, largest batch first, only the boxes asked for, never a batch's own on-hand), now
+  for the available part of a short line. `inTransit` is stock already on an open warehouse-bound
+  PO: the first arrival's boxes/date/days (the lines due on the earliest expected date, not the whole
+  pending quantity, which would overstate what lands first) and `totalBoxes` on order; a late PO
+  reads 0 days, an undated one has no days; drop-ship lines are excluded. The per-line `available` flag also rides on every dealer-facing inquiry row,
   and `convert_to_order` refuses an enquiry with an unavailable line -- the portal hiding
   "Create order" is a display hint; this is the real gate. A dealer can still raise an
   enquiry or ask for a quotation on it. The batch *picker* is hidden in the portal UI
   (`SHOW_BATCH_PICKER`) but `preferred_batch_no` and its backend checks are untouched.
+- **Dealer Purchase Order (20 Nov 2026)** — `customer_po.py`, doctype `Dealer Purchase Order`. The customer's PO (a
+  JPG/PNG/PDF) is a document of its own, not fields on the Inquiry: a PO can arrive before any inquiry exists, from the dealer
+  portal, by staff or over WhatsApp, it gets replaced and reviewed, and one PO links forward through the whole chain --
+  `inquiry`, `quotation`, `sales_order` Links (each must be the PO's own dealer's; the doctype validates it). The Inquiry shows it
+  as a Connection. Links fill in by hooks, not by edits to quotation_api/order_api, so every creation path links the same way:
+  `link_po_to_quotation` (Quotation after_insert, via `custom_inquiry`) and `link_po_to_order` (Sales Order after_insert, via
+  `custom_source_type/ref`, which also links the file onto the order). Three separate pieces so none can break another.
+  (1) *Attach*: type from the file's first bytes (not its name), 10 MB cap, a **private** File on the document, then
+  `frappe.enqueue(..., enqueue_after_commit)`; never talks to an AI. The dealer's `attach_po(inquiry)` creates the inquiry's PO or
+  replaces its file; staff can also add one with no inquiry at all (`create_dealer_po`) and link it later. (2) *Check*
+  (`run_check`, background): reads the PO through `pilot_assist.api.ai_api.read_po_image` (imported inside the job, so a site
+  without pilot_assist still works), maps each printed row to an Item (exact code, then the dealer's own code, then a name match
+  >= 0.8), converts sqft/pcs/sqm to boxes with the order rule, and compares with the furthest-back linked document that has items
+  (inquiry, else quotation, else order; a PO linked to nothing is only checked for rows it cannot map or read). `compare_lines`
+  writes flags: `missing`, `qty_diff`, `extra`, `unmatched`, `unreadable`. The PO number and date it reads fill the document only
+  if staff have not typed them. Any failure ends as status `Unavailable` ("review by eye") or `Needs review`; nothing raises. The
+  AI is never shown the linked items -- it reads what is printed and the comparison is ours. (3) *Gate*: `assert_po_attached`,
+  called by the dealer's `convert_to_order` only, and only when DMS Sales Settings > `require_po_attachment` is ticked (off by
+  default, so nothing changes until a site opts in); it checks that a PO is on file, never what the check made of it. Staff,
+  WhatsApp and quotation-accept paths are not gated. Once an order exists the file can no longer be replaced (the order carries its
+  own link to the same stored file; `content_hash` is kept so deleting one File row never removes the other's file). The check
+  result and flags are staff-only: `dealer_portal_api.get_my_po` / `attach_po` return only `{required, attached, fileName}`.
+  Flags never block an order. The portal asks for the PO on the screen that *sends* the enquiry ("Review & send" ->
+  "Send enquiry"), both the number and the file optional: `raise_inquiries(..., customer_po)` keeps the number on the
+  Inquiry (it is what `make_sales_order` copies to the order's `po_no`, and it becomes the Dealer Purchase Order's number), then
+  the portal calls `attach_po`. A file that fails to upload does not undo the enquiry.
+  **What a dealer sends is a draft (20 Nov 2026).** `convert_to_order` now saves a DRAFT Sales Order (`draft=True`): no stock
+  reserved, the enquiry not yet closed, one draft per enquiry. Pacific reviews it and the PO, then submits it from the staff app
+  (`order_api.submit_draft_order`, which replays every gate -- credit limit, channel, duplicate PO -- and closes the enquiry). The
+  dealer sees their own draft (Orders list, order page: "Awaiting confirmation"), never one staff are preparing:
+  `_is_dealer_draft` is true only for a draft whose Inquiry points back at it via `linked_sales_order`, which `convert_to_order`
+  sets. The order's owner reads Administrator (`_run_as_system`), so ownership cannot mark a dealer draft.
 - **Dealer catalog speed** — `get_catalog` resolves the item set, filters, search and paging
   in SQL (`_catalog_where`) instead of pulling ~4,300 codes into Python and back into `IN`
   lists, and `item_codes_with_batch` reads the Batch table's own `item` link instead of

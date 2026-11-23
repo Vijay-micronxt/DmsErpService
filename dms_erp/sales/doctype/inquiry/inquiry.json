@@ -185,7 +185,12 @@
   }
  ],
  "index_web_pages_for_search": 0,
- "links": [],
+ "links": [
+  {
+   "link_doctype": "Dealer Purchase Order",
+   "link_fieldname": "inquiry"
+  }
+ ],
  "modified": "2026-11-12 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",

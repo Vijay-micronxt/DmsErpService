@@ -11,7 +11,8 @@
   "reservation_max_days",
   "reservation_reminder_day",
   "inquiry_drop_reasons",
-  "eway_bill_threshold_amount"
+  "eway_bill_threshold_amount",
+  "require_po_attachment"
  ],
  "fields": [
   {
@@ -68,6 +69,13 @@
    "fieldname": "eway_bill_threshold_amount",
    "fieldtype": "Currency",
    "label": "e-Way Bill Threshold Amount"
+  },
+  {
+   "default": "0",
+   "fieldname": "require_po_attachment",
+   "fieldtype": "Check",
+   "label": "Require a Customer PO Before a Dealer Can Place an Order",
+   "description": "When ticked, a dealer converting an enquiry to an order must have attached their PO to that enquiry first (the dealer portal blocks it otherwise). Off by default: nothing changes until a site turns it on. Staff and WhatsApp order paths are not affected."
   }
  ],
  "index_web_pages_for_search": 0,
