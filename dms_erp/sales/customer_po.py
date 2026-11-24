@@ -350,8 +350,32 @@ def _summary(result: dict) -> str:
 def _file_bytes(file_name: str) -> bytes:
 	"""The stored bytes of a File, read as bytes: File.get_content() hands back text whenever the
 	content happens to decode as UTF-8, which would corrupt a binary file."""
-	with open(frappe.get_doc("File", file_name).get_full_path(), "rb") as handle:
+	file_doc = frappe.get_doc("File", file_name)
+	url = file_doc.file_url or ""
+	if S3_DOWNLOAD_MARKER in url:
+		return _s3_bytes(url, file_doc.file_name)
+	with open(file_doc.get_full_path(), "rb") as handle:
 		return handle.read()
+
+
+S3_DOWNLOAD_MARKER = "frappe_s3_attachment.controller.generate_file"
+
+
+def _s3_bytes(url: str, file_name: str) -> bytes:
+	"""With frappe_s3_attachment installed, the upload hook moves the file to S3, deletes the local copy
+	and rewrites File.file_url to its download endpoint -- so there is nothing on disk to open. Ask the
+	same app for a short-lived signed link and fetch it (needs s3:GetObject on the bucket)."""
+	from urllib.parse import parse_qs, urlparse
+	from urllib.request import urlopen
+
+	from frappe_s3_attachment.controller import S3Operations
+
+	key = parse_qs(urlparse(url).query).get("key", [""])[0]
+	if not key:
+		frappe.throw(_("The stored file has no S3 key."))
+	signed = S3Operations().get_url(key, file_name)
+	with urlopen(signed, timeout=30) as response:
+		return response.read()
 
 
 def _result(status: str, **extra) -> dict:
