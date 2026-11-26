@@ -17,6 +17,14 @@ CUSTOM_FIELDS = {
 			"options": "Customer",
 			"description": "BRD C.13 — set only on dealer-portal accounts (role DMS Dealer). Never set on a staff account.",
 		},
+		{
+			"fieldname": "custom_dealer_phone",
+			"fieldtype": "Data",
+			"label": "Dealer Phone",
+			"description": "Which of the dealer's numbers this portal account signs in with (24 Nov 2026) -- the number's role decides what the person may do. Blank on accounts created before roles existed: those are the dealer's main number.",
+			"insert_after": "custom_dealer",
+			"read_only": 1,
+		},
 	],
 }
 

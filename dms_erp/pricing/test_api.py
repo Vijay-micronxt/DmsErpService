@@ -71,6 +71,72 @@ class TestPricingApi(FrappeTestCase):
 		self.assertEqual(pricing_api.get_dealer_price(item, price_list=DEALER_CLASSIFICATION_MASTER), 700)
 		self.assertEqual(pricing_api.get_price_for_dealer(item, dealer), 700)
 
+	def test_approve_price_can_publish_to_another_tier_list_and_records_which(self):
+		item = make_item("PRICE-APPROVE-LIST", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+		pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		record = pricing_api.approve_price(
+			item=item, final_price=650, reason="Master rate", price_list=DEALER_CLASSIFICATION_MASTER
+		)
+
+		self.assertEqual(
+			pricing_api.get_dealer_tier_prices(item), {"Standard Dealer": None, "Dealer": 500, "Master Dealer": 650}
+		)
+		newest = record["history"][0]
+		self.assertEqual(newest["priceList"], DEALER_CLASSIFICATION_MASTER)
+		self.assertEqual(newest["newPrice"], 650)
+		# Old price is that list's own previous rate (none yet), not the Dealer list's 500.
+		self.assertIsNone(newest["oldPrice"])
+		# The earlier launch approval is still read as a "Dealer" row.
+		self.assertEqual(record["history"][1]["priceList"], "Dealer")
+
+	def test_approve_price_defaults_to_the_dealer_list(self):
+		item = make_item("PRICE-APPROVE-DEFAULT", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+
+		record = pricing_api.approve_price(item=item, final_price=500, reason="Launch")
+
+		self.assertEqual(pricing_api.get_dealer_price(item), 500)
+		self.assertEqual(record["status"], "Approved")
+		self.assertEqual(record["history"][0]["priceList"], "Dealer")
+
+	def test_approving_a_non_dealer_list_does_not_mark_the_launch_price_approved(self):
+		item = make_item("PRICE-APPROVE-STATUS", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+
+		record = pricing_api.approve_price(item=item, final_price=650, price_list=DEALER_CLASSIFICATION_MASTER)
+
+		# Status tracks the Dealer launch price; the Dealer list still has no rate, so the
+		# item must not read as approved.
+		self.assertEqual(record["status"], "Pending")
+		self.assertIsNone(pricing_api.get_dealer_price(item))
+		self.assertEqual(pricing_api.get_dealer_price(item, price_list=DEALER_CLASSIFICATION_MASTER), 650)
+
+	def test_approving_a_non_dealer_list_is_not_overwritten_by_the_series_rate(self):
+		series_api.create_series(
+			series_name="Pricing Test Series",
+			price_list_rates=[{"price_list": DEALER_CLASSIFICATION_MASTER, "rate": 700}],
+		)
+		item = make_item("PRICE-APPROVE-SERIES", "Vitrified")
+		frappe.db.set_value("Item", item, "custom_series_ref", "Pricing Test Series")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+
+		pricing_api.approve_price(item=item, final_price=650, price_list=DEALER_CLASSIFICATION_MASTER)
+
+		# Approving the Dealer list would have published the Series' 700 over this.
+		self.assertEqual(pricing_api.get_dealer_price(item, price_list=DEALER_CLASSIFICATION_MASTER), 650)
+
+	def test_approve_price_rejects_an_unknown_price_list_and_writes_nothing(self):
+		item = make_item("PRICE-APPROVE-INVALID", "Vitrified")
+		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")
+
+		with self.assertRaises(frappe.ValidationError):
+			pricing_api.approve_price(item=item, final_price=650, price_list="Wholesale")
+
+		self.assertIsNone(pricing_api.get_dealer_price(item, price_list="Wholesale"))
+		self.assertEqual(pricing_api.get_price_record(item)["history"], [])
+
 	def test_get_dealer_tier_prices_returns_all_three_lists_with_none_for_unpublished(self):
 		item = make_item("PRICE-TIER-READ", "Vitrified")
 		pricing_api.ensure_price_record(item, self.supplier, 400, 25, "2026-08-01")

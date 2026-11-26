@@ -64,6 +64,8 @@ def _serialize(doc: "frappe.model.document.Document") -> dict:
 		"history": [
 			{
 				"id": row.name,
+				# Rows approved before this field existed were all on the "Dealer" list.
+				"priceList": row.get("price_list") or DEALER_PRICE_LIST,
 				"oldPrice": row.old_price,
 				"newPrice": row.new_price,
 				"costPrice": row.cost_price,
@@ -320,15 +322,31 @@ def save_cost_inputs(
 
 
 @frappe.whitelist(methods=["POST"])
-def approve_price(item: str, final_price: float, reason: str | None = None):
+def approve_price(item: str, final_price: float, reason: str | None = None, price_list: str = DEALER_PRICE_LIST):
+	"""BRD C.7.1 derives three price lists (Standard Dealer, Dealer, Master Dealer) from one
+	cost build-up and a margin that differs per list, so the approver names which list this
+	price is for. Defaulting to "Dealer" keeps every existing caller (and the launch flow,
+	where "Dealer" is the list the catalog reads) behaving exactly as before.
+
+	Approving a non-"Dealer" list deliberately does two things differently:
+	- It leaves the proposal's status alone. Status means "the launch dealer price has been
+	  approved"; flipping it on a Master Dealer rate would mark an item Approved while the
+	  "Dealer" list still has no rate -- the very state that blocks quoting it.
+	- It skips `_publish_series_tier_rates`, which would immediately overwrite the rate just
+	  approved with the Series' pre-configured one.
+	The history row records the list either way, so the audit trail never reads a Master
+	Dealer approval as a change to the Dealer price."""
 	_assert_can_manage_pricing()
+	if price_list not in PRICE_LISTS:
+		frappe.throw(_("Invalid price_list: {0}").format(price_list), frappe.ValidationError)
 
 	doc = frappe.get_doc("Item Price Proposal", item)
-	old_price = get_dealer_price(item)
+	old_price = get_dealer_price(item, price_list=price_list)
 
 	doc.append(
 		"history",
 		{
+			"price_list": price_list,
 			"old_price": old_price,
 			"new_price": final_price,
 			"cost_price": doc.landing_cost(),
@@ -339,11 +357,14 @@ def approve_price(item: str, final_price: float, reason: str | None = None):
 			"updated_at": now_datetime(),
 		},
 	)
-	doc.status = "Approved"
+	is_launch_list = price_list == DEALER_PRICE_LIST
+	if is_launch_list:
+		doc.status = "Approved"
 	doc.save(ignore_permissions=True)
 
-	# Approved price becomes the live catalog price everywhere Item Price is read.
-	set_dealer_price(item, final_price)
-	_publish_series_tier_rates(item)
+	# Approved price becomes the live rate on that list everywhere Item Price is read.
+	set_price_for_list(item, price_list, final_price)
+	if is_launch_list:
+		_publish_series_tier_rates(item)
 
 	return _serialize(doc)

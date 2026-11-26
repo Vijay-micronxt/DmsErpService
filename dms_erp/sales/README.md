@@ -389,6 +389,20 @@ Pick Tasks; everyone reads.
   dealer sees their own draft (Orders list, order page: "Awaiting confirmation"), never one staff are preparing:
   `_is_dealer_draft` is true only for a draft whose Inquiry points back at it via `linked_sales_order`, which `convert_to_order`
   sets. The order's owner reads Administrator (`_run_as_system`), so ownership cannot mark a dealer draft.
+- **Dealer roles per phone number (24 Nov 2026)** (`dealer_roles.py`) — a dealer has several people, so the role sits on the
+  number: `Customer.custom_phone_role` (main) and `Dealer Phone.role` (extras), Dealer Accounts or Dealer Sales. Each number
+  signs in as its OWN portal User (`auth.dealer_api._dealer_portal_user(dealer, phone)`, `User.custom_dealer_phone`); the main
+  number keeps the account every dealer already had (blank `custom_dealer_phone`), which is also what email + password resolves
+  to. The role is read live off the phone on every request, never copied onto the User, so a staff change applies at once and
+  a removed number stops working. What a role may do -- see prices, view quotations, view sales orders, raise a sales order,
+  view invoices -- is two columns of tick boxes in DMS Sales Settings, read straight from `tabSingles` because
+  `get_single_value` answers 0 for an unsaved box and the shipped default for Accounts is ON (Sales: OFF). A blank role counts
+  as Accounts, so existing users lose nothing on deploy. Every gated `dealer_portal_api` endpoint calls
+  `dealer_roles.require(...)` first; money is removed by key (`strip_prices`, recursive -- the order embeds invoices, the invoice
+  embeds taxes and receipts) from quotation, order, invoice and enquiry responses when *see prices* is off. `my_profile` returns
+  `role` and `permissions` so the portal can hide controls; the server is still the gate. Staff set roles through
+  `update_dealer` (`phoneRole`, `additionalPhones[].role`) or in Desk on the Customer. Not gated (not in the agreed list):
+  catalogue, enquiries, PO attach, `my_dues`, `cancel_my_order`.
 - **Dealer catalog speed** — `get_catalog` resolves the item set, filters, search and paging
   in SQL (`_catalog_where`) instead of pulling ~4,300 codes into Python and back into `IN`
   lists, and `item_codes_with_batch` reads the Batch table's own `item` link instead of

@@ -75,6 +75,7 @@ from frappe.utils import cint, flt
 
 from dms_erp.finance.ledger import party_balances
 from dms_erp.phone_utils import clean_indian_mobile
+from dms_erp.sales import dealer_roles
 from dms_erp.sales.order_channel import is_valid_dealer_type
 from dms_erp.warehouse.utils import default_company
 
@@ -464,6 +465,7 @@ def _serialize(
 	additional_phones: list | None = None,
 	payment_terms: str | None = None,
 	addresses: dict | None = None,
+	phone_role: str | None = None,
 ) -> dict:
 	portal_status = portal_status or _NO_PORTAL_ACCOUNT
 	addresses = addresses or {}
@@ -493,6 +495,9 @@ def _serialize(
 		"salesperson": salesperson,
 		# BRD C.13 — the dealer portal's login identifier (see auth.dealer_api).
 		"phone": phone,
+		# 24 Nov 2026 -- what the person on the main phone may do in the dealer portal (null counts as
+		# Dealer Accounts); each extra number below carries its own `role`. See sales.dealer_roles.
+		"phoneRole": phone_role,
 		# Client requirement 8.9 -- more numbers for the same dealer; each works for OTP
 		# login and WhatsApp exactly like `phone`.
 		"additionalPhones": additional_phones or [],
@@ -541,7 +546,13 @@ def _portal_status_for(customer_names: list[str]) -> dict[str, dict]:
 	if not customer_names:
 		return status
 
-	users = frappe.get_all("User", filters={"custom_dealer": ["in", customer_names]}, fields=["name", "custom_dealer"])
+	# Only the main number's account: an extra number's account is a different person's, and "has this
+	# dealer been onboarded" reads off the dealer's own.
+	users = frappe.get_all(
+		"User",
+		filters={"custom_dealer": ["in", customer_names], "custom_dealer_phone": ["is", "not set"]},
+		fields=["name", "custom_dealer"],
+	)
 	if not users:
 		return status
 
@@ -577,6 +588,13 @@ def _portal_status_for(customer_names: list[str]) -> dict[str, dict]:
 	return status
 
 
+def _clean_dealer_role(role: str | None) -> str | None:
+	role = (role or "").strip()
+	if role and role not in dealer_roles.ROLES:
+		frappe.throw(_("Role must be one of: {0}.").format(", ".join(dealer_roles.ROLES)), frappe.ValidationError)
+	return role or None
+
+
 def _additional_phones_for(customer_names: list[str]) -> dict[str, list[dict]]:
 	if not customer_names or not frappe.db.table_exists("Dealer Phone"):
 		return {}
@@ -584,11 +602,11 @@ def _additional_phones_for(customer_names: list[str]) -> dict[str, list[dict]]:
 	for r in frappe.get_all(
 		"Dealer Phone",
 		filters={"parent": ["in", customer_names], "parenttype": "Customer"},
-		fields=["parent", "phone", "contact_name"],
+		fields=["parent", "phone", "contact_name", "role"],
 		order_by="idx asc",
 		ignore_permissions=True,
 	):
-		out.setdefault(r.parent, []).append({"phone": r.phone, "name": r.contact_name})
+		out.setdefault(r.parent, []).append({"phone": r.phone, "name": r.contact_name, "role": r.role or None})
 	return out
 
 
@@ -619,7 +637,8 @@ def _set_additional_phones(doc, phones) -> None:
 		if owner:
 			frappe.throw(_("{0} is already registered to another dealer ({1}).").format(phone, owner), frappe.DuplicateEntryError)
 		name = (entry.get("name") or "").strip() if isinstance(entry, dict) else ""
-		rows.append({"phone": phone, "contact_name": name or None})
+		role = _clean_dealer_role(entry.get("role")) if isinstance(entry, dict) else None
+		rows.append({"phone": phone, "contact_name": name or None, "role": role})
 	doc.set("custom_additional_phones", rows)
 
 
@@ -652,6 +671,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			"custom_dealer_type",
 			"custom_salesperson",
 			"custom_phone",
+			"custom_phone_role",
 			"custom_price_visible",
 			"custom_email",
 			"custom_out_of_station",
@@ -692,6 +712,7 @@ def list_dealers(search: str | None = None, disabled: bool = False):
 			extra_phones.get(r.name),
 			r.payment_terms,
 			address_blocks.get(r.name),
+			r.custom_phone_role or None,
 		)
 		for r in rows
 	]
@@ -721,9 +742,10 @@ def get_dealer(dealer: str):
 		party_balances("Customer", [doc.name], company).get(doc.name, 0),
 		_portal_status_for([doc.name]).get(doc.name),
 		doc.default_price_list,
-		[{"phone": r.phone, "name": r.contact_name} for r in doc.get("custom_additional_phones") or []],
+		[{"phone": r.phone, "name": r.contact_name, "role": r.role or None} for r in doc.get("custom_additional_phones") or []],
 		doc.payment_terms,
 		_addresses_for([doc.name]).get(doc.name),
+		doc.get("custom_phone_role") or None,
 	)
 
 
@@ -815,6 +837,7 @@ def create_dealer(
 	billing_address: dict | None = None,
 	shipping_address: dict | None = None,
 	shipping_same_as_billing: bool | None = None,
+	phone_role: str | None = None,
 ):
 	"""BRD MD-01 — create a dealer (a native Customer). `group`/`territory` fall back to
 	the site's Selling Settings defaults when omitted; a group-type Customer Group is
@@ -848,6 +871,8 @@ def create_dealer(
 		values["custom_salesperson"] = salesperson
 	if phone:
 		values["custom_phone"] = _clean_phone_or_throw(phone)
+	if phone_role:
+		values["custom_phone_role"] = _clean_dealer_role(phone_role)
 	if price_visible is not None:
 		values["custom_price_visible"] = 1 if price_visible else 0
 	if email:
@@ -883,7 +908,7 @@ def create_dealer(
 @frappe.whitelist(methods=["POST", "PUT"])
 def update_dealer(dealer: str, patch: dict):
 	"""Patch keys: name, group, territory, dealerType, salesperson, creditLimit, disabled,
-	phone, priceVisible, email, outOfStation, gstin, address, priceList, paymentTerms, plus
+	phone, phoneRole, priceVisible, email, outOfStation, gstin, address, priceList, paymentTerms, plus
 	billingAddress / shippingAddress ({line1, line2, city, state, pincode}) and
 	shippingSameAsBilling -- real Address records, see _apply_dealer_addresses. Anything else —
 	including `classification`, which is recomputed nightly — is ignored.
@@ -933,6 +958,8 @@ def update_dealer(dealer: str, patch: dict):
 	for key, value in patch.items():
 		if key == "phone":
 			doc.set("custom_phone", _clean_phone_or_throw(value) if value else None)
+		elif key == "phoneRole":
+			doc.set("custom_phone_role", _clean_dealer_role(value))
 		elif key == "gstin":
 			doc.set("custom_gstin", value.strip().upper() if value else None)
 		elif key == "email":

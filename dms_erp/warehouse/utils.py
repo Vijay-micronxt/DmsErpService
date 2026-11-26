@@ -8,8 +8,69 @@ import frappe
 
 from dms_erp.catalog.utils import SQFT_TO_SQM
 
-CAPACITY_FOR = {"36x8": 900, "36x6": 700, "32x8": 800, "32x6": 600}
 DAMAGE_BAY_TYPES = {"damage", "insurance_claim"}
+
+MM_PER_FT = 304.8
+
+# Suggested starting values for the bay form's dropdowns (agreed with the client on the
+# physical-bay walkthrough). Only suggestions: every bay stores its own values, and any
+# value a user saves on one bay is offered on the next (see bay_api.list_bay_size_options).
+DEFAULT_SLOT_GAP_MM = 100
+DEFAULT_BACK_MARGIN_BOXES = 4
+DEFAULT_FRONT_MARGIN_BOXES = 5
+DEFAULT_TOP_CLEARANCE_MM = 15
+
+# A bay's capacity depends on which item goes in it (tile width -> slots, box thickness ->
+# boxes per stack), but the occupancy %, free space and bay map need ONE number per bay with
+# no item in hand. Until the item carries a box thickness, that number is worked out for the
+# example item used in the client discussion: a 600 mm tile in a 1 inch box. So it is an
+# estimate, and it is why the figure is labelled approximate wherever it is shown.
+REFERENCE_TILE_WIDTH_MM = 600
+REFERENCE_BOX_THICKNESS_MM = 25.4
+
+
+def _floor_ratio(numerator: float, denominator: float) -> int:
+	"""floor(a / b) that survives float noise: 1828.8 / 25.4 must be 72, not 71.99999..."""
+	import math
+
+	return math.floor(round(numerator / denominator, 6))
+
+
+def compute_bay_capacity(
+	length_mm: float,
+	width_mm: float,
+	slot_gap_mm: float,
+	back_margin_boxes: int,
+	front_margin_boxes: int,
+	tile_width_mm: float = REFERENCE_TILE_WIDTH_MM,
+	box_thickness_mm: float = REFERENCE_BOX_THICKNESS_MM,
+) -> dict:
+	"""Slots along the bay length, then two stacks per slot: a lower stack across the bay
+	width and an upper stack on it, 4 boxes in from the back and 5 short of the front.
+
+	A slot is as wide as the tile with `slot_gap_mm` between neighbours only, so n slots
+	need n*tile + (n-1)*gap <= length, i.e. n <= (length + gap) / (tile + gap).
+
+	Bay height is stored and required but does not limit anything yet: how many stacks fit
+	going up needs the item's box height, which the item does not carry. Two stacks is the
+	agreed model, so this always counts two."""
+	slots = max(0, _floor_ratio(length_mm + slot_gap_mm, tile_width_mm + slot_gap_mm))
+	lower = max(0, _floor_ratio(width_mm, box_thickness_mm))
+	upper = max(0, lower - back_margin_boxes - front_margin_boxes)
+	per_slot = lower + upper
+	return {
+		"slots": slots,
+		"lowerStackBoxes": lower,
+		"upperStackBoxes": upper,
+		"boxesPerSlot": per_slot,
+		"capacityBoxes": slots * per_slot,
+	}
+
+
+def bay_size_label(length_mm: float, width_mm: float) -> str:
+	"""The "40x6" (ft) label the rest of the app already shows next to a bay -- now derived
+	from the real sizes instead of typed in, so the two can never disagree."""
+	return f"{round(length_mm / MM_PER_FT, 1):g}x{round(width_mm / MM_PER_FT, 1):g}"
 
 
 def default_company() -> str:
@@ -169,7 +230,16 @@ def serialize_bay(bay) -> dict:
 		"warehouse": parent_name,
 		"type": bay.custom_bay_type,
 		"dimensions": bay.custom_dimensions,
+		# Approximate: worked out for the reference item (see REFERENCE_TILE_WIDTH_MM).
 		"capacityBoxes": bay.custom_capacity_boxes,
+		# None on a bay created before these fields existed.
+		"lengthMm": bay.get("custom_length_mm"),
+		"widthMm": bay.get("custom_width_mm"),
+		"heightMm": bay.get("custom_height_mm"),
+		"slotGapMm": bay.get("custom_slot_gap_mm"),
+		"backMarginBoxes": bay.get("custom_back_margin_boxes"),
+		"frontMarginBoxes": bay.get("custom_front_margin_boxes"),
+		"topClearanceMm": bay.get("custom_top_clearance_mm"),
 		"suitableCategories": suitable_categories(bay),
 		"status": bay.custom_bay_status,
 		"zone": bay.custom_zone,

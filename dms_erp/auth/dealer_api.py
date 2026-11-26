@@ -52,7 +52,7 @@ from dms_erp.auth.api import _issue_tokens
 from dms_erp.auth.utils import hash_token
 from dms_erp.comms.api import _send_message
 from dms_erp.comms.whats91 import send_otp_template
-from dms_erp.phone_utils import dealer_for_phone
+from dms_erp.phone_utils import clean_indian_mobile, dealer_for_phone
 
 OTP_LENGTH = 6
 OTP_TTL_MINUTES = 5
@@ -60,17 +60,34 @@ MAX_OTP_ATTEMPTS = 5
 OTP_RESEND_COOLDOWN_SECONDS = 60
 
 
-def _dealer_portal_user(dealer: str) -> str:
-	"""Finds this dealer's existing portal User, or creates it on first successful
-	login. The synthetic email is deterministic (a hash of the dealer's own Customer
-	id) purely so it's guaranteed unique and valid-shaped -- it's never shown to the
-	dealer or used to contact them, unlike custom_phone."""
-	existing = frappe.db.get_value("User", {"custom_dealer": dealer}, "name")
+def _main_portal_user(dealer: str) -> str | None:
+	"""The account of the dealer's main number -- the one created before per-phone accounts existed
+	(no custom_dealer_phone), and the one email + password sign-in resolves to."""
+	return frappe.db.get_value("User", {"custom_dealer": dealer, "custom_dealer_phone": ["is", "not set"]}, "name")
+
+
+def _dealer_portal_user(dealer: str, phone: str | None = None) -> str:
+	"""Finds the portal User for this dealer's number, or creates it on first successful login.
+	Each number signs in as its own User (24 Nov 2026) so the role on that number -- Dealer
+	Accounts or Dealer Sales, see sales.dealer_roles -- applies to that person alone; one shared
+	account per dealer could not tell the accountant from the salesperson. The main number keeps
+	the account every dealer already had, so nothing existing changes. The synthetic email is
+	deterministic (a hash of the dealer, plus the number for an extra one) purely so it's
+	guaranteed unique and valid-shaped -- it's never shown to the dealer or used to contact
+	them, unlike custom_phone."""
+	clean = clean_indian_mobile(phone)
+	is_main = not clean or clean == frappe.db.get_value("Customer", dealer, "custom_phone")
+	existing = (
+		_main_portal_user(dealer)
+		if is_main
+		else frappe.db.get_value("User", {"custom_dealer": dealer, "custom_dealer_phone": clean}, "name")
+	)
 	if existing:
 		return existing
 
 	dealer_name = frappe.db.get_value("Customer", dealer, "customer_name") or dealer
-	email = f"dealer-{hashlib.sha1(dealer.encode('utf-8')).hexdigest()[:16]}@dealer.dms-erp.local"
+	seed = dealer if is_main else f"{dealer}:{clean}"
+	email = f"dealer-{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:16]}@dealer.dms-erp.local"
 	doc = frappe.get_doc(
 		{
 			"doctype": "User",
@@ -80,6 +97,7 @@ def _dealer_portal_user(dealer: str) -> str:
 			"user_type": "System User",
 			"send_welcome_email": 0,
 			"custom_dealer": dealer,
+			"custom_dealer_phone": None if is_main else clean,
 			"roles": [{"role": "DMS Dealer"}],
 		}
 	)
@@ -163,7 +181,7 @@ def verify_otp(phone: str, otp: str, device_id: str, device_name: str | None = N
 	otp_doc.consumed_at = now
 	otp_doc.save(ignore_permissions=True)
 
-	user = _dealer_portal_user(dealer)
+	user = _dealer_portal_user(dealer, phone)
 	if not frappe.db.get_value("User", user, "enabled"):
 		frappe.throw(_("This account is disabled."), frappe.AuthenticationError)
 
@@ -187,7 +205,7 @@ def login_with_password(email: str, password: str, device_id: str, device_name: 
 	if not dealer:
 		frappe.throw(generic_error, frappe.AuthenticationError)
 
-	user = frappe.db.get_value("User", {"custom_dealer": dealer}, "name")
+	user = _main_portal_user(dealer)
 	if not user:
 		# No portal account exists yet at all (this dealer has never logged in via OTP,
 		# so set_my_password was never reachable either) -- same generic error, never
