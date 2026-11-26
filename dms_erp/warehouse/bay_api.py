@@ -11,9 +11,82 @@ import frappe
 from frappe import _
 
 from dms_erp.pagination import clamp
-from dms_erp.warehouse.utils import CAPACITY_FOR, default_company, get_bay, serialize_bay
+from dms_erp.warehouse.utils import (
+	DEFAULT_BACK_MARGIN_BOXES,
+	DEFAULT_FRONT_MARGIN_BOXES,
+	DEFAULT_SLOT_GAP_MM,
+	DEFAULT_TOP_CLEARANCE_MM,
+	MM_PER_FT,
+	bay_size_label,
+	compute_bay_capacity,
+	default_company,
+	get_bay,
+	serialize_bay,
+)
 
 BAY_WRITE_ROLES = {"DMS Warehouse", "DMS Management", "System Manager"}
+
+# camelCase patch key -> (Warehouse fieldname, human label). Order is the order the form shows them.
+GEOMETRY_FIELDS = {
+	"lengthMm": ("custom_length_mm", "Bay length"),
+	"widthMm": ("custom_width_mm", "Bay width"),
+	"heightMm": ("custom_height_mm", "Bay height"),
+	"slotGapMm": ("custom_slot_gap_mm", "Gap between slots"),
+	"backMarginBoxes": ("custom_back_margin_boxes", "Back margin"),
+	"frontMarginBoxes": ("custom_front_margin_boxes", "Front margin"),
+	"topClearanceMm": ("custom_top_clearance_mm", "Top clearance"),
+}
+
+
+def _geometry_values(
+	length_mm, width_mm, height_mm, slot_gap_mm, back_margin_boxes, front_margin_boxes, top_clearance_mm
+) -> dict:
+	"""Validate the seven size inputs and turn them into the Warehouse fields to save --
+	including the derived "40x6" label and the computed capacity, which are never typed in.
+
+	Every one is required, zero included only where zero is meaningful (a gap, a margin or a
+	clearance can be 0; a length, width or height cannot). A bay saved without them would have
+	no capacity to compute, which is exactly the gap the old hand-entered number papered over."""
+	given = {
+		"lengthMm": length_mm,
+		"widthMm": width_mm,
+		"heightMm": height_mm,
+		"slotGapMm": slot_gap_mm,
+		"backMarginBoxes": back_margin_boxes,
+		"frontMarginBoxes": front_margin_boxes,
+		"topClearanceMm": top_clearance_mm,
+	}
+	missing = [GEOMETRY_FIELDS[key][1] for key, value in given.items() if value in (None, "")]
+	if missing:
+		frappe.throw(_("Required: {0}.").format(", ".join(missing)), frappe.ValidationError)
+
+	try:
+		length_mm, width_mm, height_mm, slot_gap_mm, top_clearance_mm = (
+			float(v) for v in (length_mm, width_mm, height_mm, slot_gap_mm, top_clearance_mm)
+		)
+		back_margin_boxes, front_margin_boxes = int(back_margin_boxes), int(front_margin_boxes)
+	except (TypeError, ValueError):
+		frappe.throw(_("Bay sizes must be numbers (millimetres; margins in whole boxes)."), frappe.ValidationError)
+
+	if min(length_mm, width_mm, height_mm) <= 0:
+		frappe.throw(_("Bay length, width and height must be more than zero."), frappe.ValidationError)
+	if min(slot_gap_mm, top_clearance_mm, back_margin_boxes, front_margin_boxes) < 0:
+		frappe.throw(_("Gap, margins and top clearance cannot be negative."), frappe.ValidationError)
+	if top_clearance_mm >= height_mm:
+		frappe.throw(_("Top clearance must be less than the bay height."), frappe.ValidationError)
+
+	capacity = compute_bay_capacity(length_mm, width_mm, slot_gap_mm, back_margin_boxes, front_margin_boxes)
+	return {
+		"custom_length_mm": length_mm,
+		"custom_width_mm": width_mm,
+		"custom_height_mm": height_mm,
+		"custom_slot_gap_mm": slot_gap_mm,
+		"custom_back_margin_boxes": back_margin_boxes,
+		"custom_front_margin_boxes": front_margin_boxes,
+		"custom_top_clearance_mm": top_clearance_mm,
+		"custom_dimensions": bay_size_label(length_mm, width_mm),
+		"custom_capacity_boxes": capacity["capacityBoxes"],
+	}
 
 
 def _assert_can_manage_bays():
@@ -49,6 +122,38 @@ def list_bay_dimensions():
 		distinct=True,
 	)
 	return sorted(set(values)) or BAY_DIMENSIONS
+
+
+@frappe.whitelist(methods=["GET"])
+def list_bay_size_options():
+	"""Dropdown options for each of the bay form's seven size fields: every value already
+	saved on a real bay, plus a starting set so a fresh site's dropdowns aren't empty.
+
+	This is how "save a value once, pick it on the next bay" works -- there is no separate
+	list to maintain; typing a new value into the form and saving the bay is what adds it.
+	Length/width/height start from the four example bay sizes in the BRD (in mm); gap, margins
+	and clearance start from the values agreed with the client."""
+	from dms_erp.warehouse.setup import BAY_DIMENSIONS
+
+	seeds = {
+		"lengthMm": {round(float(d.split("x")[0]) * MM_PER_FT, 1) for d in BAY_DIMENSIONS},
+		"widthMm": {round(float(d.split("x")[1]) * MM_PER_FT, 1) for d in BAY_DIMENSIONS},
+		"heightMm": set(),
+		"slotGapMm": {DEFAULT_SLOT_GAP_MM},
+		"backMarginBoxes": {DEFAULT_BACK_MARGIN_BOXES},
+		"frontMarginBoxes": {DEFAULT_FRONT_MARGIN_BOXES},
+		"topClearanceMm": {DEFAULT_TOP_CLEARANCE_MM},
+	}
+	options = {}
+	for key, (fieldname, _label) in GEOMETRY_FIELDS.items():
+		saved = frappe.get_all(
+			"Warehouse",
+			filters={"custom_bay_code": ["is", "set"], fieldname: ["is", "set"]},
+			pluck=fieldname,
+			distinct=True,
+		)
+		options[key] = sorted(seeds[key] | {v for v in saved if v is not None})
+	return options
 
 
 @frappe.whitelist(methods=["GET"])
@@ -155,12 +260,17 @@ def get_bay_detail(code: str):
 def create_bay(
 	code: str,
 	bay_type: str,
-	dimensions: str,
 	parent_warehouse: str,
 	zone: str,
 	row: str,
+	length_mm: float,
+	width_mm: float,
+	height_mm: float,
+	slot_gap_mm: float,
+	back_margin_boxes: int,
+	front_margin_boxes: int,
+	top_clearance_mm: float,
 	suitable_categories: list[str] | None = None,
-	capacity_boxes: int | None = None,
 	status: str = "active",
 	linked_main_bay: str | None = None,
 ):
@@ -169,6 +279,9 @@ def create_bay(
 	if frappe.db.exists("Warehouse", {"custom_bay_code": code}):
 		frappe.throw(_("Bay {0} already exists.").format(code), frappe.DuplicateEntryError)
 	_assert_valid_main_bay_link(linked_main_bay)
+	geometry = _geometry_values(
+		length_mm, width_mm, height_mm, slot_gap_mm, back_margin_boxes, front_margin_boxes, top_clearance_mm
+	)
 
 	bay = frappe.get_doc(
 		{
@@ -179,8 +292,7 @@ def create_bay(
 			"is_group": 0,
 			"custom_bay_code": code,
 			"custom_bay_type": bay_type,
-			"custom_dimensions": dimensions,
-			"custom_capacity_boxes": capacity_boxes or CAPACITY_FOR.get(dimensions, 0),
+			**geometry,
 			"custom_zone": zone,
 			"custom_row": row,
 			"custom_bay_status": "blocked" if bay_type == "blocked" else status,
@@ -198,9 +310,15 @@ def create_bay_grid(
 	count: int,
 	start_at: int,
 	bay_type: str,
-	dimensions: str,
 	parent_warehouse: str,
 	zone: str,
+	length_mm: float,
+	width_mm: float,
+	height_mm: float,
+	slot_gap_mm: float,
+	back_margin_boxes: int,
+	front_margin_boxes: int,
+	top_clearance_mm: float,
 	categories: list[str] | None = None,
 ):
 	_assert_can_manage_bays()
@@ -214,10 +332,16 @@ def create_bay_grid(
 		create_bay(
 			code=code,
 			bay_type=bay_type,
-			dimensions=dimensions,
 			parent_warehouse=parent_warehouse,
 			zone=zone,
 			row=f"Row-{i + 1}",
+			length_mm=length_mm,
+			width_mm=width_mm,
+			height_mm=height_mm,
+			slot_gap_mm=slot_gap_mm,
+			back_margin_boxes=back_margin_boxes,
+			front_margin_boxes=front_margin_boxes,
+			top_clearance_mm=top_clearance_mm,
 			suitable_categories=categories,
 		)
 		created += 1
@@ -228,11 +352,12 @@ def create_bay_grid(
 def update_bay(code: str, patch: dict):
 	_assert_can_manage_bays()
 
+	# `dimensions` and `capacityBoxes` are deliberately not patchable any more: both are
+	# derived from the size fields (see _geometry_values), so accepting them would let a
+	# client store a label or capacity that disagrees with the real bay size.
 	field_map = {
 		"name": "warehouse_name",
 		"type": "custom_bay_type",
-		"dimensions": "custom_dimensions",
-		"capacityBoxes": "custom_capacity_boxes",
 		"status": "custom_bay_status",
 		"zone": "custom_zone",
 		"row": "custom_row",
@@ -244,6 +369,14 @@ def update_bay(code: str, patch: dict):
 		_assert_valid_main_bay_link(patch["linkedMainBay"])
 
 	bay = get_bay(code)
+	if any(key in patch for key in GEOMETRY_FIELDS):
+		# Re-validate and recompute from the full set (what's stored, overlaid by what's
+		# patched) so changing one size can't leave capacity worked out from the old ones.
+		merged = {
+			key: patch[key] if key in patch else bay.get(fieldname) for key, (fieldname, _label) in GEOMETRY_FIELDS.items()
+		}
+		for fieldname, value in _geometry_values(*merged.values()).items():
+			bay.set(fieldname, value)
 	for key, value in patch.items():
 		if key == "suitableCategories":
 			bay.custom_suitable_categories = ", ".join(value or [])

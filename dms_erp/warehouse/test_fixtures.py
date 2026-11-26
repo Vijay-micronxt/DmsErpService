@@ -120,6 +120,21 @@ def make_dealer_addresses(dealer: str) -> tuple[str, str]:
 	return billing, shipping
 
 
+def bay_size_kwargs(dimensions: str = "36x8", height_ft: float = 8) -> dict:
+	"""create_bay's seven size arguments from the "LxW" feet shorthand the tests already use,
+	with the agreed default gap, margins and clearance."""
+	length_ft, width_ft = (float(v) for v in dimensions.split("x"))
+	return {
+		"length_mm": length_ft * 304.8,
+		"width_mm": width_ft * 304.8,
+		"height_mm": height_ft * 304.8,
+		"slot_gap_mm": 100,
+		"back_margin_boxes": 4,
+		"front_margin_boxes": 5,
+		"top_clearance_mm": 15,
+	}
+
+
 def make_bay(code: str, bay_type: str = "main", dimensions: str = "36x8", zone: str = "Z", row: str = "R1", categories=None, parent_warehouse: str | None = None):
 	ensure_company()
 	setup_warehouse()
@@ -130,9 +145,9 @@ def make_bay(code: str, bay_type: str = "main", dimensions: str = "36x8", zone: 
 	return create_bay(
 		code=code,
 		bay_type=bay_type,
-		dimensions=dimensions,
 		parent_warehouse=parent,
 		zone=zone,
 		row=row,
 		suitable_categories=categories,
+		**bay_size_kwargs(dimensions),
 	)
