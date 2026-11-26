@@ -20,6 +20,16 @@ Once approved, the live price is published to the standard ERPNext `Item Price` 
 the "Dealer" selling Price List) — everything downstream reads the native object, not
 a custom field.
 
+`approve_price` takes a `price_list` (Standard Dealer / Dealer / Master Dealer, default
+"Dealer") because BRD C.7.1 derives three lists from one cost build-up with a different
+margin on each. Approving a list other than "Dealer" writes only that list's rate: it does
+not mark the proposal "Approved" (that status means the launch price on the Dealer list is
+approved -- marking it on a Master Dealer rate would leave an "Approved" item with no Dealer
+price, which is exactly what blocks quoting) and it does not re-run the Series rate publish
+(which would overwrite the rate just approved). Each history row records its list; rows from
+before the field existed read as "Dealer". Rates on any *other* selling Price List (a
+dealer's tagged export/project list) are still maintained in ERPNext, not here.
+
 Landing cost follows BRD C.7.1: purchase cost + freight + loading + insurance (`insurance_pct` of the purchase cost)
 + handling + other costs (`ItemPriceProposal.landing_cost`). `save_cost_inputs` leaves `loading`/`insurance_pct`
 unchanged when a caller doesn't send them.
