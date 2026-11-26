@@ -34,7 +34,7 @@ Status legend: ✅ tested & confirmed working in this session · 🐛 tested, bu
 | Doctype | Custom fields added |
 |---|---|
 | Item | `custom_size`, `custom_finish`, `custom_color`, `custom_series`, `custom_swatch_color`, `custom_pieces_per_box`, `custom_sqft_per_box`, `custom_weight_per_box_kg`, `custom_discontinuation_status` |
-| Warehouse | `custom_bay_code`, `custom_bay_type`, `custom_bay_status`, `custom_dimensions`, `custom_capacity_boxes`, `custom_zone`, `custom_row`, `custom_suitable_categories` |
+| Warehouse | `custom_bay_code`, `custom_bay_type`, `custom_bay_status`, `custom_dimensions` (derived), `custom_capacity_boxes` (computed), `custom_length_mm`, `custom_width_mm`, `custom_height_mm`, `custom_slot_gap_mm`, `custom_back_margin_boxes`, `custom_front_margin_boxes`, `custom_top_clearance_mm`, `custom_zone`, `custom_row`, `custom_suitable_categories` |
 | Stock Entry | `custom_transfer_type`, `custom_transfer_reason`, `custom_remarks`, `custom_damage_type`, `custom_claim_ref` |
 | Purchase Order / Purchase Order Item | `custom_source_inquiry`, ready-qty tracking fields |
 | Quotation | `custom_markup_pct`, `custom_freight`, `custom_inquiry`, `custom_order_channel` |
@@ -203,6 +203,7 @@ GET /api/method/dms_erp.pricing.api.list_price_records
 POST /api/method/dms_erp.pricing.api.approve_price
 { "item": "WT-3030", "final_price": 500, "reason": "Initial pricing approval" }
 ```
+Optional `"price_list"`: `"Standard Dealer"` | `"Dealer"` (default) | `"Master Dealer"` — which list the price is published to.
 ```json
 { "message": { ... "status": "Approved", "suggestedPrice": 500 ... } }
 ```
@@ -231,14 +232,16 @@ GET /api/method/dms_erp.warehouse.bay_api.list_bays
 ```json
 POST /api/method/dms_erp.warehouse.bay_api.create_bay
 {
-  "code": "A-01", "bay_type": "main", "dimensions": "36x8",
-  "parent_warehouse": "Pacific Main — Morbi - M", "zone": "A", "row": "1", "capacity_boxes": 500
+  "code": "A-01", "bay_type": "main",
+  "parent_warehouse": "Pacific Main — Morbi - M", "zone": "A", "row": "1",
+  "length_mm": 12192, "width_mm": 1828.8, "height_mm": 2438.4, "slot_gap_mm": 100,
+  "back_margin_boxes": 4, "front_margin_boxes": 5, "top_clearance_mm": 15
 }
 ```
 Valid `bay_type`: `main`, `buffer`, `damage`, `insurance_claim`, `display`, `blocked`.
-Valid `dimensions`: `36x6`, `36x8`, `32x6`, `32x8`.
+All seven size fields are required. `dimensions` and `capacity_boxes` are no longer accepted; capacity is computed (approximate).
 ```json
-{ "message": { "id": "Main Bay A-01 - M", "code": "A-01", "type": "main", "occupancyPct": 0, "freeBoxes": 500 } }
+{ "message": { "id": "Main Bay A-01 - M", "code": "A-01", "type": "main", "dimensions": "40x6", "capacityBoxes": 2295, "occupancyPct": 0, "freeBoxes": 2295 } }
 ```
 
 **`bay_api.get_bay_detail`** — GET — ⬜
@@ -249,7 +252,7 @@ GET /api/method/dms_erp.warehouse.bay_api.get_bay_detail?code=A-01
 **`bay_api.create_bay_grid`** — POST — ⬜ (bulk create)
 ```json
 POST /api/method/dms_erp.warehouse.bay_api.create_bay_grid
-{ "prefix": "B", "count": 5, "start_at": 1, "bay_type": "main", "dimensions": "36x8", "parent_warehouse": "Pacific Main — Morbi - M", "zone": "B", "row": "1" }
+{ "prefix": "B", "count": 5, "start_at": 1, "bay_type": "main", "parent_warehouse": "Pacific Main — Morbi - M", "zone": "B", "length_mm": 10972.8, "width_mm": 2438.4, "height_mm": 2438.4, "slot_gap_mm": 100, "back_margin_boxes": 4, "front_margin_boxes": 5, "top_clearance_mm": 15 }
 ```
 
 **`bay_api.update_bay`** — POST — ⬜

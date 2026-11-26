@@ -933,7 +933,7 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 
 #### POST `dms_erp.pricing.api.approve_price`
 
-**Approve price** — Publishes `final_price` to the native Dealer price list (→ Product.dealerPrice everywhere) and appends a history row. If the item has a Series (`custom_series_ref`) with Standard Dealer/Master Dealer rates in its `priceListRates` (BRD C.1.4/C.7.1), those are published in the same call.
+**Approve price** — Publishes `final_price` to the chosen price list (default the native Dealer list → Product.dealerPrice everywhere) and appends a history row that records which list. For the Dealer list only: the proposal's status becomes "Approved", and if the item has a Series (`custom_series_ref`) with Standard Dealer/Master Dealer rates in its `priceListRates` (BRD C.1.4/C.7.1), those are published in the same call. For Standard Dealer / Master Dealer: only that list's rate is written — status is left as it was (it tracks the Dealer launch price) and the Series rates are not re-published over it.
 
 **Params**
 
@@ -942,11 +942,12 @@ Item Price Proposal (custom doctype, holds the audit trail) publishes to native 
 | `item` | string | required |  |
 | `final_price` | number | required |  |
 | `reason` | string | optional |  |
+| `price_list` | string | optional | one of "Standard Dealer", "Dealer", "Master Dealer"; defaults to "Dealer". Anything else is rejected and nothing is written. |
 
 **Response**
 
 ```json
-(same shape as get_price_record, status now "Approved")
+(same shape as get_price_record; status "Approved" when price_list is "Dealer". Each history row now carries `priceList`, "Dealer" for rows approved before this existed.)
 ```
 
 
@@ -1980,18 +1981,36 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 |---|---|---|---|
 | `code` | string | required |  |
 | `bay_type` | string | required | main | buffer | damage | insurance_claim | display | blocked |
-| `dimensions` | string | required | 36x6 | 36x8 | 32x6 | 32x8 |
 | `parent_warehouse` | string | required |  |
 | `zone` | string | required |  |
 | `row` | string | required |  |
+| `length_mm` | number | required | bay length along the row |
+| `width_mm` | number | required | depth from the outer edge to the wall |
+| `height_mm` | number | required | must be more than `top_clearance_mm` |
+| `slot_gap_mm` | number | required | between slots only; 0 allowed |
+| `back_margin_boxes` | int | required | upper stack's free boxes at the back; 0 allowed |
+| `front_margin_boxes` | int | required | upper stack's free boxes at the front; 0 allowed |
+| `top_clearance_mm` | number | required | 0 allowed |
 | `suitable_categories` | string[] | optional |  |
-| `capacity_boxes` | int | optional | defaults from a dimensions→capacity table if omitted |
 | `status` | string | default "active" | active | blocked | reserved |
+
+All seven size fields are required; a missing or non-positive one is rejected with a validation error naming it. `dimensions` (the "40x6" ft label) and `capacityBoxes` are no longer accepted — both are derived from the sizes: slots along the length × (lower stack + upper stack), worked out for a 600 mm tile in a 1 inch box until the item carries a box thickness, so `capacityBoxes` is approximate (BRD C.6.3). Old `dimensions`/`capacity_boxes` arguments are ignored.
 
 **Response**
 
 ```json
-(same shape as one list row)
+(same shape as one list row; now also lengthMm, widthMm, heightMm, slotGapMm, backMarginBoxes, frontMarginBoxes, topClearanceMm — null on a bay created before they existed)
+```
+
+
+#### GET `dms_erp.warehouse.bay_api.list_bay_size_options`
+
+**Dropdown options for the seven size fields** — every value already saved on a bay plus starting defaults (gap 100, margins 4 and 5, clearance 15), so a value saved once is offered on the next bay.
+
+**Response**
+
+```json
+{ "lengthMm": [9753.6, 12192], "widthMm": [1828.8], "heightMm": [], "slotGapMm": [100], "backMarginBoxes": [4], "frontMarginBoxes": [5], "topClearanceMm": [15] }
 ```
 
 
@@ -2006,7 +2025,8 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 | `prefix` | string | required | e.g. "A" |
 | `count` | int | required |  |
 | `start_at` | int | required |  |
-| `bay_type, dimensions, parent_warehouse, zone` | — | required | same as create_bay |
+| `bay_type, parent_warehouse, zone` | — | required | same as create_bay |
+| `length_mm, width_mm, height_mm, slot_gap_mm, back_margin_boxes, front_margin_boxes, top_clearance_mm` | — | required | the same seven size fields as create_bay, applied to every bay in the grid |
 | `categories` | string[] | optional |  |
 
 **Response**
@@ -2025,7 +2045,7 @@ Bays are native ERPNext Warehouse records, nested under a physical warehouse (a 
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `code` | string | required |  |
-| `patch` | object | required | keys: name, type, dimensions, capacityBoxes, status, zone, row, warehouse, suitableCategories |
+| `patch` | object | required | keys: name, type, status, zone, row, warehouse, suitableCategories, linkedMainBay, and the size fields lengthMm, widthMm, heightMm, slotGapMm, backMarginBoxes, frontMarginBoxes, topClearanceMm. Changing any size re-validates all seven (a bay created before they existed must be given all seven) and recomputes `dimensions` and `capacityBoxes`; those two are ignored if sent. |
 
 **Response**
 
