@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "phone",
-  "contact_name"
+  "contact_name",
+  "role"
  ],
  "fields": [
   {
@@ -23,12 +24,20 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Contact Name"
+  },
+  {
+   "description": "What this person may do in the dealer portal. Blank counts as Dealer Accounts. The permissions of each role are ticked in DMS Sales Settings.",
+   "fieldname": "role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Role",
+   "options": "\nDealer Accounts\nDealer Sales"
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-10-23 00:00:00.000000",
+ "modified": "2026-11-24 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",
  "name": "Dealer Phone",

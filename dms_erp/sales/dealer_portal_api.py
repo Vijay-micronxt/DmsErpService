@@ -32,6 +32,7 @@ from dms_erp.catalog.utils import is_sellable, item_images, item_pieces_per_box,
 from dms_erp.pagination import clamp
 from dms_erp.pricing.api import get_price_for_dealer
 from dms_erp.sales import customer_po as po_files
+from dms_erp.sales import dealer_roles
 from dms_erp.sales.dealer_api import _assert_email_available
 from dms_erp.sales.invoice_api import _has as _invoice_has
 from dms_erp.sales.invoice_api import _invoice_detail
@@ -766,6 +767,7 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 	this dealer's actual Dealer Catalog assignment (is_visible) -- the inquiry that
 	got them here can exist for an unassigned item, but converting it to a real
 	order can't."""
+	dealer_roles.require("raise_order")
 	dealer = _current_dealer()
 	if not customer_po:
 		frappe.throw(_("customer_po is required."), frappe.ValidationError)
@@ -848,7 +850,7 @@ def convert_to_order(inquiry: str, expected_dispatch, customer_po: str):
 		# Marks this draft as the dealer's own: it is the only kind of draft the dealer ever sees
 		# (a draft staff are working on is never theirs -- see _is_dealer_draft).
 		frappe.db.set_value("Inquiry", inquiry, "linked_sales_order", order["id"], update_modified=False)
-		return order
+		return dealer_roles.price_filtered(order)
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		from dms_erp.sales.utils import safe_customer_message
 
@@ -950,8 +952,8 @@ def _serialize_dealer_inquiry(doc, dealer: str) -> dict:
 		item_row["images"] = item_images(row.item) if row.item else []
 	# inquiry_api's own serializer already set `prices` via the same
 	# get_price_for_dealer resolution _catalog_entry now uses (client reversal,
-	# Oct 2026, see _catalog_entry's docstring) -- kept as-is.
-	return data
+	# Oct 2026, see _catalog_entry's docstring) -- kept, for a person whose role may see prices.
+	return dealer_roles.price_filtered(data)
 
 
 # Client finding ISS-2026 "only show pending orders" (sheet item), refined 27 Oct 2026 --
@@ -971,6 +973,7 @@ OPEN_ORDER_STAGES = ("Confirmed", "Picking", "Ready to Dispatch", "Dispatched")
 
 @frappe.whitelist(methods=["GET"])
 def list_my_orders(stage: str | None = None, stage_group: str | None = None, limit: int = 20, offset: int = 0):
+	dealer_roles.require("view_orders")
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 	# A draft staff are working on is never shown to the dealer; the dealer's own sent order is (it waits for
@@ -1032,11 +1035,12 @@ def _dealer_order(doc) -> dict:
 	for key in _INTERNAL_ORDER_KEYS:
 		order.pop(key, None)
 	order["history"] = [{k: v for k, v in event.items() if k != "by"} for event in order.get("history") or []]
-	return order
+	return dealer_roles.price_filtered(order)
 
 
 @frappe.whitelist(methods=["GET"])
 def get_my_order(order: str) -> dict:
+	dealer_roles.require("view_orders")
 	dealer = _current_dealer()
 	doc = frappe.get_doc("Sales Order", order)
 	if doc.customer != dealer or (doc.docstatus == 0 and not _is_dealer_draft(doc)):
@@ -1095,7 +1099,7 @@ def _serialize_dealer_quotation(doc) -> dict:
 				"preferredBatchNo": row.get("custom_preferred_batch_no"),
 			}
 		)
-	return {
+	return dealer_roles.price_filtered({
 		"id": doc.name,
 		"number": doc.name,
 		"date": doc.transaction_date,
@@ -1110,7 +1114,7 @@ def _serialize_dealer_quotation(doc) -> dict:
 		"deliveryPincode": doc.get("custom_delivery_pincode"),
 		"totalPayable": flt(doc.grand_total) + freight,
 		"inquiryIds": frappe.get_all("Inquiry", filters={"linked_quotation": doc.name}, pluck="name"),
-	}
+	})
 
 
 def _run_as_system(fn):
@@ -1146,6 +1150,7 @@ def list_my_quotations(status: str | None = None, limit: int = 20, offset: int =
 	dealer the moment staff create it (the Quotation Builder submits it
 	immediately), so there is no separate "send" step to wait for. Cancelled
 	versions left behind by an amendment are history, not offers -- excluded."""
+	dealer_roles.require("view_quotations")
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 	filters = {"quotation_to": "Customer", "party_name": dealer, "docstatus": 1}
@@ -1165,6 +1170,7 @@ def list_my_quotations(status: str | None = None, limit: int = 20, offset: int =
 
 @frappe.whitelist(methods=["GET"])
 def get_my_quotation(quotation: str) -> dict:
+	dealer_roles.require("view_quotations")
 	return _serialize_dealer_quotation(_own_quotation(quotation, _current_dealer()))
 
 
@@ -1183,6 +1189,7 @@ def accept_quotation(quotation: str, expected_dispatch, customer_po: str):
 	its internal HTML/emails never reach a dealer."""
 	from dms_erp.sales.utils import dealer_contact_line, safe_customer_message
 
+	dealer_roles.require("raise_order")
 	dealer = _current_dealer()
 	if not (customer_po or "").strip():
 		frappe.throw(_("customer_po is required."), frappe.ValidationError)
@@ -1211,9 +1218,11 @@ def accept_quotation(quotation: str, expected_dispatch, customer_po: str):
 			)
 
 	try:
-		return _run_as_system(
-			lambda: _convert_to_order(
-				quotation, expected_dispatch=expected_dispatch, customer_po=customer_po.strip(), ignore_permissions=True
+		return dealer_roles.price_filtered(
+			_run_as_system(
+				lambda: _convert_to_order(
+					quotation, expected_dispatch=expected_dispatch, customer_po=customer_po.strip(), ignore_permissions=True
+				)
 			)
 		)
 	except (frappe.PermissionError, frappe.ValidationError) as e:
@@ -1238,6 +1247,7 @@ def list_my_invoices(search: str | None = None, limit: int = 20, offset: int = 0
 	including the Tally-migrated history, not only invoices raised from an app
 	order. `search` matches the invoice number, Tally voucher number, vehicle or LR
 	number."""
+	dealer_roles.require("view_invoices")
 	dealer = _current_dealer()
 	limit, offset = clamp(limit, offset)
 	filters = _own_invoice_filters(dealer)
@@ -1258,7 +1268,7 @@ def list_my_invoices(search: str | None = None, limit: int = 20, offset: int = 0
 		limit_page_length=limit,
 	)
 	return {
-		"items": [_serialize_invoice_row(frappe.get_doc("Sales Invoice", name)) for name in names],
+		"items": [dealer_roles.price_filtered(_serialize_invoice_row(frappe.get_doc("Sales Invoice", name))) for name in names],
 		"total": total,
 		"limit": limit,
 		"offset": offset,
@@ -1267,11 +1277,12 @@ def list_my_invoices(search: str | None = None, limit: int = 20, offset: int = 0
 
 @frappe.whitelist(methods=["GET"])
 def get_my_invoice(invoice: str) -> dict:
+	dealer_roles.require("view_invoices")
 	dealer = _current_dealer()
 	doc = frappe.get_doc("Sales Invoice", invoice)
 	if doc.customer != dealer or doc.docstatus != 1:
 		frappe.throw(_("Invoice {0} does not belong to you.").format(invoice), frappe.PermissionError)
-	return _invoice_detail(doc)
+	return dealer_roles.price_filtered(_invoice_detail(doc))
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1358,6 +1369,10 @@ def my_profile() -> dict:
 		"phone": doc.custom_phone,
 		"email": doc.custom_email,
 		"classification": doc.custom_dealer_classification,
+		# So the portal can hide what this person may not use instead of showing a button that only
+		# ever refuses (the server still checks every call).
+		"role": dealer_roles.role_for_user(),
+		"permissions": dealer_roles.permissions_for_user(),
 		# The portal prompts after every OTP login until this is true, so the dealer
 		# can sign in with email + password instead of waiting on an OTP each time.
 		# Read off the session user (the account that would log in with it), the same

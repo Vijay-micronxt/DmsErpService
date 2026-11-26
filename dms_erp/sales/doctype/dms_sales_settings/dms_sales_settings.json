@@ -12,7 +12,19 @@
   "reservation_reminder_day",
   "inquiry_drop_reasons",
   "eway_bill_threshold_amount",
-  "require_po_attachment"
+  "require_po_attachment",
+  "dealer_portal_permissions_section",
+  "dealer_accounts_can_see_price",
+  "dealer_accounts_can_view_quotations",
+  "dealer_accounts_can_view_orders",
+  "dealer_accounts_can_raise_order",
+  "dealer_accounts_can_view_invoices",
+  "dealer_permissions_column",
+  "dealer_sales_can_see_price",
+  "dealer_sales_can_view_quotations",
+  "dealer_sales_can_view_orders",
+  "dealer_sales_can_raise_order",
+  "dealer_sales_can_view_invoices"
  ],
  "fields": [
   {
@@ -76,12 +88,82 @@
    "fieldtype": "Check",
    "label": "Require a Customer PO Before a Dealer Can Place an Order",
    "description": "When ticked, a dealer converting an enquiry to an order must have attached their PO to that enquiry first (the dealer portal blocks it otherwise). Off by default: nothing changes until a site turns it on. Staff and WhatsApp order paths are not affected."
+  },
+  {
+   "fieldname": "dealer_portal_permissions_section",
+   "fieldtype": "Section Break",
+   "label": "Dealer Portal Permissions",
+   "description": "What each dealer role may do in the dealer portal. A person's role is set on their phone number on the Customer (Phone Role / Additional Phone Numbers)."
+  },
+  {
+   "fieldname": "dealer_accounts_can_see_price",
+   "fieldtype": "Check",
+   "label": "Dealer Accounts: See prices in the portal",
+   "default": "1"
+  },
+  {
+   "fieldname": "dealer_accounts_can_view_quotations",
+   "fieldtype": "Check",
+   "label": "Dealer Accounts: View quotations",
+   "default": "1"
+  },
+  {
+   "fieldname": "dealer_accounts_can_view_orders",
+   "fieldtype": "Check",
+   "label": "Dealer Accounts: View sales orders",
+   "default": "1"
+  },
+  {
+   "fieldname": "dealer_accounts_can_raise_order",
+   "fieldtype": "Check",
+   "label": "Dealer Accounts: Raise a sales order",
+   "default": "1"
+  },
+  {
+   "fieldname": "dealer_accounts_can_view_invoices",
+   "fieldtype": "Check",
+   "label": "Dealer Accounts: View invoices",
+   "default": "1"
+  },
+  {
+   "fieldname": "dealer_permissions_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dealer_sales_can_see_price",
+   "fieldtype": "Check",
+   "label": "Dealer Sales: See prices in the portal",
+   "default": "0"
+  },
+  {
+   "fieldname": "dealer_sales_can_view_quotations",
+   "fieldtype": "Check",
+   "label": "Dealer Sales: View quotations",
+   "default": "0"
+  },
+  {
+   "fieldname": "dealer_sales_can_view_orders",
+   "fieldtype": "Check",
+   "label": "Dealer Sales: View sales orders",
+   "default": "0"
+  },
+  {
+   "fieldname": "dealer_sales_can_raise_order",
+   "fieldtype": "Check",
+   "label": "Dealer Sales: Raise a sales order",
+   "default": "0"
+  },
+  {
+   "fieldname": "dealer_sales_can_view_invoices",
+   "fieldtype": "Check",
+   "label": "Dealer Sales: View invoices",
+   "default": "0"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-26 00:00:00.000000",
+ "modified": "2026-11-24 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sales",
  "name": "DMS Sales Settings",

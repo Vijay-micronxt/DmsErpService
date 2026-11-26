@@ -376,6 +376,14 @@ CUSTOM_FIELDS = {
 			"description": "BRD C.13 — the dealer portal's login identifier and OTP delivery target (see auth.dealer_api). Not used elsewhere in the app.",
 			"insert_after": "custom_salesperson",
 		},
+		{
+			"fieldname": "custom_phone_role",
+			"fieldtype": "Select",
+			"label": "Phone Role",
+			"options": "\nDealer Accounts\nDealer Sales",
+			"description": "What the person on the main phone may do in the dealer portal (24 Nov 2026). Blank counts as Dealer Accounts. Each role's permissions are ticked in DMS Sales Settings; the extra numbers carry their own role below.",
+			"insert_after": "custom_phone",
+		},
 		# Client requirement 8.9 -- several people at one dealer enquire from their own
 		# phones. Every number here works for OTP login and WhatsApp exactly like
 		# custom_phone (phone_utils.dealer_for_phone checks both).
